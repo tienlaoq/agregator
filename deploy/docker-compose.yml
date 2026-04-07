@@ -1,0 +1,197 @@
+services:
+  # Infrastructure
+  postgres:
+    image: postgis/postgis:16-3.4
+    container_name: banya-postgres
+    environment:
+      POSTGRES_USER: banya
+      POSTGRES_PASSWORD: banya_secret
+      POSTGRES_DB: banya
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./init-databases.sql:/docker-entrypoint-initdb.d/01-init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U banya"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: banya-redis
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  nats:
+    image: nats:2.10-alpine
+    container_name: banya-nats
+    ports:
+      - "4222:4222"
+      - "8222:8222"
+    command: "--jetstream --store_dir /data --http_port 8222"
+
+  # Services (all built from local Go code)
+  auth-service:
+    build:
+      context: ..
+      dockerfile: services/auth-service/Dockerfile
+    container_name: banya-auth
+    ports:
+      - "50051:50051"
+    environment:
+      GRPC_PORT: "50051"
+      PG_HOST: postgres
+      PG_DB: auth_db
+      PG_USER: banya
+      PG_PASSWORD: banya_secret
+      REDIS_ADDR: redis:6379
+      NATS_URL: nats://nats:4222
+      JWT_SECRET: super-secret-jwt-key-change-in-production
+      USER_SERVICE_ADDR: user-service:50052
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      nats:
+        condition: service_started
+
+  user-service:
+    build:
+      context: ..
+      dockerfile: services/user-service/Dockerfile
+    container_name: banya-user
+    ports:
+      - "50052:50052"
+    environment:
+      GRPC_PORT: "50052"
+      PG_HOST: postgres
+      PG_DB: user_db
+      PG_USER: banya
+      PG_PASSWORD: banya_secret
+      REDIS_ADDR: redis:6379
+      NATS_URL: nats://nats:4222
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  venue-service:
+    build:
+      context: ..
+      dockerfile: services/venue-service/Dockerfile
+    container_name: banya-venue
+    ports:
+      - "50053:50053"
+    environment:
+      GRPC_PORT: "50053"
+      PG_HOST: postgres
+      PG_DB: venue_db
+      PG_USER: banya
+      PG_PASSWORD: banya_secret
+      REDIS_ADDR: redis:6379
+      NATS_URL: nats://nats:4222
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  booking-service:
+    build:
+      context: ..
+      dockerfile: services/booking-service/Dockerfile
+    container_name: banya-booking
+    ports:
+      - "50054:50054"
+    environment:
+      GRPC_PORT: "50054"
+      PG_HOST: postgres
+      PG_DB: booking_db
+      PG_USER: banya
+      PG_PASSWORD: banya_secret
+      REDIS_ADDR: redis:6379
+      NATS_URL: nats://nats:4222
+      VENUE_SERVICE_ADDR: venue-service:50053
+      PAYMENT_SERVICE_ADDR: payment-service:50056
+    depends_on:
+      postgres:
+        condition: service_healthy
+      venue-service:
+        condition: service_started
+      payment-service:
+        condition: service_started
+
+  review-service:
+    build:
+      context: ..
+      dockerfile: services/review-service/Dockerfile
+    container_name: banya-review
+    ports:
+      - "50055:50055"
+    environment:
+      GRPC_PORT: "50055"
+      PG_HOST: postgres
+      PG_DB: review_db
+      PG_USER: banya
+      PG_PASSWORD: banya_secret
+      REDIS_ADDR: redis:6379
+      NATS_URL: nats://nats:4222
+      BOOKING_SERVICE_ADDR: booking-service:50054
+      VENUE_SERVICE_ADDR: venue-service:50053
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  payment-service:
+    build:
+      context: ..
+      dockerfile: services/payment-service/Dockerfile
+    container_name: banya-payment
+    ports:
+      - "50056:50056"
+    environment:
+      GRPC_PORT: "50056"
+      PG_HOST: postgres
+      PG_DB: payment_db
+      PG_USER: banya
+      PG_PASSWORD: banya_secret
+      REDIS_ADDR: redis:6379
+      NATS_URL: nats://nats:4222
+      YOOKASSA_SHOP_ID: ""
+      YOOKASSA_SECRET_KEY: ""
+      PAYMENT_RETURN_URL: http://localhost:3000/my/bookings
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  api-gateway:
+    build:
+      context: ..
+      dockerfile: services/api-gateway/Dockerfile
+    container_name: banya-gateway
+    ports:
+      - "8080:8080"
+    environment:
+      HTTP_PORT: "8080"
+      AUTH_SERVICE_ADDR: auth-service:50051
+      USER_SERVICE_ADDR: user-service:50052
+      VENUE_SERVICE_ADDR: venue-service:50053
+      BOOKING_SERVICE_ADDR: booking-service:50054
+      REVIEW_SERVICE_ADDR: review-service:50055
+      PAYMENT_SERVICE_ADDR: payment-service:50056
+    depends_on:
+      - auth-service
+      - user-service
+      - venue-service
+      - booking-service
+      - review-service
+      - payment-service
+
+volumes:
+  pgdata:

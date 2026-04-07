@@ -1,0 +1,14 @@
+bin/
+gen/
+*.exe
+*.test
+*.out
+.env
+.env.*
+!.env.example
+node_modules/
+.next/
+vendor/
+tmp/
+*.log
+.DS_Store

@@ -1,0 +1,170 @@
+syntax = "proto3";
+
+package venue.v1;
+
+option go_package = "github.com/tienlao/agregator/proto/venue/v1;venuev1";
+
+import "google/protobuf/timestamp.proto";
+
+service VenueService {
+  rpc CreateVenue(CreateVenueRequest) returns (VenueResponse);
+  rpc UpdateVenue(UpdateVenueRequest) returns (VenueResponse);
+  rpc GetVenue(GetVenueRequest) returns (VenueResponse);
+  rpc GetVenueBySlug(GetVenueBySlugRequest) returns (VenueResponse);
+  rpc ListVenues(ListVenuesRequest) returns (ListVenuesResponse);
+  rpc SearchVenues(SearchVenuesRequest) returns (ListVenuesResponse);
+  rpc ListOwnerVenues(ListOwnerVenuesRequest) returns (ListVenuesResponse);
+  rpc CheckSlotAvailability(CheckSlotRequest) returns (CheckSlotResponse);
+  rpc ReserveSlot(ReserveSlotRequest) returns (ReserveSlotResponse);
+  rpc ReleaseSlot(ReleaseSlotRequest) returns (ReleaseSlotResponse);
+  rpc UpdateRating(UpdateRatingRequest) returns (UpdateRatingResponse);
+}
+
+message CreateVenueRequest {
+  string owner_id = 1;
+  string name = 2;
+  string type = 3; // banya, sauna, hammam, fitobochka
+  string description = 4;
+  string address = 5;
+  double latitude = 6;
+  double longitude = 7;
+  int64 price_from = 8; // in kopecks
+  int32 capacity = 9;
+  repeated string amenities = 10;
+  string working_hours = 11; // JSON string
+  string phone = 12;
+  repeated VenueServiceItem services = 13;
+}
+
+message UpdateVenueRequest {
+  string id = 1;
+  string owner_id = 2;
+  optional string name = 3;
+  optional string description = 4;
+  optional string address = 5;
+  optional double latitude = 6;
+  optional double longitude = 7;
+  optional int64 price_from = 8;
+  optional int32 capacity = 9;
+  repeated string amenities = 10;
+  optional string working_hours = 11;
+  optional string phone = 12;
+}
+
+message GetVenueRequest {
+  string id = 1;
+}
+
+message GetVenueBySlugRequest {
+  string slug = 1;
+}
+
+message ListVenuesRequest {
+  int32 page = 1;
+  int32 page_size = 2;
+  string type = 3;
+  string sort_by = 4; // rating, price, distance
+}
+
+message SearchVenuesRequest {
+  string query = 1;
+  double latitude = 2;
+  double longitude = 3;
+  double radius_km = 4;
+  string type = 5;
+  int64 price_min = 6;
+  int64 price_max = 7;
+  double rating_min = 8;
+  repeated string amenities = 9;
+  int32 page = 10;
+  int32 page_size = 11;
+}
+
+message ListOwnerVenuesRequest {
+  string owner_id = 1;
+}
+
+message VenueResponse {
+  string id = 1;
+  string owner_id = 2;
+  string slug = 3;
+  string name = 4;
+  string type = 5;
+  string description = 6;
+  string address = 7;
+  double latitude = 8;
+  double longitude = 9;
+  int64 price_from = 10;
+  int32 capacity = 11;
+  repeated string amenities = 12;
+  string working_hours = 13;
+  string phone = 14;
+  double avg_rating = 15;
+  int32 review_count = 16;
+  bool is_active = 17;
+  repeated VenueServiceItem services = 18;
+  repeated VenuePhoto photos = 19;
+  google.protobuf.Timestamp created_at = 20;
+}
+
+message ListVenuesResponse {
+  repeated VenueResponse venues = 1;
+  int32 total = 2;
+  int32 page = 3;
+  int32 page_size = 4;
+}
+
+message VenueServiceItem {
+  string id = 1;
+  string name = 2;
+  int32 duration_min = 3;
+  int64 price = 4; // in kopecks
+  string description = 5;
+}
+
+message VenuePhoto {
+  string id = 1;
+  string url = 2;
+  int32 sort_order = 3;
+  bool is_cover = 4;
+}
+
+message CheckSlotRequest {
+  string venue_id = 1;
+  string date = 2; // YYYY-MM-DD
+  string time_from = 3; // HH:MM
+  string time_to = 4; // HH:MM
+}
+
+message CheckSlotResponse {
+  bool available = 1;
+}
+
+message ReserveSlotRequest {
+  string venue_id = 1;
+  string booking_id = 2;
+  string date = 3;
+  string time_from = 4;
+  string time_to = 5;
+}
+
+message ReserveSlotResponse {
+  bool success = 1;
+}
+
+message ReleaseSlotRequest {
+  string venue_id = 1;
+  string booking_id = 2;
+}
+
+message ReleaseSlotResponse {
+  bool success = 1;
+}
+
+message UpdateRatingRequest {
+  string venue_id = 1;
+  double avg_rating = 2;
+  int32 review_count = 3;
+}
+
+message UpdateRatingResponse {}

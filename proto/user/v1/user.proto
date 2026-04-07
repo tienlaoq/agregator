@@ -1,0 +1,49 @@
+syntax = "proto3";
+
+package user.v1;
+
+option go_package = "github.com/tienlao/agregator/proto/user/v1;userv1";
+
+import "google/protobuf/timestamp.proto";
+
+service UserService {
+  rpc CreateUser(CreateUserRequest) returns (UserResponse);
+  rpc GetUser(GetUserRequest) returns (UserResponse);
+  rpc UpdateUser(UpdateUserRequest) returns (UserResponse);
+  rpc GetUserByEmail(GetUserByEmailRequest) returns (UserResponse);
+}
+
+message CreateUserRequest {
+  string id = 1;
+  string email = 2;
+  string phone = 3;
+  string name = 4;
+  string role = 5;
+}
+
+message GetUserRequest {
+  string id = 1;
+}
+
+message GetUserByEmailRequest {
+  string email = 1;
+}
+
+message UpdateUserRequest {
+  string id = 1;
+  optional string name = 2;
+  optional string phone = 3;
+  optional string avatar_url = 4;
+  optional string bio = 5;
+}
+
+message UserResponse {
+  string id = 1;
+  string email = 2;
+  string phone = 3;
+  string name = 4;
+  string role = 5;
+  string avatar_url = 6;
+  string bio = 7;
+  google.protobuf.Timestamp created_at = 8;
+}

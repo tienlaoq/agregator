@@ -1,0 +1,93 @@
+syntax = "proto3";
+
+package booking.v1;
+
+option go_package = "github.com/tienlao/agregator/proto/booking/v1;bookingv1";
+
+import "google/protobuf/timestamp.proto";
+
+service BookingService {
+  rpc CreateBooking(CreateBookingRequest) returns (BookingResponse);
+  rpc GetBooking(GetBookingRequest) returns (BookingResponse);
+  rpc ListUserBookings(ListUserBookingsRequest) returns (ListBookingsResponse);
+  rpc ListVenueBookings(ListVenueBookingsRequest) returns (ListBookingsResponse);
+  rpc CancelBooking(CancelBookingRequest) returns (BookingResponse);
+  rpc ConfirmBooking(ConfirmBookingRequest) returns (BookingResponse);
+  rpc CompleteBooking(CompleteBookingRequest) returns (BookingResponse);
+  rpc HasCompletedBooking(HasCompletedBookingRequest) returns (HasCompletedBookingResponse);
+}
+
+message CreateBookingRequest {
+  string user_id = 1;
+  string venue_id = 2;
+  string service_id = 3;
+  string date = 4; // YYYY-MM-DD
+  string time_from = 5; // HH:MM
+  string time_to = 6; // HH:MM
+  int32 guests = 7;
+  string comment = 8;
+}
+
+message BookingResponse {
+  string id = 1;
+  string user_id = 2;
+  string venue_id = 3;
+  string service_id = 4;
+  string date = 5;
+  string time_from = 6;
+  string time_to = 7;
+  int32 guests = 8;
+  string comment = 9;
+  string status = 10; // pending, payment_pending, confirmed, completed, cancelled
+  int64 total_price = 11; // kopecks
+  string payment_url = 12;
+  google.protobuf.Timestamp created_at = 13;
+}
+
+message GetBookingRequest {
+  string id = 1;
+}
+
+message ListUserBookingsRequest {
+  string user_id = 1;
+  string status = 2;
+  int32 page = 3;
+  int32 page_size = 4;
+}
+
+message ListVenueBookingsRequest {
+  string venue_id = 1;
+  string owner_id = 2;
+  string status = 3;
+  string date = 4;
+  int32 page = 5;
+  int32 page_size = 6;
+}
+
+message ListBookingsResponse {
+  repeated BookingResponse bookings = 1;
+  int32 total = 2;
+}
+
+message CancelBookingRequest {
+  string id = 1;
+  string user_id = 2;
+}
+
+message ConfirmBookingRequest {
+  string id = 1;
+  string payment_id = 2;
+}
+
+message CompleteBookingRequest {
+  string id = 1;
+}
+
+message HasCompletedBookingRequest {
+  string user_id = 1;
+  string venue_id = 2;
+}
+
+message HasCompletedBookingResponse {
+  bool has_completed = 1;
+}

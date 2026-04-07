@@ -1,0 +1,13 @@
+go 1.25.5
+
+use (
+	./gen/go
+	./pkg
+	./services/api-gateway
+	./services/auth-service
+	./services/booking-service
+	./services/payment-service
+	./services/user-service
+	./services/venue-service
+	./services/review-service
+)

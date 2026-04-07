@@ -1,0 +1,57 @@
+syntax = "proto3";
+
+package review.v1;
+
+option go_package = "github.com/tienlao/agregator/proto/review/v1;reviewv1";
+
+import "google/protobuf/timestamp.proto";
+
+service ReviewService {
+  rpc CreateReview(CreateReviewRequest) returns (ReviewResponse);
+  rpc GetReview(GetReviewRequest) returns (ReviewResponse);
+  rpc ListVenueReviews(ListVenueReviewsRequest) returns (ListReviewsResponse);
+  rpc GetVenueRating(GetVenueRatingRequest) returns (VenueRatingResponse);
+}
+
+message CreateReviewRequest {
+  string user_id = 1;
+  string venue_id = 2;
+  int32 rating = 3; // 1-5
+  string text = 4;
+}
+
+message GetReviewRequest {
+  string id = 1;
+}
+
+message ReviewResponse {
+  string id = 1;
+  string user_id = 2;
+  string user_name = 3;
+  string venue_id = 4;
+  int32 rating = 5;
+  string text = 6;
+  bool is_verified = 7;
+  google.protobuf.Timestamp created_at = 8;
+}
+
+message ListVenueReviewsRequest {
+  string venue_id = 1;
+  int32 page = 2;
+  int32 page_size = 3;
+}
+
+message ListReviewsResponse {
+  repeated ReviewResponse reviews = 1;
+  int32 total = 2;
+}
+
+message GetVenueRatingRequest {
+  string venue_id = 1;
+}
+
+message VenueRatingResponse {
+  string venue_id = 1;
+  double avg_rating = 2;
+  int32 review_count = 3;
+}
