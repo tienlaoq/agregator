@@ -36,6 +36,12 @@ export interface Venue {
   moderation_comment?: string;
   moderated_at?: string;
   moderated_by?: string;
+  /** Только в кабинете владельца и админке (не в публичном каталоге) */
+  legal_entity_name?: string;
+  inn?: string;
+  ogrn?: string;
+  public_listing_url?: string;
+  verification_note?: string;
   created_at: string;
 }
 
@@ -102,6 +108,13 @@ export interface CreateVenueRequest {
   price_from: number;
   amenities: string[];
   services: Omit<VenueService, "id">[];
+  /** Как в ЕГРЮЛ / ЕГРИП — для сверки с nalog.ru / egrul.nalog.ru */
+  legal_entity_name: string;
+  inn: string;
+  ogrn: string;
+  /** Ссылка на карточку в Яндекс.Картах, 2ГИС и т.п. */
+  public_listing_url: string;
+  verification_note?: string;
 }
 
 export interface CreateReviewRequest {

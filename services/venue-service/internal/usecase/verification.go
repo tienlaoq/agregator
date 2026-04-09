@@ -36,15 +36,18 @@ func validateVenueVerificationCore(v *domain.Venue) error {
 	}
 	v.INN = inn
 
-	if strings.TrimSpace(v.OGRN) != "" {
-		ogrn := normalizeDigits(v.OGRN)
-		if len(ogrn) != 13 && len(ogrn) != 15 {
-			return pkgerr.InvalidArgument("ОГРН — 13 цифр, ОГРНИП — 15 цифр, либо оставьте поле пустым")
+	ogrn := normalizeDigits(v.OGRN)
+	switch len(inn) {
+	case 10:
+		if len(ogrn) != 13 {
+			return pkgerr.InvalidArgument("для юридического лица укажите ОГРН — ровно 13 цифр (проверка по ЕГРЮЛ)")
 		}
-		v.OGRN = ogrn
-	} else {
-		v.OGRN = ""
+	case 12:
+		if len(ogrn) != 15 {
+			return pkgerr.InvalidArgument("для ИП укажите ОГРНИП — ровно 15 цифр (проверка по ЕГРИП)")
+		}
 	}
+	v.OGRN = ogrn
 
 	rawURL := strings.TrimSpace(v.PublicListingURL)
 	u, err := url.Parse(rawURL)

@@ -37,6 +37,12 @@ message CreateVenueRequest {
   string phone = 12;
   repeated VenueServiceItem services = 13;
   string city = 14;
+  // Данные для проверки владельца и реальности точки (ЕГРЮЛ/ЕГРИП, карты)
+  string legal_entity_name = 15;
+  string inn = 16;
+  string ogrn = 17;
+  string public_listing_url = 18;
+  string verification_note = 19;
 }
 
 message UpdateVenueRequest {
@@ -53,6 +59,11 @@ message UpdateVenueRequest {
   optional string working_hours = 11;
   optional string phone = 12;
   optional string city = 13;
+  optional string legal_entity_name = 14;
+  optional string inn = 15;
+  optional string ogrn = 16;
+  optional string public_listing_url = 17;
+  optional string verification_note = 18;
 }
 
 message GetVenueRequest {
@@ -114,6 +125,11 @@ message VenueResponse {
   string city = 23;
   google.protobuf.Timestamp moderated_at = 24;
   string moderated_by = 25;
+  string legal_entity_name = 26;
+  string inn = 27;
+  string ogrn = 28;
+  string public_listing_url = 29;
+  string verification_note = 30;
 }
 
 message ListVenuesResponse {

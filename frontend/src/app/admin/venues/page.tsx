@@ -25,6 +25,8 @@ import {
   MapPin,
   Phone,
   Clock,
+  ExternalLink,
+  Shield,
 } from "lucide-react"
 
 const STATUS_LABELS: Record<string, string> = {
@@ -157,6 +159,45 @@ export default function AdminVenuesPage() {
             <CardContent className="space-y-3">
               {venue.description && (
                 <p className="text-sm text-muted-foreground">{venue.description}</p>
+              )}
+
+              {(venue.legal_entity_name || venue.inn) && (
+                <div className="rounded-md border border-primary/20 bg-primary/5 p-3 text-sm">
+                  <div className="mb-2 flex items-center gap-2 font-medium text-foreground">
+                    <Shield className="h-4 w-4 text-primary" />
+                    Проверка владельца
+                  </div>
+                  {venue.legal_entity_name && (
+                    <p>
+                      <span className="text-muted-foreground">Юр. наименование: </span>
+                      {venue.legal_entity_name}
+                    </p>
+                  )}
+                  {(venue.inn || venue.ogrn) && (
+                    <p className="mt-1 font-mono text-xs">
+                      {venue.inn && <>ИНН: {venue.inn}</>}
+                      {venue.inn && venue.ogrn && " · "}
+                      {venue.ogrn && <>ОГРН/ОГРНИП: {venue.ogrn}</>}
+                    </p>
+                  )}
+                  {venue.public_listing_url && (
+                    <a
+                      href={venue.public_listing_url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="mt-2 inline-flex items-center gap-1 text-primary hover:underline"
+                    >
+                      <ExternalLink className="h-3.5 w-3.5" />
+                      Карточка на картах
+                    </a>
+                  )}
+                  {venue.verification_note && (
+                    <p className="mt-2 text-muted-foreground">
+                      <span className="font-medium text-foreground">От заявителя: </span>
+                      {venue.verification_note}
+                    </p>
+                  )}
+                </div>
               )}
 
               {venue.moderation_comment && (

@@ -32,12 +32,39 @@ import {
   ShieldCheck,
   Star,
   Building2,
+  FileText,
+  Link2,
   CheckCircle2,
   PartyPopper,
   Settings,
 } from "lucide-react"
 
 type Step = 1 | 2 | 3 | 4
+
+function isOwnerVerificationComplete(
+  legal: string,
+  innRaw: string,
+  ogrnRaw: string,
+  listingUrl: string,
+): boolean {
+  const legalTrim = legal.trim()
+  if (legalTrim.length < 3) return false
+  const innD = innRaw.replace(/\D/g, "")
+  if (innD.length !== 10 && innD.length !== 12) return false
+  const ogrnD = ogrnRaw.replace(/\D/g, "")
+  if (innD.length === 10 && ogrnD.length !== 13) return false
+  if (innD.length === 12 && ogrnD.length !== 15) return false
+  const u = listingUrl.trim()
+  try {
+    const parsed = new URL(u)
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return false
+    const h = parsed.hostname.toLowerCase()
+    if (h === "localhost" || h.startsWith("127.")) return false
+  } catch {
+    return false
+  }
+  return true
+}
 
 export default function PartnerPage() {
   const router = useRouter()
@@ -52,6 +79,12 @@ export default function PartnerPage() {
   const [venueCity, setVenueCity] = useState("")
   const [venueAddress, setVenueAddress] = useState("")
   const [venueDescription, setVenueDescription] = useState("")
+
+  const [legalEntityName, setLegalEntityName] = useState("")
+  const [inn, setInn] = useState("")
+  const [ogrn, setOgrn] = useState("")
+  const [publicListingUrl, setPublicListingUrl] = useState("")
+  const [verificationNote, setVerificationNote] = useState("")
 
   // Step 3: Contact data
   const [contactName, setContactName] = useState("")
@@ -91,6 +124,11 @@ export default function PartnerPage() {
         price_from: 0,
         amenities: [],
         services: [],
+        legal_entity_name: legalEntityName.trim(),
+        inn: inn.replace(/\D/g, ""),
+        ogrn: ogrn.replace(/\D/g, ""),
+        public_listing_url: publicListingUrl.trim(),
+        verification_note: verificationNote.trim() || undefined,
       }
       const venue = await createVenue(venueData)
       setCreatedVenueSlug(venue.slug || venue.id)
@@ -306,6 +344,74 @@ export default function PartnerPage() {
                   />
                 </div>
 
+                <div className="rounded-lg border border-border bg-muted/30 p-4 space-y-3">
+                  <div className="flex items-center gap-2 text-sm font-medium text-foreground">
+                    <FileText className="h-4 w-4 text-primary" />
+                    Данные для проверки владельца
+                  </div>
+                  <p className="text-xs text-muted-foreground leading-relaxed">
+                    Чтобы отсечь фиктивные заявки, мы сверяем ИНН и ОГРН/ОГРНИП с открытыми реестрами (ЕГРЮЛ/ЕГРИП) и смотрим публичную карточку заведения на картах. Без этого модерация невозможна.
+                  </p>
+                  <div className="space-y-2">
+                    <Label htmlFor="legalEntityName">Полное наименование ИП или организации</Label>
+                    <Input
+                      id="legalEntityName"
+                      placeholder="Как в выписке ЕГРЮЛ / ЕГРИП"
+                      value={legalEntityName}
+                      onChange={(e) => setLegalEntityName(e.target.value)}
+                      required
+                    />
+                  </div>
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    <div className="space-y-2">
+                      <Label htmlFor="inn">ИНН</Label>
+                      <Input
+                        id="inn"
+                        inputMode="numeric"
+                        placeholder="10 цифр (ООО) или 12 (ИП)"
+                        value={inn}
+                        onChange={(e) => setInn(e.target.value)}
+                        required
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label htmlFor="ogrn">ОГРН или ОГРНИП</Label>
+                      <Input
+                        id="ogrn"
+                        inputMode="numeric"
+                        placeholder="13 цифр (ОГРН) или 15 (ОГРНИП)"
+                        value={ogrn}
+                        onChange={(e) => setOgrn(e.target.value)}
+                        required
+                      />
+                    </div>
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="publicListingUrl" className="flex items-center gap-1.5">
+                      <Link2 className="h-3.5 w-3.5" />
+                      Ссылка на карточку на картах
+                    </Label>
+                    <Input
+                      id="publicListingUrl"
+                      type="url"
+                      placeholder="https://yandex.ru/maps/org/... или 2gis.ru/..."
+                      value={publicListingUrl}
+                      onChange={(e) => setPublicListingUrl(e.target.value)}
+                      required
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="verificationNote">Комментарий для модератора (необязательно)</Label>
+                    <Textarea
+                      id="verificationNote"
+                      placeholder="Например: торговая марка отличается от юр. названия, доступ к телефону организации..."
+                      value={verificationNote}
+                      onChange={(e) => setVerificationNote(e.target.value)}
+                      rows={2}
+                    />
+                  </div>
+                </div>
+
                 <div className="flex gap-3 pt-2">
                   <Button variant="outline" className="gap-2" onClick={() => setStep(1)}>
                     <ArrowLeft className="h-4 w-4" />
@@ -314,7 +420,17 @@ export default function PartnerPage() {
                   <Button
                     className="flex-1 gap-2"
                     onClick={() => setStep(3)}
-                    disabled={!venueName || !venueType || !venueCity}
+                    disabled={
+                      !venueName ||
+                      !venueType ||
+                      !venueCity ||
+                      !isOwnerVerificationComplete(
+                        legalEntityName,
+                        inn,
+                        ogrn,
+                        publicListingUrl,
+                      )
+                    }
                   >
                     Далее
                     <ArrowRight className="h-4 w-4" />

@@ -34,7 +34,7 @@ func (h *VenueHandler) List(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"venues":    venueList(resp.GetVenues()),
+		"venues":    venueList(resp.GetVenues(), false),
 		"total":     resp.GetTotal(),
 		"page":      resp.GetPage(),
 		"page_size": resp.GetPageSize(),
@@ -76,7 +76,7 @@ func (h *VenueHandler) Search(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"venues":    venueList(resp.GetVenues()),
+		"venues":    venueList(resp.GetVenues(), false),
 		"total":     resp.GetTotal(),
 		"page":      resp.GetPage(),
 		"page_size": resp.GetPageSize(),
@@ -94,7 +94,7 @@ func (h *VenueHandler) GetBySlug(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, venueToJSON(resp))
+	writeJSON(w, http.StatusOK, venueToJSON(resp, false))
 }
 
 func (h *VenueHandler) Create(w http.ResponseWriter, r *http.Request) {
@@ -105,19 +105,24 @@ func (h *VenueHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		Name         string                `json:"name"`
-		Type         string                `json:"type"`
-		Description  string                `json:"description"`
-		Address      string                `json:"address"`
-		City         string                `json:"city"`
-		Latitude     float64               `json:"latitude"`
-		Longitude    float64               `json:"longitude"`
-		PriceFrom    int64                 `json:"price_from"`
-		Capacity     int32                 `json:"capacity"`
-		Amenities    []string              `json:"amenities"`
-		WorkingHours string                `json:"working_hours"`
-		Phone        string                `json:"phone"`
-		Services     []venueServiceItemReq `json:"services"`
+		Name              string                `json:"name"`
+		Type              string                `json:"type"`
+		Description       string                `json:"description"`
+		Address           string                `json:"address"`
+		City              string                `json:"city"`
+		Latitude          float64               `json:"latitude"`
+		Longitude         float64               `json:"longitude"`
+		PriceFrom         int64                 `json:"price_from"`
+		Capacity          int32                 `json:"capacity"`
+		Amenities         []string              `json:"amenities"`
+		WorkingHours      string                `json:"working_hours"`
+		Phone             string                `json:"phone"`
+		Services          []venueServiceItemReq `json:"services"`
+		LegalEntityName   string                `json:"legal_entity_name"`
+		INN               string                `json:"inn"`
+		OGRN              string                `json:"ogrn"`
+		PublicListingURL  string                `json:"public_listing_url"`
+		VerificationNote  string                `json:"verification_note"`
 	}
 	if err := readJSON(r, &req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
@@ -135,27 +140,32 @@ func (h *VenueHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp, err := h.client.CreateVenue(r.Context(), &venuev1.CreateVenueRequest{
-		OwnerId:      userID,
-		Name:         req.Name,
-		Type:         req.Type,
-		Description:  req.Description,
-		Address:      req.Address,
-		City:         req.City,
-		Latitude:     req.Latitude,
-		Longitude:    req.Longitude,
-		PriceFrom:    req.PriceFrom,
-		Capacity:     req.Capacity,
-		Amenities:    req.Amenities,
-		WorkingHours: req.WorkingHours,
-		Phone:        req.Phone,
-		Services:     grpcServices,
+		OwnerId:           userID,
+		Name:              req.Name,
+		Type:              req.Type,
+		Description:       req.Description,
+		Address:           req.Address,
+		City:              req.City,
+		Latitude:          req.Latitude,
+		Longitude:         req.Longitude,
+		PriceFrom:         req.PriceFrom,
+		Capacity:          req.Capacity,
+		Amenities:         req.Amenities,
+		WorkingHours:      req.WorkingHours,
+		Phone:             req.Phone,
+		Services:          grpcServices,
+		LegalEntityName:   req.LegalEntityName,
+		Inn:               req.INN,
+		Ogrn:              req.OGRN,
+		PublicListingUrl:  req.PublicListingURL,
+		VerificationNote:  req.VerificationNote,
 	})
 	if err != nil {
 		grpcErrorToHTTP(w, err)
 		return
 	}
 
-	writeJSON(w, http.StatusCreated, venueToJSON(resp))
+	writeJSON(w, http.StatusCreated, venueToJSON(resp, true))
 }
 
 func (h *VenueHandler) Update(w http.ResponseWriter, r *http.Request) {
@@ -167,17 +177,22 @@ func (h *VenueHandler) Update(w http.ResponseWriter, r *http.Request) {
 	venueID := chi.URLParam(r, "id")
 
 	var req struct {
-		Name         *string  `json:"name"`
-		Description  *string  `json:"description"`
-		Address      *string  `json:"address"`
-		City         *string  `json:"city"`
-		Latitude     *float64 `json:"latitude"`
-		Longitude    *float64 `json:"longitude"`
-		PriceFrom    *int64   `json:"price_from"`
-		Capacity     *int32   `json:"capacity"`
-		Amenities    []string `json:"amenities"`
-		WorkingHours *string  `json:"working_hours"`
-		Phone        *string  `json:"phone"`
+		Name              *string  `json:"name"`
+		Description       *string  `json:"description"`
+		Address           *string  `json:"address"`
+		City              *string  `json:"city"`
+		Latitude          *float64 `json:"latitude"`
+		Longitude         *float64 `json:"longitude"`
+		PriceFrom         *int64   `json:"price_from"`
+		Capacity          *int32   `json:"capacity"`
+		Amenities         []string `json:"amenities"`
+		WorkingHours      *string  `json:"working_hours"`
+		Phone             *string  `json:"phone"`
+		LegalEntityName   *string  `json:"legal_entity_name"`
+		INN               *string  `json:"inn"`
+		OGRN              *string  `json:"ogrn"`
+		PublicListingURL  *string  `json:"public_listing_url"`
+		VerificationNote  *string  `json:"verification_note"`
 	}
 	if err := readJSON(r, &req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
@@ -219,6 +234,21 @@ func (h *VenueHandler) Update(w http.ResponseWriter, r *http.Request) {
 	if req.Phone != nil {
 		grpcReq.Phone = req.Phone
 	}
+	if req.LegalEntityName != nil {
+		grpcReq.LegalEntityName = req.LegalEntityName
+	}
+	if req.INN != nil {
+		grpcReq.Inn = req.INN
+	}
+	if req.OGRN != nil {
+		grpcReq.Ogrn = req.OGRN
+	}
+	if req.PublicListingURL != nil {
+		grpcReq.PublicListingUrl = req.PublicListingURL
+	}
+	if req.VerificationNote != nil {
+		grpcReq.VerificationNote = req.VerificationNote
+	}
 
 	resp, err := h.client.UpdateVenue(r.Context(), grpcReq)
 	if err != nil {
@@ -226,7 +256,7 @@ func (h *VenueHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, venueToJSON(resp))
+	writeJSON(w, http.StatusOK, venueToJSON(resp, true))
 }
 
 func (h *VenueHandler) ListOwnerVenues(w http.ResponseWriter, r *http.Request) {
@@ -245,7 +275,7 @@ func (h *VenueHandler) ListOwnerVenues(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"venues":    venueList(resp.GetVenues()),
+		"venues":    venueList(resp.GetVenues(), true),
 		"total":     resp.GetTotal(),
 		"page":      resp.GetPage(),
 		"page_size": resp.GetPageSize(),
@@ -275,7 +305,7 @@ func (h *VenueHandler) ListPending(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"venues":    venueList(resp.GetVenues()),
+		"venues":    venueList(resp.GetVenues(), true),
 		"total":     resp.GetTotal(),
 		"page":      resp.GetPage(),
 		"page_size": resp.GetPageSize(),
@@ -311,10 +341,10 @@ func (h *VenueHandler) Moderate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, venueToJSON(resp))
+	writeJSON(w, http.StatusOK, venueToJSON(resp, true))
 }
 
-func venueToJSON(v *venuev1.VenueResponse) map[string]any {
+func venueToJSON(v *venuev1.VenueResponse, includeVerification bool) map[string]any {
 	services := make([]map[string]any, len(v.GetServices()))
 	for i, s := range v.GetServices() {
 		services[i] = map[string]any{
@@ -365,13 +395,21 @@ func venueToJSON(v *venuev1.VenueResponse) map[string]any {
 		result["moderated_at"] = v.GetModeratedAt().AsTime()
 	}
 
+	if includeVerification {
+		result["legal_entity_name"] = v.GetLegalEntityName()
+		result["inn"] = v.GetInn()
+		result["ogrn"] = v.GetOgrn()
+		result["public_listing_url"] = v.GetPublicListingUrl()
+		result["verification_note"] = v.GetVerificationNote()
+	}
+
 	return result
 }
 
-func venueList(venues []*venuev1.VenueResponse) []map[string]any {
+func venueList(venues []*venuev1.VenueResponse, includeVerification bool) []map[string]any {
 	out := make([]map[string]any, len(venues))
 	for i, v := range venues {
-		out[i] = venueToJSON(v)
+		out[i] = venueToJSON(v, includeVerification)
 	}
 	return out
 }

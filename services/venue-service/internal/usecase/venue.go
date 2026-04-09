@@ -24,10 +24,16 @@ func NewVenueUseCase(repo domain.VenueRepository, redis *goredis.Client) *VenueU
 }
 
 func (uc *VenueUseCase) Create(ctx context.Context, venue *domain.Venue) error {
+	if err := ValidateVenueVerificationForCreate(venue); err != nil {
+		return err
+	}
 	return uc.repo.Create(ctx, venue)
 }
 
 func (uc *VenueUseCase) Update(ctx context.Context, venue *domain.Venue) error {
+	if err := ValidateVenueVerificationForUpdate(venue); err != nil {
+		return err
+	}
 	if err := uc.repo.Update(ctx, venue); err != nil {
 		return err
 	}

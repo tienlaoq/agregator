@@ -33,6 +33,11 @@ export default function CreateVenuePage() {
     price_from: 0,
     amenities: [],
     services: [],
+    legal_entity_name: "",
+    inn: "",
+    ogrn: "",
+    public_listing_url: "",
+    verification_note: "",
   });
 
   const [newAmenity, setNewAmenity] = useState("");
@@ -93,7 +98,13 @@ export default function CreateVenuePage() {
     setError("");
     setLoading(true);
     try {
-      await createVenue({ ...form, phone: getRawPhone(form.phone) });
+      await createVenue({
+        ...form,
+        phone: getRawPhone(form.phone),
+        inn: form.inn.replace(/\D/g, ""),
+        ogrn: form.ogrn.replace(/\D/g, ""),
+        verification_note: form.verification_note?.trim() || undefined,
+      });
       router.push("/owner/venues");
     } catch {
       setError("Не удалось создать заведение. Попробуйте позже.");
@@ -199,6 +210,68 @@ export default function CreateVenuePage() {
                 value={form.price_from || ""}
                 onChange={(e) => updateField("price_from", Number(e.target.value))}
                 required
+              />
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Проверка владельца</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <p className="text-sm text-muted-foreground">
+              Укажите данные как в ЕГРЮЛ/ЕГРИП и ссылку на публичную карточку заведения (Яндекс.Карты, 2ГИС). Модератор сверит их с открытыми источниками.
+            </p>
+            <div className="space-y-2">
+              <Label htmlFor="legal_entity_name">Наименование ИП / организации</Label>
+              <Input
+                id="legal_entity_name"
+                value={form.legal_entity_name}
+                onChange={(e) => updateField("legal_entity_name", e.target.value)}
+                required
+              />
+            </div>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="space-y-2">
+                <Label htmlFor="inn">ИНН</Label>
+                <Input
+                  id="inn"
+                  inputMode="numeric"
+                  value={form.inn}
+                  onChange={(e) => updateField("inn", e.target.value)}
+                  required
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="ogrn">ОГРН / ОГРНИП</Label>
+                <Input
+                  id="ogrn"
+                  inputMode="numeric"
+                  value={form.ogrn}
+                  onChange={(e) => updateField("ogrn", e.target.value)}
+                  required
+                />
+              </div>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="public_listing_url">Ссылка на карточку на картах</Label>
+              <Input
+                id="public_listing_url"
+                type="url"
+                placeholder="https://..."
+                value={form.public_listing_url}
+                onChange={(e) => updateField("public_listing_url", e.target.value)}
+                required
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="verification_note">Комментарий для модерации (необязательно)</Label>
+              <Textarea
+                id="verification_note"
+                value={form.verification_note ?? ""}
+                onChange={(e) => updateField("verification_note", e.target.value)}
+                rows={2}
               />
             </div>
           </CardContent>

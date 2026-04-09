@@ -37,6 +37,7 @@ func TestCreate_SetsPendingReview(t *testing.T) {
 		Status:           domain.StatusPendingReview,
 		LegalEntityName:  "ИП Тестов Тест Тестович",
 		INN:              "7707083893",
+		OGRN:             "1027700132195",
 		PublicListingURL: "https://yandex.ru/maps/org/test/123",
 	}
 	err := uc.Create(ctx, v)

@@ -36,6 +36,11 @@ type Venue struct {
 	ModerationComment string
 	ModeratedAt       *time.Time
 	ModeratedBy       *uuid.UUID
+	LegalEntityName   string
+	INN               string
+	OGRN              string
+	PublicListingURL  string
+	VerificationNote  string
 	Services          []VenueService
 	Photos            []VenuePhoto
 	CreatedAt         time.Time

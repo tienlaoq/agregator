@@ -40,19 +40,39 @@ func (n *Notifier) NotifyNewVenue(venue *domain.Venue) error {
 		typeLabel = venue.Type
 	}
 
+	verifyBlock := ""
+	if venue.LegalEntityName != "" || venue.INN != "" {
+		verifyBlock = fmt.Sprintf(
+			"\n*Проверка владельца*\n"+
+				"Юр\\. наименование: %s\n"+
+				"ИНН: `%s` · ОГРН/ОГРНИП: `%s`\n",
+			escapeMarkdown(venue.LegalEntityName),
+			escapeMarkdown(venue.INN),
+			escapeMarkdown(venue.OGRN),
+		)
+		if venue.PublicListingURL != "" {
+			verifyBlock += fmt.Sprintf("Карточка на картах: %s\n", escapeMarkdown(venue.PublicListingURL))
+		}
+		if venue.VerificationNote != "" {
+			verifyBlock += fmt.Sprintf("Комментарий: %s\n", escapeMarkdown(truncate(venue.VerificationNote, 300)))
+		}
+	}
+
 	text := fmt.Sprintf(
 		"🏛 *Новая заявка на модерацию*\n\n"+
 			"*%s*\n"+
 			"Тип: %s\n"+
 			"Адрес: %s\n"+
 			"Телефон: %s\n\n"+
-			"📝 %s\n\n"+
+			"📝 %s\n"+
+			"%s"+
 			"[Открыть в админке](%s/admin/venues)",
 		escapeMarkdown(venue.Name),
 		typeLabel,
 		escapeMarkdown(venue.Address),
 		venue.Phone,
 		truncate(venue.Description, 200),
+		verifyBlock,
 		n.adminURL,
 	)
 

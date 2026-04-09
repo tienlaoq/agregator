@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/google/uuid"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	venuev1 "github.com/tienlao/agregator/gen/go/venue/v1"
@@ -33,19 +34,24 @@ func (s *Server) CreateVenue(ctx context.Context, req *venuev1.CreateVenueReques
 	}
 
 	venue := &domain.Venue{
-		OwnerID:      ownerID,
-		Name:         req.GetName(),
-		Type:         req.GetType(),
-		Description:  req.GetDescription(),
-		Address:      req.GetAddress(),
-		City:         req.GetCity(),
-		Latitude:     req.GetLatitude(),
-		Longitude:    req.GetLongitude(),
-		PriceFrom:    req.GetPriceFrom(),
-		Capacity:     req.GetCapacity(),
-		Amenities:    req.GetAmenities(),
-		WorkingHours: req.GetWorkingHours(),
-		Phone:        req.GetPhone(),
+		OwnerID:           ownerID,
+		Name:              req.GetName(),
+		Type:              req.GetType(),
+		Description:       req.GetDescription(),
+		Address:           req.GetAddress(),
+		City:              req.GetCity(),
+		Latitude:          req.GetLatitude(),
+		Longitude:           req.GetLongitude(),
+		PriceFrom:           req.GetPriceFrom(),
+		Capacity:            req.GetCapacity(),
+		Amenities:           req.GetAmenities(),
+		WorkingHours:        req.GetWorkingHours(),
+		Phone:               req.GetPhone(),
+		LegalEntityName:     req.GetLegalEntityName(),
+		INN:                 req.GetInn(),
+		OGRN:                req.GetOgrn(),
+		PublicListingURL:    req.GetPublicListingUrl(),
+		VerificationNote:    req.GetVerificationNote(),
 	}
 
 	for _, svc := range req.GetServices() {
@@ -58,6 +64,9 @@ func (s *Server) CreateVenue(ctx context.Context, req *venuev1.CreateVenueReques
 	}
 
 	if err := s.uc.Create(ctx, venue); err != nil {
+		if _, ok := status.FromError(err); ok {
+			return nil, err
+		}
 		return nil, pkgerrors.Internal(err.Error())
 	}
 
@@ -118,8 +127,26 @@ func (s *Server) UpdateVenue(ctx context.Context, req *venuev1.UpdateVenueReques
 	if req.City != nil {
 		existing.City = req.GetCity()
 	}
+	if req.LegalEntityName != nil {
+		existing.LegalEntityName = req.GetLegalEntityName()
+	}
+	if req.Inn != nil {
+		existing.INN = req.GetInn()
+	}
+	if req.Ogrn != nil {
+		existing.OGRN = req.GetOgrn()
+	}
+	if req.PublicListingUrl != nil {
+		existing.PublicListingURL = req.GetPublicListingUrl()
+	}
+	if req.VerificationNote != nil {
+		existing.VerificationNote = req.GetVerificationNote()
+	}
 
 	if err := s.uc.Update(ctx, existing); err != nil {
+		if _, ok := status.FromError(err); ok {
+			return nil, err
+		}
 		return nil, pkgerrors.Internal(err.Error())
 	}
 
@@ -322,6 +349,11 @@ func venueToProto(v *domain.Venue) *venuev1.VenueResponse {
 		Status:            v.Status,
 		ModerationComment: v.ModerationComment,
 		CreatedAt:         timestamppb.New(v.CreatedAt),
+		LegalEntityName:   v.LegalEntityName,
+		Inn:               v.INN,
+		Ogrn:              v.OGRN,
+		PublicListingUrl:  v.PublicListingURL,
+		VerificationNote:  v.VerificationNote,
 	}
 
 	if v.ModeratedAt != nil {

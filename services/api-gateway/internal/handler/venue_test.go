@@ -238,13 +238,14 @@ func TestCreate_Success(t *testing.T) {
 			assert.Equal(t, "Main st", in.GetAddress())
 			assert.Equal(t, "ИП Тестов Тест Тестович", in.GetLegalEntityName())
 			assert.Equal(t, "7707083893", in.GetInn())
+			assert.Equal(t, "1027700132195", in.GetOgrn())
 			assert.Equal(t, "https://yandex.ru/maps/org/x", in.GetPublicListingUrl())
 			return sampleVenueResponse(), nil
 		},
 	}
 	h := NewVenueHandler(mock)
 
-	payload := `{"name":"New Spa","type":"banya","description":"d","address":"Main st","city":"X","latitude":1,"longitude":2,"price_from":100,"capacity":10,"amenities":["pool"],"working_hours":"9-5","phone":"1","services":[],"legal_entity_name":"ИП Тестов Тест Тестович","inn":"7707083893","public_listing_url":"https://yandex.ru/maps/org/x"}`
+	payload := `{"name":"New Spa","type":"banya","description":"d","address":"Main st","city":"X","latitude":1,"longitude":2,"price_from":100,"capacity":10,"amenities":["pool"],"working_hours":"9-5","phone":"1","services":[],"legal_entity_name":"ИП Тестов Тест Тестович","inn":"7707083893","ogrn":"1027700132195","public_listing_url":"https://yandex.ru/maps/org/x"}`
 	req := httptest.NewRequest(http.MethodPost, "/venues", strings.NewReader(payload))
 	req.Header.Set("Content-Type", "application/json")
 	ctx := context.WithValue(req.Context(), middleware.CtxUserID, "user-123")

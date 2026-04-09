@@ -44,13 +44,16 @@ func (r *venueRepo) Create(ctx context.Context, venue *domain.Venue) error {
 	}
 
 	err = tx.QueryRow(ctx, `
-		INSERT INTO venues (owner_id, slug, name, type, description, address, city, location, price_from, capacity, amenities, working_hours, phone, status)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, ST_SetSRID(ST_MakePoint($8, $9), 4326)::geography, $10, $11, $12, $13, $14, $15)
+		INSERT INTO venues (owner_id, slug, name, type, description, address, city, location, price_from, capacity, amenities, working_hours, phone, status,
+			legal_entity_name, inn, ogrn, public_listing_url, verification_note)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, ST_SetSRID(ST_MakePoint($8, $9), 4326)::geography, $10, $11, $12, $13, $14, $15,
+			$16, $17, $18, $19, $20)
 		RETURNING id, created_at, updated_at`,
 		venue.OwnerID, venue.Slug, venue.Name, venue.Type, venue.Description,
 		venue.Address, venue.City, venue.Longitude, venue.Latitude,
 		venue.PriceFrom, venue.Capacity, venue.Amenities, venue.WorkingHours, venue.Phone,
 		venue.Status,
+		venue.LegalEntityName, venue.INN, venue.OGRN, venue.PublicListingURL, venue.VerificationNote,
 	).Scan(&venue.ID, &venue.CreatedAt, &venue.UpdatedAt)
 	if err != nil {
 		return fmt.Errorf("insert venue: %w", err)
@@ -83,12 +86,16 @@ func (r *venueRepo) Update(ctx context.Context, venue *domain.Venue) error {
 			name = $2, description = $3, address = $4, city = $5,
 			location = ST_SetSRID(ST_MakePoint($6, $7), 4326)::geography,
 			price_from = $8, capacity = $9, amenities = $10,
-			working_hours = $11, phone = $12, updated_at = now()
+			working_hours = $11, phone = $12,
+			legal_entity_name = $13, inn = $14, ogrn = $15,
+			public_listing_url = $16, verification_note = $17,
+			updated_at = now()
 		WHERE id = $1`,
 		venue.ID, venue.Name, venue.Description, venue.Address, venue.City,
 		venue.Longitude, venue.Latitude,
 		venue.PriceFrom, venue.Capacity, venue.Amenities,
 		venue.WorkingHours, venue.Phone,
+		venue.LegalEntityName, venue.INN, venue.OGRN, venue.PublicListingURL, venue.VerificationNote,
 	)
 	if err != nil {
 		return fmt.Errorf("update venue: %w", err)
@@ -112,6 +119,7 @@ func (r *venueRepo) getVenue(ctx context.Context, where string, arg any) (*domai
 			v.price_from, v.capacity, v.amenities, v.working_hours, v.phone,
 			v.avg_rating, v.review_count, v.is_active, v.status, v.moderation_comment,
 			v.moderated_at, v.moderated_by,
+			v.legal_entity_name, v.inn, v.ogrn, v.public_listing_url, v.verification_note,
 			v.created_at, v.updated_at
 		FROM venues v `+where, arg,
 	).Scan(
@@ -120,6 +128,7 @@ func (r *venueRepo) getVenue(ctx context.Context, where string, arg any) (*domai
 		&v.PriceFrom, &v.Capacity, &v.Amenities, &v.WorkingHours, &v.Phone,
 		&v.AvgRating, &v.ReviewCount, &v.IsActive, &v.Status, &v.ModerationComment,
 		&v.ModeratedAt, &v.ModeratedBy,
+		&v.LegalEntityName, &v.INN, &v.OGRN, &v.PublicListingURL, &v.VerificationNote,
 		&v.CreatedAt, &v.UpdatedAt,
 	)
 	if err == pgx.ErrNoRows {
@@ -226,6 +235,7 @@ func (r *venueRepo) List(ctx context.Context, page, pageSize int32, venueType, s
 			price_from, capacity, amenities, working_hours, phone,
 			avg_rating, review_count, is_active, status, moderation_comment,
 			moderated_at, moderated_by,
+			legal_entity_name, inn, ogrn, public_listing_url, verification_note,
 			created_at, updated_at
 		FROM venues %s %s LIMIT $%d OFFSET $%d`, where, orderBy, argIdx, argIdx+1)
 
@@ -315,6 +325,7 @@ func (r *venueRepo) Search(ctx context.Context, params domain.SearchParams) (*do
 			price_from, capacity, amenities, working_hours, phone,
 			avg_rating, review_count, is_active, status, moderation_comment,
 			moderated_at, moderated_by,
+			legal_entity_name, inn, ogrn, public_listing_url, verification_note,
 			created_at, updated_at
 		FROM venues %s ORDER BY avg_rating DESC LIMIT $%d OFFSET $%d`, where, argIdx, argIdx+1)
 
@@ -339,6 +350,7 @@ func (r *venueRepo) ListByOwner(ctx context.Context, ownerID uuid.UUID) ([]domai
 			price_from, capacity, amenities, working_hours, phone,
 			avg_rating, review_count, is_active, status, moderation_comment,
 			moderated_at, moderated_by,
+			legal_entity_name, inn, ogrn, public_listing_url, verification_note,
 			created_at, updated_at
 		FROM venues WHERE owner_id = $1 ORDER BY created_at DESC`, ownerID)
 	if err != nil {
@@ -372,6 +384,7 @@ func (r *venueRepo) ListByStatus(ctx context.Context, status string, page, pageS
 			price_from, capacity, amenities, working_hours, phone,
 			avg_rating, review_count, is_active, status, moderation_comment,
 			moderated_at, moderated_by,
+			legal_entity_name, inn, ogrn, public_listing_url, verification_note,
 			created_at, updated_at
 		FROM venues WHERE status = $1 ORDER BY created_at ASC LIMIT $2 OFFSET $3`, status, pageSize, offset)
 	if err != nil {
@@ -501,6 +514,7 @@ func (r *venueRepo) scanVenues(rows pgx.Rows) ([]domain.Venue, error) {
 			&v.PriceFrom, &v.Capacity, &v.Amenities, &v.WorkingHours, &v.Phone,
 			&v.AvgRating, &v.ReviewCount, &v.IsActive, &v.Status, &v.ModerationComment,
 			&v.ModeratedAt, &v.ModeratedBy,
+			&v.LegalEntityName, &v.INN, &v.OGRN, &v.PublicListingURL, &v.VerificationNote,
 			&v.CreatedAt, &v.UpdatedAt,
 		); err != nil {
 			return nil, fmt.Errorf("scan venue: %w", err)

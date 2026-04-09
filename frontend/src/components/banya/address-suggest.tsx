@@ -1,8 +1,9 @@
 "use client"
 
-import { useState, useRef, useEffect } from "react"
+import { useState, useRef, useEffect, useCallback } from "react"
 import { Input } from "@/components/ui/input"
-import { MapPin } from "lucide-react"
+import { MapPin, Loader2 } from "lucide-react"
+import { isStreetSuggestReady } from "@/lib/address-suggest-rules"
 
 const STREET_TYPES: Record<string, string> = {
   "улица": "ул.",
@@ -41,18 +42,13 @@ function normalizeAddress(raw: string): string {
 
   addr = addr.replace(/,\s*/g, ", ")
 
-  // "дом 15" / "дом15" → "д. 15"
   addr = addr.replace(/\bдом\s*\.?\s*(\d)/gi, "д. $1")
-  // "д15" / "д 15" (without dot) → "д. 15"
   addr = addr.replace(/\bд\s+(\d)/gi, "д. $1")
   addr = addr.replace(/\bд(\d)/gi, "д. $1")
-  // "корпус 2" / "корп 2" → "к. 2"
   addr = addr.replace(/\b(?:корпус|корп)\.?\s*(\d)/gi, "к. $1")
   addr = addr.replace(/\bк\s+(\d)/gi, "к. $1")
   addr = addr.replace(/\bк(\d)/gi, "к. $1")
-  // "строение 1" / "стр 1" → "стр. 1"
   addr = addr.replace(/\b(?:строение|стр)\.?\s*(\d)/gi, "стр. $1")
-  // "квартира 5" / "кв 5" → "кв. 5"
   addr = addr.replace(/\b(?:квартира|кв)\.?\s*(\d)/gi, "кв. $1")
 
   for (const [full, abbr] of Object.entries(STREET_TYPES)) {
@@ -66,34 +62,22 @@ function normalizeAddress(raw: string): string {
   return addr
 }
 
-function generateTemplates(input: string, city?: string): string[] {
-  if (input.length < 2) return []
+/** Same rule as API: meaningful street text after optional type prefix. */
+function extractStreetCore(segment: string): string {
+  let s = segment.trim()
+  s = s.replace(
+    /^(?:ул\.?|улица|пр-?т\.?|проспект|пер\.?|переулок|бул\.?|бульвар|наб\.?|набережная|ш\.?|шоссе|пр-д\.?|проезд|туп\.?|тупик|ал\.?|аллея|лин\.?|линия|мкр\.?|микрорайон)\s+/i,
+    "",
+  )
+  return s.trim()
+}
 
-  const q = input.toLowerCase().trim()
-  const templates: string[] = []
-
-  const streetNames = [
-    "Ленина", "Мира", "Пушкина", "Гагарина", "Советская", "Центральная",
-    "Молодёжная", "Садовая", "Лесная", "Новая", "Школьная", "Парковая",
-    "Комсомольская", "Октябрьская", "Первомайская", "Заводская",
-  ]
-
-  const prefixes = ["ул.", "пр-т", "пер.", "бул.", "наб.", "ш."]
-
-  for (const prefix of prefixes) {
-    for (const name of streetNames) {
-      const full = `${prefix} ${name}`
-      if (full.toLowerCase().includes(q) || name.toLowerCase().startsWith(q)) {
-        templates.push(full)
-      }
-    }
-  }
-
-  if (/^\d/.test(q)) {
-    templates.push(`д. ${q}`)
-  }
-
-  return [...new Set(templates)].slice(0, 6)
+function shouldRequestSuggest(value: string): boolean {
+  const firstSegment = value.split(",")[0]?.trim() ?? value.trim()
+  if (firstSegment.length < 2) return false
+  const core = extractStreetCore(firstSegment)
+  const needLen = Math.max(4, Math.ceil(firstSegment.length / 2))
+  return core.length >= needLen
 }
 
 interface AddressSuggestProps {
@@ -111,15 +95,53 @@ export function AddressSuggest({
 }: AddressSuggestProps) {
   const [suggestions, setSuggestions] = useState<string[]>([])
   const [open, setOpen] = useState(false)
+  const [loading, setLoading] = useState(false)
   const wrapperRef = useRef<HTMLDivElement>(null)
+  const abortRef = useRef<AbortController | null>(null)
+
+  const fetchSuggestions = useCallback(
+    async (street: string, cityName: string) => {
+      abortRef.current?.abort()
+      if (!cityName.trim() || !isStreetSuggestReady(street)) {
+        setSuggestions([])
+        setLoading(false)
+        return
+      }
+      const ac = new AbortController()
+      abortRef.current = ac
+      setLoading(true)
+      try {
+        const q = new URLSearchParams({ city: cityName.trim(), street: street.trim() })
+        const res = await fetch(`/api/address-suggest?${q}`, { signal: ac.signal })
+        if (!res.ok) {
+          setSuggestions([])
+          return
+        }
+        const data = (await res.json()) as { suggestions?: string[] }
+        setSuggestions(Array.isArray(data.suggestions) ? data.suggestions : [])
+      } catch (e) {
+        if ((e as Error).name === "AbortError") return
+        setSuggestions([])
+      } finally {
+        if (!ac.signal.aborted) setLoading(false)
+      }
+    },
+    [],
+  )
 
   useEffect(() => {
-    if (value.length >= 2) {
-      setSuggestions(generateTemplates(value, city))
-    } else {
+    if (!city?.trim()) {
       setSuggestions([])
+      setLoading(false)
+      return
     }
-  }, [value, city])
+    const t = window.setTimeout(() => {
+      void fetchSuggestions(value, city)
+    }, 380)
+    return () => {
+      window.clearTimeout(t)
+    }
+  }, [value, city, fetchSuggestions])
 
   useEffect(() => {
     function handleClickOutside(e: MouseEvent) {
@@ -140,23 +162,35 @@ export function AddressSuggest({
     }, 200)
   }
 
+  const cityMissing = !city?.trim()
+  const showPanel =
+    open && !cityMissing && (loading || suggestions.length > 0)
+
   return (
-    <div ref={wrapperRef} className="relative">
-      <Input
-        value={value}
-        onChange={(e) => {
-          onChange(e.target.value)
-          setOpen(true)
-        }}
-        onFocus={() => setOpen(true)}
-        onBlur={handleBlur}
-        placeholder={placeholder}
-      />
-      {open && suggestions.length > 0 && (
-        <div className="absolute top-full z-50 mt-1 w-full rounded-md border bg-popover p-1 shadow-md">
+    <div className="space-y-1">
+      <div ref={wrapperRef} className="relative">
+        <Input
+          value={value}
+          onChange={(e) => {
+            onChange(e.target.value)
+            setOpen(true)
+          }}
+          onFocus={() => setOpen(true)}
+          onBlur={handleBlur}
+          placeholder={placeholder}
+          autoComplete="street-address"
+        />
+        {showPanel && (
+          <div className="absolute top-full z-50 mt-1 w-full rounded-md border bg-popover p-1 shadow-md">
+          {loading && suggestions.length === 0 && (
+            <div className="flex items-center gap-2 px-2 py-2 text-sm text-muted-foreground">
+              <Loader2 className="h-4 w-4 shrink-0 animate-spin" />
+              Поиск адреса…
+            </div>
+          )}
           {suggestions.map((s, i) => (
             <button
-              key={i}
+              key={`${s}-${i}`}
               type="button"
               className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm hover:bg-accent hover:text-accent-foreground"
               onMouseDown={(e) => {
@@ -169,7 +203,13 @@ export function AddressSuggest({
               <span>{s}</span>
             </button>
           ))}
-        </div>
+          </div>
+        )}
+      </div>
+      {cityMissing && (
+        <p className="text-xs text-muted-foreground">
+          Сначала выберите город — подсказки улиц привязаны к нему.
+        </p>
       )}
     </div>
   )
