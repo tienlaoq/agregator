@@ -11,14 +11,14 @@ import { StarRating } from "@/components/star-rating";
 import { getOwnerVenues } from "@/lib/api";
 import { useAuthStore } from "@/store/auth";
 import { VENUE_TYPE_LABELS } from "@/lib/types";
-import { Plus, MapPin, Building2 } from "lucide-react";
+import { Plus, MapPin, Building2, Clock, AlertCircle } from "lucide-react";
 
 export default function OwnerVenuesPage() {
   const router = useRouter();
   const { token, user, hydrated } = useAuthStore();
 
   useEffect(() => {
-    if (hydrated && (!token || user?.role !== "owner")) {
+    if (hydrated && (!token || user?.role !== "venue_owner")) {
       router.push("/auth/login");
     }
   }, [hydrated, token, user, router]);
@@ -26,7 +26,7 @@ export default function OwnerVenuesPage() {
   const { data: venues, isLoading } = useQuery({
     queryKey: ["owner-venues"],
     queryFn: getOwnerVenues,
-    enabled: !!token && user?.role === "owner",
+    enabled: !!token && user?.role === "venue_owner",
   });
 
   if (!hydrated || !token) return null;
@@ -54,16 +54,49 @@ export default function OwnerVenuesPage() {
               <Card className="transition-shadow hover:shadow-md">
                 <CardContent className="pt-4">
                   <div className="flex gap-4">
-                    <div className="hidden h-20 w-20 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-amber-200 to-orange-300 sm:flex">
-                      <span className="text-2xl">🏛️</span>
+                    <div className="hidden h-20 w-20 shrink-0 items-center justify-center rounded-lg bg-muted sm:flex">
+                      {venue.image_url ? (
+                        <img src={venue.image_url} alt={venue.name} className="h-full w-full rounded-lg object-cover" />
+                      ) : (
+                        <Building2 className="h-8 w-8 text-muted-foreground/40" />
+                      )}
                     </div>
                     <div className="flex-1 space-y-1">
-                      <div className="flex items-center gap-2">
+                      <div className="flex flex-wrap items-center gap-2">
                         <h3 className="font-semibold">{venue.name}</h3>
                         <Badge variant="secondary">
                           {VENUE_TYPE_LABELS[venue.type] ?? venue.type}
                         </Badge>
+                        {venue.status === "pending_review" && (
+                          <Badge className="bg-amber-100 text-amber-800 gap-1">
+                            <Clock className="h-3 w-3" />
+                            На проверке
+                          </Badge>
+                        )}
+                        {venue.status === "active" && (
+                          <Badge className="bg-green-100 text-green-800">Активно</Badge>
+                        )}
+                        {venue.status === "rejected" && (
+                          <Badge className="bg-red-100 text-red-800 gap-1">
+                            <AlertCircle className="h-3 w-3" />
+                            Отклонено
+                          </Badge>
+                        )}
+                        {venue.status === "suspended" && (
+                          <Badge className="bg-gray-100 text-gray-800">Приостановлено</Badge>
+                        )}
                       </div>
+                      {(venue.status === "rejected" || venue.status === "suspended") && venue.moderation_comment && (
+                        <div className="rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive">
+                          <span className="font-medium">Причина: </span>
+                          {venue.moderation_comment}
+                          {venue.moderated_at && (
+                            <span className="ml-2 text-xs text-muted-foreground">
+                              ({new Date(venue.moderated_at).toLocaleDateString("ru-RU")})
+                            </span>
+                          )}
+                        </div>
+                      )}
                       <div className="flex items-center gap-2">
                         <StarRating rating={venue.rating} size="sm" />
                         <span className="text-xs text-muted-foreground">

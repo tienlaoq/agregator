@@ -44,6 +44,7 @@ func NewBookingUseCase(
 type CreateBookingInput struct {
 	UserID    string
 	VenueID   string
+	VenueName string
 	ServiceID string
 	Date      string
 	TimeFrom  string
@@ -74,6 +75,7 @@ func (uc *BookingUseCase) CreateBooking(ctx context.Context, in CreateBookingInp
 	b := &domain.Booking{
 		UserID:    in.UserID,
 		VenueID:   in.VenueID,
+		VenueName: in.VenueName,
 		ServiceID: in.ServiceID,
 		Date:      dateParsed,
 		TimeFrom:  in.TimeFrom,

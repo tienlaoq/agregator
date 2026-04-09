@@ -10,6 +10,7 @@ service PaymentService {
   rpc CreatePayment(CreatePaymentRequest) returns (PaymentResponse);
   rpc GetPayment(GetPaymentRequest) returns (PaymentResponse);
   rpc GetPaymentByBooking(GetPaymentByBookingRequest) returns (PaymentResponse);
+  rpc HandleWebhook(WebhookRequest) returns (WebhookResponse);
 }
 
 message CreatePaymentRequest {
@@ -36,4 +37,12 @@ message GetPaymentRequest {
 
 message GetPaymentByBookingRequest {
   string booking_id = 1;
+}
+
+message WebhookRequest {
+  bytes raw_body = 1;
+}
+
+message WebhookResponse {
+  bool ok = 1;
 }

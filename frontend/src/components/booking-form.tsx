@@ -40,7 +40,7 @@ export function BookingForm({ venueId, venueName, priceFrom }: BookingFormProps)
     setError("");
     setLoading(true);
     try {
-      await createBooking({ venue_id: venueId, date, time, guests });
+      await createBooking({ venue_id: venueId, date, time_from: time, guests });
       setSuccess(true);
     } catch {
       setError("Не удалось создать бронирование. Попробуйте позже.");

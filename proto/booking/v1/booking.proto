@@ -26,6 +26,7 @@ message CreateBookingRequest {
   string time_to = 6; // HH:MM
   int32 guests = 7;
   string comment = 8;
+  string venue_name = 9;
 }
 
 message BookingResponse {
@@ -42,6 +43,7 @@ message BookingResponse {
   int64 total_price = 11; // kopecks
   string payment_url = 12;
   google.protobuf.Timestamp created_at = 13;
+  string venue_name = 14;
 }
 
 message GetBookingRequest {

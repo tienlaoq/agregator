@@ -6,28 +6,50 @@ import (
 	"github.com/google/uuid"
 )
 
+const (
+	StatusPendingReview = "pending_review"
+	StatusActive        = "active"
+	StatusRejected      = "rejected"
+	StatusSuspended     = "suspended"
+)
+
 type Venue struct {
-	ID           uuid.UUID
-	OwnerID      uuid.UUID
-	Slug         string
-	Name         string
-	Type         string
-	Description  string
-	Address      string
-	Latitude     float64
-	Longitude    float64
-	PriceFrom    int64
-	Capacity     int32
-	Amenities    []string
-	WorkingHours string
-	Phone        string
-	AvgRating    float64
-	ReviewCount  int32
-	IsActive     bool
-	Services     []VenueService
-	Photos       []VenuePhoto
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
+	ID                uuid.UUID
+	OwnerID           uuid.UUID
+	Slug              string
+	Name              string
+	Type              string
+	Description       string
+	Address           string
+	City              string
+	Latitude          float64
+	Longitude         float64
+	PriceFrom         int64
+	Capacity          int32
+	Amenities         []string
+	WorkingHours      string
+	Phone             string
+	AvgRating         float64
+	ReviewCount       int32
+	IsActive          bool
+	Status            string
+	ModerationComment string
+	ModeratedAt       *time.Time
+	ModeratedBy       *uuid.UUID
+	Services          []VenueService
+	Photos            []VenuePhoto
+	CreatedAt         time.Time
+	UpdatedAt         time.Time
+}
+
+type ModerationHistoryEntry struct {
+	ID        uuid.UUID
+	VenueID   uuid.UUID
+	OldStatus string
+	NewStatus string
+	Comment   string
+	ChangedBy uuid.UUID
+	CreatedAt time.Time
 }
 
 type VenueService struct {

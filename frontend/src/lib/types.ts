@@ -32,6 +32,11 @@ export interface Venue {
   amenities: string[];
   services: VenueService[];
   owner_id: string;
+  status?: string;
+  moderation_comment?: string;
+  moderated_at?: string;
+  moderated_by?: string;
+  created_at: string;
 }
 
 export interface Booking {
@@ -39,9 +44,12 @@ export interface Booking {
   venue_id: string;
   venue_name: string;
   date: string;
+  time_from: string;
+  time_to: string;
   time: string;
   guests: number;
-  status: "pending" | "confirmed" | "completed" | "cancelled";
+  comment?: string;
+  status: "pending" | "payment_pending" | "confirmed" | "completed" | "cancelled";
   total_price: number;
   created_at: string;
 }
@@ -70,16 +78,18 @@ export interface LoginRequest {
 export interface RegisterRequest {
   name: string;
   email: string;
-  phone: string;
+  phone?: string;
   password: string;
-  role: "visitor" | "owner";
+  role: "user" | "venue_owner";
 }
 
 export interface CreateBookingRequest {
   venue_id: string;
   date: string;
-  time: string;
+  time_from: string;
+  time_to?: string;
   guests: number;
+  comment?: string;
 }
 
 export interface CreateVenueRequest {
@@ -107,6 +117,7 @@ export const VENUE_TYPE_LABELS: Record<string, string> = {
 
 export const BOOKING_STATUS_LABELS: Record<string, string> = {
   pending: "Ожидает",
+  payment_pending: "Ожидает оплаты",
   confirmed: "Подтверждено",
   completed: "Завершено",
   cancelled: "Отменено",

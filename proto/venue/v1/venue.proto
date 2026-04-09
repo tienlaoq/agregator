@@ -18,6 +18,8 @@ service VenueService {
   rpc ReserveSlot(ReserveSlotRequest) returns (ReserveSlotResponse);
   rpc ReleaseSlot(ReleaseSlotRequest) returns (ReleaseSlotResponse);
   rpc UpdateRating(UpdateRatingRequest) returns (UpdateRatingResponse);
+  rpc ModerateVenue(ModerateVenueRequest) returns (VenueResponse);
+  rpc ListPendingVenues(ListPendingVenuesRequest) returns (ListVenuesResponse);
 }
 
 message CreateVenueRequest {
@@ -34,6 +36,7 @@ message CreateVenueRequest {
   string working_hours = 11; // JSON string
   string phone = 12;
   repeated VenueServiceItem services = 13;
+  string city = 14;
 }
 
 message UpdateVenueRequest {
@@ -49,6 +52,7 @@ message UpdateVenueRequest {
   repeated string amenities = 10;
   optional string working_hours = 11;
   optional string phone = 12;
+  optional string city = 13;
 }
 
 message GetVenueRequest {
@@ -105,6 +109,11 @@ message VenueResponse {
   repeated VenueServiceItem services = 18;
   repeated VenuePhoto photos = 19;
   google.protobuf.Timestamp created_at = 20;
+  string status = 21; // pending_review, active, rejected, suspended
+  string moderation_comment = 22;
+  string city = 23;
+  google.protobuf.Timestamp moderated_at = 24;
+  string moderated_by = 25;
 }
 
 message ListVenuesResponse {
@@ -168,3 +177,16 @@ message UpdateRatingRequest {
 }
 
 message UpdateRatingResponse {}
+
+message ModerateVenueRequest {
+  string venue_id = 1;
+  string action = 2; // approve, reject, suspend
+  string comment = 3;
+  string moderated_by = 4; // admin user ID
+}
+
+message ListPendingVenuesRequest {
+  int32 page = 1;
+  int32 page_size = 2;
+  string status = 3; // filter by specific status, empty = pending_review
+}

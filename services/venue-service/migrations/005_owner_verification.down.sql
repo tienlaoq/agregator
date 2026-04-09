@@ -1,0 +1,5 @@
+ALTER TABLE venues DROP COLUMN IF EXISTS verification_note;
+ALTER TABLE venues DROP COLUMN IF EXISTS public_listing_url;
+ALTER TABLE venues DROP COLUMN IF EXISTS ogrn;
+ALTER TABLE venues DROP COLUMN IF EXISTS inn;
+ALTER TABLE venues DROP COLUMN IF EXISTS legal_entity_name;

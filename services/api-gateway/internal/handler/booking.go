@@ -1,20 +1,24 @@
 package handler
 
 import (
+	"fmt"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	bookingv1 "github.com/tienlao/agregator/gen/go/booking/v1"
+	venuev1 "github.com/tienlao/agregator/gen/go/venue/v1"
 	"github.com/tienlao/agregator/services/api-gateway/internal/middleware"
 )
 
 type BookingHandler struct {
-	client bookingv1.BookingServiceClient
+	client      bookingv1.BookingServiceClient
+	venueClient venuev1.VenueServiceClient
 }
 
-func NewBookingHandler(client bookingv1.BookingServiceClient) *BookingHandler {
-	return &BookingHandler{client: client}
+func NewBookingHandler(client bookingv1.BookingServiceClient, venueClient venuev1.VenueServiceClient) *BookingHandler {
+	return &BookingHandler{client: client, venueClient: venueClient}
 }
 
 func (h *BookingHandler) Create(w http.ResponseWriter, r *http.Request) {
@@ -30,6 +34,7 @@ func (h *BookingHandler) Create(w http.ResponseWriter, r *http.Request) {
 		Date      string `json:"date"`
 		TimeFrom  string `json:"time_from"`
 		TimeTo    string `json:"time_to"`
+		Time      string `json:"time"`
 		Guests    int32  `json:"guests"`
 		Comment   string `json:"comment"`
 	}
@@ -38,13 +43,37 @@ func (h *BookingHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	timeFrom := req.TimeFrom
+	if timeFrom == "" {
+		timeFrom = req.Time
+	}
+	if timeFrom == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "time_from is required"})
+		return
+	}
+	timeTo := req.TimeTo
+	if timeTo == "" {
+		if t, err := time.Parse("15:04", timeFrom); err == nil {
+			timeTo = t.Add(2 * time.Hour).Format("15:04")
+		}
+	}
+
+	var venueName string
+	if req.VenueID != "" {
+		venueResp, err := h.venueClient.GetVenue(r.Context(), &venuev1.GetVenueRequest{Id: req.VenueID})
+		if err == nil && venueResp != nil {
+			venueName = venueResp.GetName()
+		}
+	}
+
 	resp, err := h.client.CreateBooking(r.Context(), &bookingv1.CreateBookingRequest{
 		UserId:    userID,
 		VenueId:   req.VenueID,
+		VenueName: venueName,
 		ServiceId: req.ServiceID,
 		Date:      req.Date,
-		TimeFrom:  req.TimeFrom,
-		TimeTo:    req.TimeTo,
+		TimeFrom:  timeFrom,
+		TimeTo:    timeTo,
 		Guests:    req.Guests,
 		Comment:   req.Comment,
 	})
@@ -150,12 +179,19 @@ func (h *BookingHandler) ListVenueBookings(w http.ResponseWriter, r *http.Reques
 }
 
 func bookingToJSON(b *bookingv1.BookingResponse) map[string]any {
+	timeDisplay := b.GetTimeFrom()
+	if b.GetTimeTo() != "" {
+		timeDisplay = fmt.Sprintf("%s–%s", b.GetTimeFrom(), b.GetTimeTo())
+	}
+
 	m := map[string]any{
 		"id":          b.GetId(),
 		"user_id":     b.GetUserId(),
 		"venue_id":    b.GetVenueId(),
+		"venue_name":  b.GetVenueName(),
 		"service_id":  b.GetServiceId(),
 		"date":        b.GetDate(),
+		"time":        timeDisplay,
 		"time_from":   b.GetTimeFrom(),
 		"time_to":     b.GetTimeTo(),
 		"guests":      b.GetGuests(),

@@ -128,16 +128,7 @@ func (uc *PaymentUseCase) HandleWebhook(ctx context.Context, payload WebhookPayl
 }
 
 func (uc *PaymentUseCase) findByProviderID(ctx context.Context, providerID string) (*domain.Payment, error) {
-	// For webhook handling, we look up by provider_id.
-	// Since our repository doesn't have a dedicated method, we use a workaround:
-	// store provider_id in the idempotency lookup or add a repo method.
-	// For simplicity, we'll use GetByIdempotencyKey as a fallback since
-	// the provider_id was stored during creation.
-	// In a real system, add a GetByProviderID method.
-
-	// Try to find by provider_id using a direct query through the booking_id approach.
-	// This is a simplified approach - in production use a proper index.
-	p, err := uc.repo.GetByID(ctx, providerID)
+	p, err := uc.repo.GetByProviderID(ctx, providerID)
 	if err != nil {
 		return nil, fmt.Errorf("payment not found for provider_id %s: %w", providerID, err)
 	}

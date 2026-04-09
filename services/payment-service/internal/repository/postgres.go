@@ -48,6 +48,15 @@ func (r *PaymentRepo) GetByBookingID(ctx context.Context, bookingID string) (*do
 	return r.scanOne(ctx, q, bookingID)
 }
 
+func (r *PaymentRepo) GetByProviderID(ctx context.Context, providerID string) (*domain.Payment, error) {
+	const q = `
+		SELECT id, booking_id, amount, status, COALESCE(provider_id, ''),
+		       COALESCE(payment_url, ''), COALESCE(idempotency_key, ''),
+		       created_at, updated_at
+		FROM payments WHERE provider_id = $1`
+	return r.scanOne(ctx, q, providerID)
+}
+
 func (r *PaymentRepo) GetByIdempotencyKey(ctx context.Context, key string) (*domain.Payment, error) {
 	const q = `
 		SELECT id, booking_id, amount, status, COALESCE(provider_id, ''),

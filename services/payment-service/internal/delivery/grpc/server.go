@@ -2,6 +2,8 @@ package grpc
 
 import (
 	"context"
+	"encoding/json"
+	"log/slog"
 
 	"google.golang.org/protobuf/types/known/timestamppb"
 
@@ -41,6 +43,27 @@ func (s *Server) GetPaymentByBooking(ctx context.Context, req *paymentv1.GetPaym
 		return nil, err
 	}
 	return toProto(p), nil
+}
+
+func (s *Server) HandleWebhook(ctx context.Context, req *paymentv1.WebhookRequest) (*paymentv1.WebhookResponse, error) {
+	var payload usecase.WebhookPayload
+	if err := json.Unmarshal(req.RawBody, &payload); err != nil {
+		slog.Error("unmarshal webhook payload", "err", err)
+		return &paymentv1.WebhookResponse{Ok: false}, nil
+	}
+
+	slog.Info("processing webhook",
+		"event", payload.Event,
+		"object_id", payload.Object.ID,
+		"object_status", payload.Object.Status,
+	)
+
+	if err := s.uc.HandleWebhook(ctx, payload); err != nil {
+		slog.Error("handle webhook", "err", err)
+		return &paymentv1.WebhookResponse{Ok: false}, nil
+	}
+
+	return &paymentv1.WebhookResponse{Ok: true}, nil
 }
 
 func toProto(p *domain.Payment) *paymentv1.PaymentResponse {

@@ -13,6 +13,7 @@ import (
 	"github.com/go-chi/cors"
 	authv1 "github.com/tienlao/agregator/gen/go/auth/v1"
 	bookingv1 "github.com/tienlao/agregator/gen/go/booking/v1"
+	paymentv1 "github.com/tienlao/agregator/gen/go/payment/v1"
 	reviewv1 "github.com/tienlao/agregator/gen/go/review/v1"
 	userv1 "github.com/tienlao/agregator/gen/go/user/v1"
 	venuev1 "github.com/tienlao/agregator/gen/go/venue/v1"
@@ -33,7 +34,7 @@ func main() {
 	venueAddr := config.GetEnv("VENUE_SERVICE_ADDR", "localhost:50053")
 	bookingAddr := config.GetEnv("BOOKING_SERVICE_ADDR", "localhost:50054")
 	reviewAddr := config.GetEnv("REVIEW_SERVICE_ADDR", "localhost:50055")
-	_ = config.GetEnv("PAYMENT_SERVICE_ADDR", "localhost:50056")
+	paymentAddr := config.GetEnv("PAYMENT_SERVICE_ADDR", "localhost:50056")
 
 	dialOpts := []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())}
 
@@ -67,18 +68,33 @@ func main() {
 	}
 	defer reviewConn.Close()
 
+	paymentConn, err := grpc.NewClient(paymentAddr, dialOpts...)
+	if err != nil {
+		log.Fatal().Err(err).Msg("failed to connect to payment service")
+	}
+	defer paymentConn.Close()
+
 	authClient := authv1.NewAuthServiceClient(authConn)
 	userClient := userv1.NewUserServiceClient(userConn)
 	venueClient := venuev1.NewVenueServiceClient(venueConn)
 	bookingClient := bookingv1.NewBookingServiceClient(bookingConn)
 	reviewClient := reviewv1.NewReviewServiceClient(reviewConn)
+	paymentClient := paymentv1.NewPaymentServiceClient(paymentConn)
 
 	authHandler := handler.NewAuthHandler(authClient)
+	oauthHandler := handler.NewOAuthHandler(authClient, handler.OAuthConfig{
+		GoogleClientID:     config.GetEnv("GOOGLE_CLIENT_ID", ""),
+		GoogleClientSecret: config.GetEnv("GOOGLE_CLIENT_SECRET", ""),
+		VKClientID:         config.GetEnv("VK_CLIENT_ID", ""),
+		VKClientSecret:     config.GetEnv("VK_CLIENT_SECRET", ""),
+		BaseURL:            config.GetEnv("BASE_URL", "http://localhost:8080"),
+		FrontendURL:        config.GetEnv("FRONTEND_URL", "http://localhost:3000"),
+	})
 	userHandler := handler.NewUserHandler(userClient)
 	venueHandler := handler.NewVenueHandler(venueClient)
-	bookingHandler := handler.NewBookingHandler(bookingClient)
+	bookingHandler := handler.NewBookingHandler(bookingClient, venueClient)
 	reviewHandler := handler.NewReviewHandler(reviewClient)
-	paymentHandler := handler.NewPaymentHandler()
+	paymentHandler := handler.NewPaymentHandler(paymentClient)
 
 	r := chi.NewRouter()
 
@@ -103,6 +119,12 @@ func main() {
 		api.Post("/auth/login", authHandler.Login)
 		api.Post("/auth/refresh", authHandler.RefreshToken)
 		api.Post("/auth/logout", authHandler.Logout)
+
+		// OAuth (public)
+		api.Get("/auth/google", oauthHandler.GoogleRedirect)
+		api.Get("/auth/google/callback", oauthHandler.GoogleCallback)
+		api.Get("/auth/vk", oauthHandler.VKRedirect)
+		api.Get("/auth/vk/callback", oauthHandler.VKCallback)
 
 		// Venues (public read)
 		api.Get("/venues", venueHandler.List)
@@ -139,6 +161,11 @@ func main() {
 
 			// Reviews (write)
 			protected.Post("/reviews", reviewHandler.Create)
+			protected.Post("/venues/{venueId}/reviews", reviewHandler.CreateForVenue)
+
+			// Admin routes
+			protected.With(middleware.RequireRole("admin")).Get("/admin/venues", venueHandler.ListPending)
+			protected.With(middleware.RequireRole("admin")).Post("/admin/venues/{id}/moderate", venueHandler.Moderate)
 		})
 	})
 

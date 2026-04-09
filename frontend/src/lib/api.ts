@@ -23,6 +23,33 @@ class ApiError extends Error {
   }
 }
 
+let refreshPromise: Promise<boolean> | null = null;
+
+async function tryRefreshToken(): Promise<boolean> {
+  const refreshToken =
+    typeof window !== "undefined" ? localStorage.getItem("refresh_token") : null;
+  if (!refreshToken) return false;
+
+  try {
+    const res = await fetch(`${API_URL}/api/v1/auth/refresh`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ refresh_token: refreshToken }),
+    });
+    if (!res.ok) return false;
+
+    const data = await res.json();
+    localStorage.setItem("token", data.access_token);
+    localStorage.setItem("refresh_token", data.refresh_token);
+
+    const { useAuthStore } = await import("@/store/auth");
+    useAuthStore.getState().setTokens(data.access_token, data.refresh_token);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function fetchAPI<T>(path: string, options?: RequestInit): Promise<T> {
   const token =
     typeof window !== "undefined" ? localStorage.getItem("token") : null;
@@ -39,6 +66,40 @@ async function fetchAPI<T>(path: string, options?: RequestInit): Promise<T> {
       ...(options?.headers as Record<string, string>),
     },
   });
+
+  if (res.status === 401 && typeof window !== "undefined") {
+    if (!refreshPromise) {
+      refreshPromise = tryRefreshToken().finally(() => {
+        refreshPromise = null;
+      });
+    }
+    const refreshed = await refreshPromise;
+    if (refreshed) {
+      const newToken = localStorage.getItem("token");
+      const retryRes = await fetch(`${API_URL}${path}`, {
+        ...options,
+        headers: {
+          "Content-Type": "application/json",
+          ...(options?.headers as Record<string, string>),
+          ...(newToken ? { Authorization: `Bearer ${newToken}` } : {}),
+        },
+      });
+
+      if (!retryRes.ok) {
+        const text = await retryRes.text().catch(() => "Unknown error");
+        throw new ApiError(retryRes.status, text);
+      }
+
+      if (retryRes.status === 204) return undefined as T;
+      return retryRes.json();
+    }
+
+    const { useAuthStore } = await import("@/store/auth");
+    useAuthStore.getState().logout();
+    if (typeof window !== "undefined") {
+      window.location.href = "/auth/login";
+    }
+  }
 
   if (!res.ok) {
     const text = await res.text().catch(() => "Unknown error");
@@ -71,13 +132,11 @@ interface PaginatedVenues {
 }
 
 export async function getVenues(params?: {
-  city?: string;
+  page?: number;
+  page_size?: number;
   type?: string;
-  min_price?: number;
-  max_price?: number;
-  min_rating?: number;
-  q?: string;
-}): Promise<Venue[]> {
+  sort_by?: string;
+}): Promise<PaginatedVenues> {
   const search = new URLSearchParams();
   if (params) {
     Object.entries(params).forEach(([k, v]) => {
@@ -85,8 +144,24 @@ export async function getVenues(params?: {
     });
   }
   const qs = search.toString();
-  const data = await fetchAPI<PaginatedVenues>(`/api/v1/venues${qs ? `?${qs}` : ""}`);
-  return data.venues ?? [];
+  return fetchAPI<PaginatedVenues>(`/api/v1/venues${qs ? `?${qs}` : ""}`);
+}
+
+export async function searchVenues(params: {
+  q?: string;
+  type?: string;
+  price_min?: number;
+  price_max?: number;
+  rating_min?: number;
+  page?: number;
+  page_size?: number;
+}): Promise<PaginatedVenues> {
+  const search = new URLSearchParams();
+  Object.entries(params).forEach(([k, v]) => {
+    if (v !== undefined && v !== "" && v !== 0) search.set(k, String(v));
+  });
+  const qs = search.toString();
+  return fetchAPI<PaginatedVenues>(`/api/v1/venues/search${qs ? `?${qs}` : ""}`);
 }
 
 export async function getVenueBySlug(slug: string): Promise<Venue> {
@@ -124,7 +199,7 @@ export async function getMyBookings(): Promise<Booking[]> {
 
 export async function cancelBooking(id: string): Promise<void> {
   return fetchAPI<void>(`/api/v1/bookings/${id}/cancel`, {
-    method: "PATCH",
+    method: "POST",
   });
 }
 
@@ -142,13 +217,41 @@ export async function updateProfile(
 }
 
 export async function getOwnerVenues(): Promise<Venue[]> {
-  return fetchAPI<Venue[]>("/api/v1/owner/venues");
+  const data = await fetchAPI<{ venues: Venue[]; total: number }>("/api/v1/owner/venues");
+  return data.venues ?? [];
 }
 
 export async function createVenue(data: CreateVenueRequest): Promise<Venue> {
   return fetchAPI<Venue>("/api/v1/venues", {
     method: "POST",
     body: JSON.stringify(data),
+  });
+}
+
+// Admin API
+export async function getAdminVenues(params?: {
+  status?: string;
+  page?: number;
+  page_size?: number;
+}): Promise<PaginatedVenues> {
+  const search = new URLSearchParams();
+  if (params) {
+    Object.entries(params).forEach(([k, v]) => {
+      if (v !== undefined && v !== "") search.set(k, String(v));
+    });
+  }
+  const qs = search.toString();
+  return fetchAPI<PaginatedVenues>(`/api/v1/admin/venues${qs ? `?${qs}` : ""}`);
+}
+
+export async function moderateVenue(
+  venueId: string,
+  action: "approve" | "reject" | "suspend",
+  comment?: string,
+): Promise<Venue> {
+  return fetchAPI<Venue>(`/api/v1/admin/venues/${venueId}/moderate`, {
+    method: "POST",
+    body: JSON.stringify({ action, comment: comment || "" }),
   });
 }
 

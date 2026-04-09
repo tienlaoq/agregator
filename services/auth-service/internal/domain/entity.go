@@ -7,6 +7,8 @@ type Credential struct {
 	UserID       string
 	Email        string
 	PasswordHash string
+	Provider     string
+	ProviderID   string
 	CreatedAt    time.Time
 }
 

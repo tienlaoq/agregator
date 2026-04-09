@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -12,6 +12,9 @@ import { createVenue } from "@/lib/api";
 import { useAuthStore } from "@/store/auth";
 import { VENUE_TYPE_LABELS } from "@/lib/types";
 import type { CreateVenueRequest } from "@/lib/types";
+import { CityCombobox } from "@/components/banya/city-combobox";
+import { AddressSuggest } from "@/components/banya/address-suggest";
+import { PhoneInput, getRawPhone } from "@/components/banya/phone-input";
 import { Plus, X } from "lucide-react";
 
 export default function CreateVenuePage() {
@@ -37,11 +40,11 @@ export default function CreateVenuePage() {
     name: "",
     description: "",
     price: 0,
-    duration_minutes: 60,
+    duration_minutes: 0,
   });
 
   useEffect(() => {
-    if (hydrated && (!token || user?.role !== "owner")) {
+    if (hydrated && (!token || user?.role !== "venue_owner")) {
       router.push("/auth/login");
     }
   }, [hydrated, token, user, router]);
@@ -70,7 +73,7 @@ export default function CreateVenuePage() {
   const addService = () => {
     if (newService.name.trim()) {
       updateField("services", [...form.services, { ...newService }]);
-      setNewService({ name: "", description: "", price: 0, duration_minutes: 60 });
+      setNewService({ name: "", description: "", price: 0, duration_minutes: 0 });
     }
   };
 
@@ -81,17 +84,22 @@ export default function CreateVenuePage() {
     );
   };
 
+  const submittingRef = useRef(false);
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (submittingRef.current) return;
+    submittingRef.current = true;
     setError("");
     setLoading(true);
     try {
-      await createVenue(form);
+      await createVenue({ ...form, phone: getRawPhone(form.phone) });
       router.push("/owner/venues");
     } catch {
       setError("Не удалось создать заведение. Попробуйте позже.");
     } finally {
       setLoading(false);
+      submittingRef.current = false;
     }
   };
 
@@ -143,36 +151,30 @@ export default function CreateVenuePage() {
 
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="space-y-2">
-                <Label htmlFor="city">Город</Label>
-                <Input
-                  id="city"
-                  placeholder="Москва"
+                <Label>Город</Label>
+                <CityCombobox
                   value={form.city}
-                  onChange={(e) => updateField("city", e.target.value)}
-                  required
+                  onChange={(v) => updateField("city", v)}
                 />
               </div>
               <div className="space-y-2">
                 <Label htmlFor="phone">Телефон</Label>
-                <Input
+                <PhoneInput
                   id="phone"
-                  type="tel"
-                  placeholder="+7 495 123-45-67"
                   value={form.phone}
-                  onChange={(e) => updateField("phone", e.target.value)}
+                  onChange={(v) => updateField("phone", v)}
                   required
                 />
               </div>
             </div>
 
             <div className="space-y-2">
-              <Label htmlFor="address">Адрес</Label>
-              <Input
-                id="address"
-                placeholder="ул. Пример, д. 1"
+              <Label>Адрес</Label>
+              <AddressSuggest
                 value={form.address}
-                onChange={(e) => updateField("address", e.target.value)}
-                required
+                onChange={(v) => updateField("address", v)}
+                city={form.city}
+                placeholder="ул. Пример, д. 1"
               />
             </div>
 
@@ -304,7 +306,8 @@ export default function CreateVenuePage() {
                 />
                 <Input
                   type="number"
-                  placeholder="Длительность (мин)"
+                  min={0}
+                  placeholder="Длительность (минут)"
                   value={newService.duration_minutes || ""}
                   onChange={(e) =>
                     setNewService({

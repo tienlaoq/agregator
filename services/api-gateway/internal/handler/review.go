@@ -48,6 +48,42 @@ func (h *ReviewHandler) Create(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, reviewToJSON(resp))
 }
 
+func (h *ReviewHandler) CreateForVenue(w http.ResponseWriter, r *http.Request) {
+	userID := middleware.UserIDFromCtx(r.Context())
+	if userID == "" {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
+
+	venueID := chi.URLParam(r, "venueId")
+	if venueID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "venue_id is required"})
+		return
+	}
+
+	var req struct {
+		Rating int32  `json:"rating"`
+		Text   string `json:"text"`
+	}
+	if err := readJSON(r, &req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+
+	resp, err := h.client.CreateReview(r.Context(), &reviewv1.CreateReviewRequest{
+		UserId:  userID,
+		VenueId: venueID,
+		Rating:  req.Rating,
+		Text:    req.Text,
+	})
+	if err != nil {
+		grpcErrorToHTTP(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, reviewToJSON(resp))
+}
+
 func (h *ReviewHandler) ListByVenue(w http.ResponseWriter, r *http.Request) {
 	venueID := chi.URLParam(r, "venueId")
 
@@ -78,13 +114,13 @@ func (h *ReviewHandler) ListByVenue(w http.ResponseWriter, r *http.Request) {
 
 func reviewToJSON(rv *reviewv1.ReviewResponse) map[string]any {
 	return map[string]any{
-		"id":          rv.GetId(),
-		"user_id":     rv.GetUserId(),
-		"user_name":   rv.GetUserName(),
-		"venue_id":    rv.GetVenueId(),
-		"rating":      rv.GetRating(),
-		"text":        rv.GetText(),
-		"is_verified": rv.GetIsVerified(),
-		"created_at":  rv.GetCreatedAt().AsTime(),
+		"id":         rv.GetId(),
+		"user_id":    rv.GetUserId(),
+		"user_name":  rv.GetUserName(),
+		"venue_id":   rv.GetVenueId(),
+		"rating":     rv.GetRating(),
+		"text":       rv.GetText(),
+		"verified":   rv.GetIsVerified(),
+		"created_at": rv.GetCreatedAt().AsTime(),
 	}
 }

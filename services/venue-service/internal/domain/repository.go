@@ -35,6 +35,11 @@ type VenueRepository interface {
 	List(ctx context.Context, page, pageSize int32, venueType, sortBy string) (*ListResult, error)
 	Search(ctx context.Context, params SearchParams) (*ListResult, error)
 	ListByOwner(ctx context.Context, ownerID uuid.UUID) ([]Venue, error)
+	ListByStatus(ctx context.Context, status string, page, pageSize int32) (*ListResult, error)
+	UpdateStatus(ctx context.Context, venueID uuid.UUID, status, comment string, moderatedBy uuid.UUID) error
+	ResetToPendingReview(ctx context.Context, venueID uuid.UUID) error
+	InsertModerationHistory(ctx context.Context, entry *ModerationHistoryEntry) error
+	GetModerationHistory(ctx context.Context, venueID uuid.UUID) ([]ModerationHistoryEntry, error)
 	UpdateRating(ctx context.Context, venueID uuid.UUID, avgRating float64, reviewCount int32) error
 	CheckSlot(ctx context.Context, venueID uuid.UUID, date, timeFrom, timeTo string) (bool, error)
 	ReserveSlot(ctx context.Context, venueID, bookingID uuid.UUID, date, timeFrom, timeTo string) error

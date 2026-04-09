@@ -7,7 +7,7 @@ use (
 	./services/auth-service
 	./services/booking-service
 	./services/payment-service
+	./services/review-service
 	./services/user-service
 	./services/venue-service
-	./services/review-service
 )

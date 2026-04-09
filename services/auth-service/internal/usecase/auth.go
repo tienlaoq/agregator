@@ -122,6 +122,90 @@ func (uc *AuthUseCase) Register(ctx context.Context, in RegisterInput) (*Registe
 	return &RegisterResult{UserID: userResp.Id, Tokens: *tokens}, nil
 }
 
+type OAuthInput struct {
+	Provider   string
+	ProviderID string
+	Email      string
+	Name       string
+	AvatarURL  string
+}
+
+type OAuthResult struct {
+	UserID    string
+	Tokens    TokenPair
+	IsNewUser bool
+}
+
+func (uc *AuthUseCase) OAuthLogin(ctx context.Context, in OAuthInput) (*OAuthResult, error) {
+	cred, err := uc.creds.GetByProvider(ctx, in.Provider, in.ProviderID)
+	if err == nil {
+		userResp, uerr := uc.userClient.GetUser(ctx, &userv1.GetUserRequest{Id: cred.UserID})
+		if uerr != nil {
+			return nil, fmt.Errorf("get user: %w", uerr)
+		}
+		tokens, terr := uc.generateTokenPair(ctx, cred.UserID, cred.Email, userResp.Role)
+		if terr != nil {
+			return nil, terr
+		}
+		return &OAuthResult{UserID: cred.UserID, Tokens: *tokens, IsNewUser: false}, nil
+	}
+
+	// Try to find existing user by email and link OAuth
+	existingCred, err := uc.creds.GetByEmail(ctx, in.Email)
+	if err == nil {
+		newCred := &domain.Credential{
+			UserID:     existingCred.UserID,
+			Email:      in.Email,
+			Provider:   in.Provider,
+			ProviderID: in.ProviderID,
+		}
+		if cerr := uc.creds.CreateOAuth(ctx, newCred); cerr != nil {
+			return nil, fmt.Errorf("link oauth: %w", cerr)
+		}
+		userResp, uerr := uc.userClient.GetUser(ctx, &userv1.GetUserRequest{Id: existingCred.UserID})
+		if uerr != nil {
+			return nil, fmt.Errorf("get user: %w", uerr)
+		}
+		tokens, terr := uc.generateTokenPair(ctx, existingCred.UserID, in.Email, userResp.Role)
+		if terr != nil {
+			return nil, terr
+		}
+		return &OAuthResult{UserID: existingCred.UserID, Tokens: *tokens, IsNewUser: false}, nil
+	}
+
+	// New user — create via user-service
+	userID := uuid.New().String()
+	userResp, err := uc.userClient.CreateUser(ctx, &userv1.CreateUserRequest{
+		Id:    userID,
+		Email: in.Email,
+		Name:  in.Name,
+		Role:  "user",
+	})
+	if err != nil {
+		st, ok := status.FromError(err)
+		if ok && st.Code() == codes.AlreadyExists {
+			return nil, pkgerr.AlreadyExists(st.Message())
+		}
+		return nil, pkgerr.Internal("ошибка при создании пользователя")
+	}
+
+	newCred := &domain.Credential{
+		UserID:     userResp.Id,
+		Email:      in.Email,
+		Provider:   in.Provider,
+		ProviderID: in.ProviderID,
+	}
+	if err := uc.creds.CreateOAuth(ctx, newCred); err != nil {
+		return nil, fmt.Errorf("create oauth credential: %w", err)
+	}
+
+	tokens, err := uc.generateTokenPair(ctx, userResp.Id, in.Email, "user")
+	if err != nil {
+		return nil, err
+	}
+	return &OAuthResult{UserID: userResp.Id, Tokens: *tokens, IsNewUser: true}, nil
+}
+
 func (uc *AuthUseCase) Login(ctx context.Context, email, password string) (*RegisterResult, error) {
 	cred, err := uc.creds.GetByEmail(ctx, email)
 	if err != nil {

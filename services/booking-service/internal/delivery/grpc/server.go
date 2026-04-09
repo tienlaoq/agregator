@@ -23,6 +23,7 @@ func (s *Server) CreateBooking(ctx context.Context, req *bookingv1.CreateBooking
 	b, err := s.uc.CreateBooking(ctx, usecase.CreateBookingInput{
 		UserID:    req.UserId,
 		VenueID:   req.VenueId,
+		VenueName: req.VenueName,
 		ServiceID: req.ServiceId,
 		Date:      req.Date,
 		TimeFrom:  req.TimeFrom,
@@ -108,6 +109,7 @@ func toProto(b *domain.Booking) *bookingv1.BookingResponse {
 		Id:         b.ID,
 		UserId:     b.UserID,
 		VenueId:    b.VenueID,
+		VenueName:  b.VenueName,
 		ServiceId:  b.ServiceID,
 		Date:       b.Date.Format("2006-01-02"),
 		TimeFrom:   b.TimeFrom,

@@ -1,33 +1,32 @@
 import type { Metadata } from "next";
-import { Inter } from "next/font/google";
-import { Header } from "@/components/layout/header";
-import { Footer } from "@/components/layout/footer";
+import { Geist } from "next/font/google";
 import { Providers } from "./providers";
+import { AppLayout } from "./app-layout";
 import "./globals.css";
 
-const inter = Inter({
-  variable: "--font-sans",
-  subsets: ["latin", "cyrillic"],
-});
+const geist = Geist({ subsets: ["latin"] });
 
 export const metadata: Metadata = {
-  title: "БаняГид — Агрегатор бань и саун",
-  description:
-    "Найдите лучшие бани, сауны и хаммамы вашего города. Удобный поиск, реальные отзывы, онлайн бронирование.",
+  title: "БаняГид — Найди идеальную баню или сауну",
+  description: "Агрегатор бань и саун России. Более 500 заведений с отзывами, ценами и онлайн-бронированием.",
+  icons: {
+    icon: [
+      { url: "/icon-light-32x32.png", media: "(prefers-color-scheme: light)" },
+      { url: "/icon-dark-32x32.png", media: "(prefers-color-scheme: dark)" },
+      { url: "/icon.svg", type: "image/svg+xml" },
+    ],
+    apple: "/apple-icon.png",
+  },
 };
 
 export default function RootLayout({
   children,
-}: Readonly<{
-  children: React.ReactNode;
-}>) {
+}: Readonly<{ children: React.ReactNode }>) {
   return (
-    <html lang="ru" className={`${inter.variable} h-full antialiased`}>
-      <body className="flex min-h-full flex-col">
+    <html lang="ru">
+      <body className={`${geist.className} font-sans antialiased`}>
         <Providers>
-          <Header />
-          <main className="flex-1">{children}</main>
-          <Footer />
+          <AppLayout>{children}</AppLayout>
         </Providers>
       </body>
     </html>

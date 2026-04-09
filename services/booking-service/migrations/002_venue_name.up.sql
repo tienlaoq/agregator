@@ -1,0 +1,1 @@
+ALTER TABLE bookings ADD COLUMN venue_name VARCHAR(255) DEFAULT '';

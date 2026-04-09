@@ -11,6 +11,7 @@ import (
 
 	"github.com/tienlao/agregator/services/venue-service/internal/domain"
 	"github.com/tienlao/agregator/services/venue-service/internal/events"
+	"github.com/tienlao/agregator/services/venue-service/internal/telegram"
 	"github.com/tienlao/agregator/services/venue-service/internal/usecase"
 )
 
@@ -18,10 +19,11 @@ type Server struct {
 	venuev1.UnimplementedVenueServiceServer
 	uc        *usecase.VenueUseCase
 	publisher *events.Publisher
+	tg        *telegram.Notifier
 }
 
-func NewServer(uc *usecase.VenueUseCase, publisher *events.Publisher) *Server {
-	return &Server{uc: uc, publisher: publisher}
+func NewServer(uc *usecase.VenueUseCase, publisher *events.Publisher, tg *telegram.Notifier) *Server {
+	return &Server{uc: uc, publisher: publisher, tg: tg}
 }
 
 func (s *Server) CreateVenue(ctx context.Context, req *venuev1.CreateVenueRequest) (*venuev1.VenueResponse, error) {
@@ -36,6 +38,7 @@ func (s *Server) CreateVenue(ctx context.Context, req *venuev1.CreateVenueReques
 		Type:         req.GetType(),
 		Description:  req.GetDescription(),
 		Address:      req.GetAddress(),
+		City:         req.GetCity(),
 		Latitude:     req.GetLatitude(),
 		Longitude:    req.GetLongitude(),
 		PriceFrom:    req.GetPriceFrom(),
@@ -59,6 +62,7 @@ func (s *Server) CreateVenue(ctx context.Context, req *venuev1.CreateVenueReques
 	}
 
 	_ = s.publisher.VenueCreated(venue)
+	_ = s.tg.NotifyNewVenue(venue)
 
 	return venueToProto(venue), nil
 }
@@ -110,6 +114,9 @@ func (s *Server) UpdateVenue(ctx context.Context, req *venuev1.UpdateVenueReques
 	}
 	if req.Phone != nil {
 		existing.Phone = req.GetPhone()
+	}
+	if req.City != nil {
+		existing.City = req.GetCity()
 	}
 
 	if err := s.uc.Update(ctx, existing); err != nil {
@@ -257,26 +264,71 @@ func (s *Server) UpdateRating(ctx context.Context, req *venuev1.UpdateRatingRequ
 	return &venuev1.UpdateRatingResponse{}, nil
 }
 
+func (s *Server) ModerateVenue(ctx context.Context, req *venuev1.ModerateVenueRequest) (*venuev1.VenueResponse, error) {
+	venueID, err := uuid.Parse(req.GetVenueId())
+	if err != nil {
+		return nil, pkgerrors.InvalidArgument("invalid venue_id")
+	}
+
+	moderatedBy, err := uuid.Parse(req.GetModeratedBy())
+	if err != nil {
+		return nil, pkgerrors.InvalidArgument("invalid moderated_by: admin user ID required")
+	}
+
+	v, err := s.uc.Moderate(ctx, venueID, req.GetAction(), req.GetComment(), moderatedBy)
+	if err != nil {
+		return nil, pkgerrors.Internal(err.Error())
+	}
+
+	_ = s.publisher.VenueUpdated(v)
+	_ = s.tg.NotifyModerated(v)
+
+	return venueToProto(v), nil
+}
+
+func (s *Server) ListPendingVenues(ctx context.Context, req *venuev1.ListPendingVenuesRequest) (*venuev1.ListVenuesResponse, error) {
+	status := req.GetStatus()
+	if status == "" {
+		status = "pending_review"
+	}
+
+	result, err := s.uc.ListByStatus(ctx, status, req.GetPage(), req.GetPageSize())
+	if err != nil {
+		return nil, pkgerrors.Internal(err.Error())
+	}
+	return listResultToProto(result), nil
+}
+
 func venueToProto(v *domain.Venue) *venuev1.VenueResponse {
 	resp := &venuev1.VenueResponse{
-		Id:           v.ID.String(),
-		OwnerId:      v.OwnerID.String(),
-		Slug:         v.Slug,
-		Name:         v.Name,
-		Type:         v.Type,
-		Description:  v.Description,
-		Address:      v.Address,
-		Latitude:     v.Latitude,
-		Longitude:    v.Longitude,
-		PriceFrom:    v.PriceFrom,
-		Capacity:     v.Capacity,
-		Amenities:    v.Amenities,
-		WorkingHours: v.WorkingHours,
-		Phone:        v.Phone,
-		AvgRating:    v.AvgRating,
-		ReviewCount:  v.ReviewCount,
-		IsActive:     v.IsActive,
-		CreatedAt:    timestamppb.New(v.CreatedAt),
+		Id:                v.ID.String(),
+		OwnerId:           v.OwnerID.String(),
+		Slug:              v.Slug,
+		Name:              v.Name,
+		Type:              v.Type,
+		Description:       v.Description,
+		Address:           v.Address,
+		City:              v.City,
+		Latitude:          v.Latitude,
+		Longitude:         v.Longitude,
+		PriceFrom:         v.PriceFrom,
+		Capacity:          v.Capacity,
+		Amenities:         v.Amenities,
+		WorkingHours:      v.WorkingHours,
+		Phone:             v.Phone,
+		AvgRating:         v.AvgRating,
+		ReviewCount:       v.ReviewCount,
+		IsActive:          v.IsActive,
+		Status:            v.Status,
+		ModerationComment: v.ModerationComment,
+		CreatedAt:         timestamppb.New(v.CreatedAt),
+	}
+
+	if v.ModeratedAt != nil {
+		resp.ModeratedAt = timestamppb.New(*v.ModeratedAt)
+	}
+	if v.ModeratedBy != nil {
+		resp.ModeratedBy = v.ModeratedBy.String()
 	}
 
 	for _, svc := range v.Services {

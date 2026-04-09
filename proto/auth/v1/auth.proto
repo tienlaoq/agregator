@@ -9,6 +9,7 @@ import "google/protobuf/timestamp.proto";
 service AuthService {
   rpc Register(RegisterRequest) returns (RegisterResponse);
   rpc Login(LoginRequest) returns (LoginResponse);
+  rpc OAuthLogin(OAuthLoginRequest) returns (OAuthLoginResponse);
   rpc RefreshToken(RefreshTokenRequest) returns (RefreshTokenResponse);
   rpc ValidateToken(ValidateTokenRequest) returns (ValidateTokenResponse);
   rpc Logout(LogoutRequest) returns (LogoutResponse);
@@ -61,6 +62,21 @@ message ValidateTokenResponse {
 
 message LogoutRequest {
   string refresh_token = 1;
+}
+
+message OAuthLoginRequest {
+  string provider = 1;    // "google" or "vk"
+  string provider_id = 2; // provider's unique user ID
+  string email = 3;
+  string name = 4;
+  string avatar_url = 5;
+}
+
+message OAuthLoginResponse {
+  string user_id = 1;
+  string access_token = 2;
+  string refresh_token = 3;
+  bool is_new_user = 4;
 }
 
 message LogoutResponse {}

@@ -11,6 +11,7 @@ import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { getProfile, updateProfile } from "@/lib/api";
 import { useAuthStore } from "@/store/auth";
+import { PhoneInput } from "@/components/banya/phone-input";
 
 export default function ProfilePage() {
   const router = useRouter();
@@ -71,7 +72,7 @@ export default function ProfilePage() {
               <CardTitle>Личные данные</CardTitle>
               {profile && (
                 <Badge variant="secondary">
-                  {profile.role === "owner" ? "Владелец" : "Посетитель"}
+                  {profile.role === "venue_owner" ? "Владелец" : profile.role === "admin" ? "Администратор" : "Посетитель"}
                 </Badge>
               )}
             </div>
@@ -98,11 +99,10 @@ export default function ProfilePage() {
               </div>
               <div className="space-y-2">
                 <Label htmlFor="phone">Телефон</Label>
-                <Input
+                <PhoneInput
                   id="phone"
-                  type="tel"
                   value={phoneValue}
-                  onChange={(e) => setPhone(e.target.value)}
+                  onChange={setPhone}
                   required
                 />
               </div>

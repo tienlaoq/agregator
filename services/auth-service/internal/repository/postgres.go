@@ -55,6 +55,30 @@ func (r *CredentialRepo) GetByUserID(ctx context.Context, userID string) (*domai
 	return c, nil
 }
 
+func (r *CredentialRepo) GetByProvider(ctx context.Context, provider, providerID string) (*domain.Credential, error) {
+	const q = `SELECT id, user_id, email, COALESCE(password_hash, ''), provider, provider_id, created_at 
+		FROM credentials WHERE provider = $1 AND provider_id = $2`
+	c := &domain.Credential{}
+	err := r.pool.QueryRow(ctx, q, provider, providerID).
+		Scan(&c.ID, &c.UserID, &c.Email, &c.PasswordHash, &c.Provider, &c.ProviderID, &c.CreatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, pkgerr.NotFound("credential not found")
+	}
+	if err != nil {
+		return nil, err
+	}
+	return c, nil
+}
+
+func (r *CredentialRepo) CreateOAuth(ctx context.Context, cred *domain.Credential) error {
+	const q = `
+		INSERT INTO credentials (user_id, email, provider, provider_id)
+		VALUES ($1, $2, $3, $4)
+		RETURNING id, created_at`
+	return r.pool.QueryRow(ctx, q, cred.UserID, cred.Email, cred.Provider, cred.ProviderID).
+		Scan(&cred.ID, &cred.CreatedAt)
+}
+
 // RefreshTokenRepo implements domain.RefreshTokenRepository backed by PostgreSQL.
 type RefreshTokenRepo struct {
 	pool *pgxpool.Pool

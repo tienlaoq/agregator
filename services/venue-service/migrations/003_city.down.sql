@@ -1,0 +1,2 @@
+DROP INDEX IF EXISTS idx_venues_city;
+ALTER TABLE venues DROP COLUMN IF EXISTS city;

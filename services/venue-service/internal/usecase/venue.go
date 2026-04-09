@@ -31,6 +31,10 @@ func (uc *VenueUseCase) Update(ctx context.Context, venue *domain.Venue) error {
 	if err := uc.repo.Update(ctx, venue); err != nil {
 		return err
 	}
+	if venue.Status == domain.StatusRejected {
+		_ = uc.repo.ResetToPendingReview(ctx, venue.ID)
+		venue.Status = domain.StatusPendingReview
+	}
 	uc.invalidateCache(ctx, venue.ID, venue.Slug)
 	return nil
 }
@@ -77,6 +81,60 @@ func (uc *VenueUseCase) Search(ctx context.Context, params domain.SearchParams) 
 
 func (uc *VenueUseCase) ListByOwner(ctx context.Context, ownerID uuid.UUID) ([]domain.Venue, error) {
 	return uc.repo.ListByOwner(ctx, ownerID)
+}
+
+func (uc *VenueUseCase) ListByStatus(ctx context.Context, status string, page, pageSize int32) (*domain.ListResult, error) {
+	return uc.repo.ListByStatus(ctx, status, page, pageSize)
+}
+
+func (uc *VenueUseCase) Moderate(ctx context.Context, venueID uuid.UUID, action, comment string, moderatedBy uuid.UUID) (*domain.Venue, error) {
+	var newStatus string
+	switch action {
+	case "approve":
+		newStatus = domain.StatusActive
+	case "reject":
+		newStatus = domain.StatusRejected
+	case "suspend":
+		newStatus = domain.StatusSuspended
+	default:
+		return nil, fmt.Errorf("unknown moderation action: %s", action)
+	}
+
+	if (action == "reject" || action == "suspend") && comment == "" {
+		return nil, fmt.Errorf("comment is required for %s action", action)
+	}
+
+	existing, err := uc.repo.GetByID(ctx, venueID)
+	if err != nil {
+		return nil, err
+	}
+	if existing == nil {
+		return nil, fmt.Errorf("venue not found: %s", venueID)
+	}
+	oldStatus := existing.Status
+
+	if err := uc.repo.UpdateStatus(ctx, venueID, newStatus, comment, moderatedBy); err != nil {
+		return nil, err
+	}
+
+	_ = uc.repo.InsertModerationHistory(ctx, &domain.ModerationHistoryEntry{
+		VenueID:   venueID,
+		OldStatus: oldStatus,
+		NewStatus: newStatus,
+		Comment:   comment,
+		ChangedBy: moderatedBy,
+	})
+
+	v, err := uc.repo.GetByID(ctx, venueID)
+	if err != nil {
+		return nil, err
+	}
+	uc.invalidateCache(ctx, venueID, v.Slug)
+	return v, nil
+}
+
+func (uc *VenueUseCase) GetModerationHistory(ctx context.Context, venueID uuid.UUID) ([]domain.ModerationHistoryEntry, error) {
+	return uc.repo.GetModerationHistory(ctx, venueID)
 }
 
 func (uc *VenueUseCase) UpdateRating(ctx context.Context, venueID uuid.UUID, avgRating float64, reviewCount int32) error {

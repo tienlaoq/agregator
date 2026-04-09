@@ -35,6 +35,26 @@ func (s *Server) Register(ctx context.Context, req *authv1.RegisterRequest) (*au
 	}, nil
 }
 
+func (s *Server) OAuthLogin(ctx context.Context, req *authv1.OAuthLoginRequest) (*authv1.OAuthLoginResponse, error) {
+	result, err := s.uc.OAuthLogin(ctx, usecase.OAuthInput{
+		Provider:   req.Provider,
+		ProviderID: req.ProviderId,
+		Email:      req.Email,
+		Name:       req.Name,
+		AvatarURL:  req.AvatarUrl,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return &authv1.OAuthLoginResponse{
+		UserId:       result.UserID,
+		AccessToken:  result.Tokens.AccessToken,
+		RefreshToken: result.Tokens.RefreshToken,
+		IsNewUser:    result.IsNewUser,
+	}, nil
+}
+
 func (s *Server) Login(ctx context.Context, req *authv1.LoginRequest) (*authv1.LoginResponse, error) {
 	result, err := s.uc.Login(ctx, req.Email, req.Password)
 	if err != nil {

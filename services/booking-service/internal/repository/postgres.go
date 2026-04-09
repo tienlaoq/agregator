@@ -22,11 +22,11 @@ func NewBookingRepo(pool *pgxpool.Pool) *BookingRepo {
 
 func (r *BookingRepo) Create(ctx context.Context, b *domain.Booking) error {
 	const q = `
-		INSERT INTO bookings (user_id, venue_id, service_id, date, time_from, time_to, guests, comment, status, total_price)
-		VALUES ($1, $2, NULLIF($3, '')::UUID, $4, $5, $6, $7, $8, $9, $10)
+		INSERT INTO bookings (user_id, venue_id, venue_name, service_id, date, time_from, time_to, guests, comment, status, total_price)
+		VALUES ($1, $2, $3, NULLIF($4, '')::UUID, $5, $6, $7, $8, $9, $10, $11)
 		RETURNING id, created_at, updated_at`
 	return r.pool.QueryRow(ctx, q,
-		b.UserID, b.VenueID, b.ServiceID, b.Date,
+		b.UserID, b.VenueID, b.VenueName, b.ServiceID, b.Date,
 		b.TimeFrom, b.TimeTo, b.Guests, b.Comment,
 		b.Status, b.TotalPrice,
 	).Scan(&b.ID, &b.CreatedAt, &b.UpdatedAt)
@@ -34,13 +34,13 @@ func (r *BookingRepo) Create(ctx context.Context, b *domain.Booking) error {
 
 func (r *BookingRepo) GetByID(ctx context.Context, id string) (*domain.Booking, error) {
 	const q = `
-		SELECT id, user_id, venue_id, COALESCE(service_id::TEXT, ''), date, time_from::TEXT, time_to::TEXT,
+		SELECT id, user_id, venue_id, COALESCE(venue_name, ''), COALESCE(service_id::TEXT, ''), date, time_from::TEXT, time_to::TEXT,
 		       guests, COALESCE(comment, ''), status, total_price, COALESCE(payment_id::TEXT, ''),
 		       created_at, updated_at
 		FROM bookings WHERE id = $1`
 	b := &domain.Booking{}
 	err := r.pool.QueryRow(ctx, q, id).Scan(
-		&b.ID, &b.UserID, &b.VenueID, &b.ServiceID, &b.Date,
+		&b.ID, &b.UserID, &b.VenueID, &b.VenueName, &b.ServiceID, &b.Date,
 		&b.TimeFrom, &b.TimeTo, &b.Guests, &b.Comment,
 		&b.Status, &b.TotalPrice, &b.PaymentID,
 		&b.CreatedAt, &b.UpdatedAt,
@@ -57,7 +57,7 @@ func (r *BookingRepo) GetByID(ctx context.Context, id string) (*domain.Booking, 
 func (r *BookingRepo) ListByUser(ctx context.Context, userID, status string, offset, limit int) ([]*domain.Booking, int, error) {
 	countQ := `SELECT COUNT(*) FROM bookings WHERE user_id = $1`
 	dataQ := `
-		SELECT id, user_id, venue_id, COALESCE(service_id::TEXT, ''), date, time_from::TEXT, time_to::TEXT,
+		SELECT id, user_id, venue_id, COALESCE(venue_name, ''), COALESCE(service_id::TEXT, ''), date, time_from::TEXT, time_to::TEXT,
 		       guests, COALESCE(comment, ''), status, total_price, COALESCE(payment_id::TEXT, ''),
 		       created_at, updated_at
 		FROM bookings WHERE user_id = $1`
@@ -87,7 +87,7 @@ func (r *BookingRepo) ListByUser(ctx context.Context, userID, status string, off
 	for rows.Next() {
 		b := &domain.Booking{}
 		if err := rows.Scan(
-			&b.ID, &b.UserID, &b.VenueID, &b.ServiceID, &b.Date,
+			&b.ID, &b.UserID, &b.VenueID, &b.VenueName, &b.ServiceID, &b.Date,
 			&b.TimeFrom, &b.TimeTo, &b.Guests, &b.Comment,
 			&b.Status, &b.TotalPrice, &b.PaymentID,
 			&b.CreatedAt, &b.UpdatedAt,
@@ -102,7 +102,7 @@ func (r *BookingRepo) ListByUser(ctx context.Context, userID, status string, off
 func (r *BookingRepo) ListByVenue(ctx context.Context, venueID, status, date string, offset, limit int) ([]*domain.Booking, int, error) {
 	countQ := `SELECT COUNT(*) FROM bookings WHERE venue_id = $1`
 	dataQ := `
-		SELECT id, user_id, venue_id, COALESCE(service_id::TEXT, ''), date, time_from::TEXT, time_to::TEXT,
+		SELECT id, user_id, venue_id, COALESCE(venue_name, ''), COALESCE(service_id::TEXT, ''), date, time_from::TEXT, time_to::TEXT,
 		       guests, COALESCE(comment, ''), status, total_price, COALESCE(payment_id::TEXT, ''),
 		       created_at, updated_at
 		FROM bookings WHERE venue_id = $1`
@@ -140,7 +140,7 @@ func (r *BookingRepo) ListByVenue(ctx context.Context, venueID, status, date str
 	for rows.Next() {
 		b := &domain.Booking{}
 		if err := rows.Scan(
-			&b.ID, &b.UserID, &b.VenueID, &b.ServiceID, &b.Date,
+			&b.ID, &b.UserID, &b.VenueID, &b.VenueName, &b.ServiceID, &b.Date,
 			&b.TimeFrom, &b.TimeTo, &b.Guests, &b.Comment,
 			&b.Status, &b.TotalPrice, &b.PaymentID,
 			&b.CreatedAt, &b.UpdatedAt,

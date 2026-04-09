@@ -19,6 +19,7 @@ import (
 	delivery "github.com/tienlao/agregator/services/venue-service/internal/delivery/grpc"
 	"github.com/tienlao/agregator/services/venue-service/internal/events"
 	"github.com/tienlao/agregator/services/venue-service/internal/repository"
+	"github.com/tienlao/agregator/services/venue-service/internal/telegram"
 	"github.com/tienlao/agregator/services/venue-service/internal/usecase"
 )
 
@@ -58,9 +59,14 @@ func main() {
 	repo := repository.NewVenueRepo(pgPool)
 	uc := usecase.NewVenueUseCase(repo, rdb)
 	publisher := events.NewPublisher(js)
+	tgNotifier := telegram.NewNotifier(
+		os.Getenv("TELEGRAM_BOT_TOKEN"),
+		os.Getenv("TELEGRAM_CHAT_ID"),
+		os.Getenv("FRONTEND_URL"),
+	)
 
 	grpcServer := grpc.NewServer()
-	venuev1.RegisterVenueServiceServer(grpcServer, delivery.NewServer(uc, publisher))
+	venuev1.RegisterVenueServiceServer(grpcServer, delivery.NewServer(uc, publisher, tgNotifier))
 
 	lis, err := net.Listen("tcp", ":"+cfg.GRPCPort)
 	if err != nil {

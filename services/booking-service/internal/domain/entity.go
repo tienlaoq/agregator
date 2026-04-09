@@ -6,6 +6,7 @@ type Booking struct {
 	ID         string
 	UserID     string
 	VenueID    string
+	VenueName  string
 	ServiceID  string
 	Date       time.Time
 	TimeFrom   string
