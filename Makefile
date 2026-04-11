@@ -1,6 +1,6 @@
 .PHONY: proto-gen build build-linux docker-build docker-up docker-down test infra-up infra-down migrate help
 
-SERVICES = auth-service user-service venue-service booking-service review-service payment-service api-gateway
+SERVICES = auth-service user-service venue-service booking-service review-service payment-service master-service api-gateway
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
@@ -80,6 +80,9 @@ run-review: ## Run review-service locally
 
 run-payment: ## Run payment-service locally
 	cd services/payment-service && go run ./cmd/
+
+run-master: ## Run master-service locally
+	cd services/master-service && go run ./cmd/
 
 run-gateway: ## Run api-gateway locally
 	cd services/api-gateway && go run ./cmd/

@@ -8,8 +8,11 @@ import (
 	goredis "github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/tienlao/agregator/services/venue-service/internal/domain"
+	"github.com/tienlao/agregator/services/venue-service/internal/repository"
 )
 
 // dummyRedis returns a client to a non-listening address so cache ops error without panicking.
@@ -212,4 +215,121 @@ func TestUpdate_RejectedResetsToReview(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, resetCalled)
 	assert.Equal(t, domain.StatusPendingReview, v.Status)
+	assert.False(t, v.IsActive)
+}
+
+func TestUpdate_ActiveResetsToReview(t *testing.T) {
+	ctx := context.Background()
+	id := uuid.New()
+	v := &domain.Venue{
+		ID:       id,
+		Slug:     "active-edit",
+		Status:   domain.StatusActive,
+		IsActive: true,
+	}
+
+	var resetCalled bool
+	repo := &mockVenueRepo{
+		UpdateFn: func(_ context.Context, venue *domain.Venue) error { return nil },
+		ResetToPendingReviewFn: func(_ context.Context, venueID uuid.UUID) error {
+			resetCalled = true
+			assert.Equal(t, id, venueID)
+			return nil
+		},
+	}
+
+	uc := NewVenueUseCase(repo, dummyRedis(t))
+	err := uc.Update(ctx, v)
+	require.NoError(t, err)
+	assert.True(t, resetCalled)
+	assert.Equal(t, domain.StatusPendingReview, v.Status)
+	assert.False(t, v.IsActive)
+}
+
+func TestUpdate_PendingStaysPending(t *testing.T) {
+	ctx := context.Background()
+	id := uuid.New()
+	v := &domain.Venue{
+		ID:     id,
+		Slug:   "pending-edit",
+		Status: domain.StatusPendingReview,
+	}
+
+	var resetCalled bool
+	repo := &mockVenueRepo{
+		UpdateFn: func(_ context.Context, venue *domain.Venue) error { return nil },
+		ResetToPendingReviewFn: func(_ context.Context, venueID uuid.UUID) error {
+			resetCalled = true
+			return nil
+		},
+	}
+
+	uc := NewVenueUseCase(repo, dummyRedis(t))
+	err := uc.Update(ctx, v)
+	require.NoError(t, err)
+	assert.False(t, resetCalled)
+	assert.Equal(t, domain.StatusPendingReview, v.Status)
+}
+
+func TestCreateManualSlotBlock_NotOwner(t *testing.T) {
+	ctx := context.Background()
+	owner := uuid.New()
+	other := uuid.New()
+	vid := uuid.New()
+	repo := &mockVenueRepo{
+		GetByIDFn: func(_ context.Context, id uuid.UUID) (*domain.Venue, error) {
+			assert.Equal(t, vid, id)
+			return &domain.Venue{ID: vid, OwnerID: other}, nil
+		},
+	}
+	uc := NewVenueUseCase(repo, dummyRedis(t))
+	_, err := uc.CreateManualSlotBlock(ctx, owner, vid, "2026-01-10", "10:00", "12:00", "звонок")
+	require.Error(t, err)
+	st, ok := status.FromError(err)
+	require.True(t, ok)
+	assert.Equal(t, codes.PermissionDenied, st.Code())
+}
+
+func TestCreateManualSlotBlock_OverlapInvalidArgument(t *testing.T) {
+	ctx := context.Background()
+	owner := uuid.New()
+	vid := uuid.New()
+	repo := &mockVenueRepo{
+		GetByIDFn: func(_ context.Context, id uuid.UUID) (*domain.Venue, error) {
+			return &domain.Venue{ID: vid, OwnerID: owner}, nil
+		},
+		CreateManualSlotBlockFn: func(_ context.Context, venueID uuid.UUID, _, _, _, _ string) (uuid.UUID, error) {
+			assert.Equal(t, vid, venueID)
+			return uuid.Nil, repository.ErrSlotUnavailable
+		},
+	}
+	uc := NewVenueUseCase(repo, dummyRedis(t))
+	_, err := uc.CreateManualSlotBlock(ctx, owner, vid, "2026-02-01", "10:00", "12:00", "")
+	require.Error(t, err)
+	st, ok := status.FromError(err)
+	require.True(t, ok)
+	assert.Equal(t, codes.InvalidArgument, st.Code())
+}
+
+func TestDeleteManualSlotBlock_NotFound(t *testing.T) {
+	ctx := context.Background()
+	owner := uuid.New()
+	vid := uuid.New()
+	bid := uuid.New()
+	repo := &mockVenueRepo{
+		GetByIDFn: func(_ context.Context, id uuid.UUID) (*domain.Venue, error) {
+			return &domain.Venue{ID: vid, OwnerID: owner}, nil
+		},
+		DeleteManualSlotBlockFn: func(_ context.Context, venueID, blockID uuid.UUID) (bool, error) {
+			assert.Equal(t, vid, venueID)
+			assert.Equal(t, bid, blockID)
+			return false, nil
+		},
+	}
+	uc := NewVenueUseCase(repo, dummyRedis(t))
+	err := uc.DeleteManualSlotBlock(ctx, owner, vid, bid)
+	require.Error(t, err)
+	st, ok := status.FromError(err)
+	require.True(t, ok)
+	assert.Equal(t, codes.NotFound, st.Code())
 }

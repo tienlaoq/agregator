@@ -1,7 +1,7 @@
 "use client"
 
-import { useState, useEffect, useCallback } from "react"
-import { useSearchParams } from "next/navigation"
+import { useState, useEffect, useLayoutEffect, useCallback, useRef } from "react"
+import { usePathname, useRouter, useSearchParams } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
@@ -13,7 +13,8 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { Card, CardContent } from "@/components/ui/card"
-import { searchVenues, getVenues } from "@/lib/api"
+import { searchVenues, getVenues, venueCardImageSrc } from "@/lib/api"
+import { packCitiesForQuery, parseCitiesFromSearchParams, parseCitiesFromStableKey } from "@/lib/cities-http"
 import type { Venue } from "@/lib/types"
 import { VENUE_TYPE_LABELS } from "@/lib/types"
 import { Search, MapPin, X, Star, Building2, ImageIcon } from "lucide-react"
@@ -36,12 +37,58 @@ const ratingOptions = [
 
 const PAGE_SIZE = 12
 
+function isAbortError(e: unknown): boolean {
+  if (e instanceof DOMException && e.name === "AbortError") return true
+  if (e instanceof Error && e.name === "AbortError") return true
+  return false
+}
+
+// Ключи, которые Next.js подмешивает в query (_rsc и т.д.): если включить их в deps синхронизации,
+// строка URL «меняется» без смены q/city — эффект затирает город из поля справа пустым searchParams.get("city").
+const NEXT_URL_NOISE_KEYS = new Set(["_rsc", "_next"])
+
+function catalogStableSearchKey(sp: { forEach: (cb: (v: string, k: string) => void) => void }): string {
+  const out = new URLSearchParams()
+  sp.forEach((value, key) => {
+    if (!NEXT_URL_NOISE_KEYS.has(key)) {
+      out.append(key, value)
+    }
+  })
+  return out.toString()
+}
+
+function normalizeCityList(raw: string[]): string[] {
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const s of raw) {
+    const t = s.trim()
+    if (!t) continue
+    const k = t.toLowerCase()
+    if (seen.has(k)) continue
+    seen.add(k)
+    out.push(t)
+  }
+  return out
+}
+
+function sameCityLists(a: string[], b: string[]): boolean {
+  if (a.length !== b.length) return false
+  const sa = [...a].map((s) => s.toLowerCase()).sort()
+  const sb = [...b].map((s) => s.toLowerCase()).sort()
+  return sa.every((v, i) => v === sb[i])
+}
+
 export function CatalogSection() {
   const searchParams = useSearchParams()
+  const pathname = usePathname()
+  const router = useRouter()
   const initialQ = searchParams.get("q") || ""
+  const initialCities = parseCitiesFromSearchParams(searchParams)
 
   const [query, setQuery] = useState(initialQ)
   const [debouncedQuery, setDebouncedQuery] = useState(initialQ)
+  const [selectedCities, setSelectedCities] = useState<string[]>(initialCities)
+  const [cityDraft, setCityDraft] = useState("")
   const [selectedType, setSelectedType] = useState("all")
   const [selectedPriceIdx, setSelectedPriceIdx] = useState("0")
   const [selectedRatingIdx, setSelectedRatingIdx] = useState("0")
@@ -49,65 +96,160 @@ export function CatalogSection() {
   const [venues, setVenues] = useState<Venue[]>([])
   const [total, setTotal] = useState(0)
   const [loading, setLoading] = useState(true)
+  const fetchGen = useRef(0)
 
   useEffect(() => {
     const t = setTimeout(() => setDebouncedQuery(query), 400)
     return () => clearTimeout(t)
   }, [query])
 
-  const fetchData = useCallback(async () => {
+  // Города в запросе без debounce: иначе 300–400 мс citiesEff пустой → уходит getVenues и видны все заведения.
+
+  // Только при реальном изменении «наших» параметров (без _rsc), иначе затирается ввод в поле «Город».
+  const catalogStableKey = catalogStableSearchKey(searchParams)
+  // layout: чтобы state совпал с URL до useEffect с fetch — иначе гонка: уходит List без city,
+  // позже приходит ответ и затирает выдачу поиска.
+  useLayoutEffect(() => {
+    const q = searchParams.get("q") || ""
+    const cities = parseCitiesFromSearchParams(searchParams)
+    setQuery(q)
+    setDebouncedQuery(q)
+    setSelectedCities(cities)
+    setCityDraft("")
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- searchParams по смыслу совпадает со stable key; сам ref меняется каждый кадр
+  }, [catalogStableKey])
+
+  // Синхронизация полей → URL: иначе в адресе остаётся старый ?city= и не совпадает с вводом.
+  useEffect(() => {
+    const wantQ = debouncedQuery.trim()
+    const wantCities = selectedCities
+    const p = new URLSearchParams(catalogStableKey)
+    const urlQ = (p.get("q") ?? "").trim()
+    const urlCities = parseCitiesFromStableKey(catalogStableKey)
+    if (urlQ === wantQ && sameCityLists(urlCities, wantCities)) return
+    const next = new URLSearchParams()
+    if (wantQ) next.set("q", wantQ)
+    if (wantCities.length === 1) {
+      next.set("city", wantCities[0])
+    } else if (wantCities.length > 1) {
+      const packed = packCitiesForQuery(wantCities)
+      if (packed) next.set("cities", packed)
+    }
+    const qs = next.toString()
+    router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false })
+  }, [debouncedQuery, selectedCities, catalogStableKey, pathname, router])
+
+  // Текст поиска — debounced; города — сразу из selectedCities (см. выше). URL синхронизируется в отдельном эффекте.
+  const fetchData = useCallback(async (signal?: AbortSignal) => {
+    const gen = ++fetchGen.current
     setLoading(true)
     try {
       const priceRange = priceRanges[Number(selectedPriceIdx)]
       const ratingMin = ratingOptions[Number(selectedRatingIdx)].value
       const venueType = selectedType === "all" ? "" : selectedType
 
-      const hasSearch = debouncedQuery || venueType || priceRange.min || priceRange.max || ratingMin
+      const qEff = debouncedQuery.trim()
+      const citiesEff = selectedCities
+
+      const hasSearch =
+        qEff ||
+        citiesEff.length > 0 ||
+        venueType ||
+        priceRange.min ||
+        priceRange.max ||
+        ratingMin
+
+      const fetchInit = signal ? { signal } : undefined
 
       if (hasSearch) {
-        const data = await searchVenues({
-          q: debouncedQuery || undefined,
-          type: venueType || undefined,
-          price_min: priceRange.min || undefined,
-          price_max: priceRange.max || undefined,
-          rating_min: ratingMin || undefined,
-          page,
-          page_size: PAGE_SIZE,
-        })
+        const data = await searchVenues(
+          {
+            q: qEff || undefined,
+            city: citiesEff.length > 0 ? citiesEff : undefined,
+            type: venueType || undefined,
+            price_min: priceRange.min || undefined,
+            price_max: priceRange.max || undefined,
+            rating_min: ratingMin || undefined,
+            page,
+            page_size: PAGE_SIZE,
+          },
+          fetchInit,
+        )
+        if (gen !== fetchGen.current) return
         setVenues(data.venues ?? [])
         setTotal(data.total)
       } else {
-        const data = await getVenues({ page, page_size: PAGE_SIZE, sort_by: "rating" })
+        const data = await getVenues(
+          { page, page_size: PAGE_SIZE, sort_by: "rating" },
+          fetchInit,
+        )
+        if (gen !== fetchGen.current) return
         setVenues(data.venues ?? [])
         setTotal(data.total)
       }
-    } catch {
+    } catch (e: unknown) {
+      if (gen !== fetchGen.current) return
+      if (isAbortError(e)) return
       setVenues([])
       setTotal(0)
     } finally {
-      setLoading(false)
+      if (gen === fetchGen.current) setLoading(false)
     }
-  }, [debouncedQuery, selectedType, selectedPriceIdx, selectedRatingIdx, page])
+  }, [
+    debouncedQuery,
+    selectedCities,
+    selectedType,
+    selectedPriceIdx,
+    selectedRatingIdx,
+    page,
+  ])
 
   useEffect(() => {
     setPage(1)
-  }, [debouncedQuery, selectedType, selectedPriceIdx, selectedRatingIdx])
+  }, [debouncedQuery, selectedCities, selectedType, selectedPriceIdx, selectedRatingIdx])
 
   useEffect(() => {
-    fetchData()
+    const ac = new AbortController()
+    void fetchData(ac.signal)
+    return () => ac.abort()
   }, [fetchData])
 
-  const activeFilters = [
-    selectedType !== "all" && typeLabels[selectedType],
-    selectedPriceIdx !== "0" && priceRanges[Number(selectedPriceIdx)].label,
-    selectedRatingIdx !== "0" && ratingOptions[Number(selectedRatingIdx)].label,
-  ].filter(Boolean)
+  const activeFilters: { key: string; label: string; onRemove?: () => void }[] = [
+    ...selectedCities.map((c) => ({
+      key: `city:${c}`,
+      label: `Город: ${c}`,
+      onRemove: () =>
+        setSelectedCities((prev) => prev.filter((x) => x.toLowerCase() !== c.toLowerCase())),
+    })),
+    ...(selectedType !== "all"
+      ? [{ key: "type", label: typeLabels[selectedType] as string }]
+      : []),
+    ...(selectedPriceIdx !== "0"
+      ? [{ key: "price", label: priceRanges[Number(selectedPriceIdx)].label }]
+      : []),
+    ...(selectedRatingIdx !== "0"
+      ? [{ key: "rating", label: ratingOptions[Number(selectedRatingIdx)].label }]
+      : []),
+  ]
 
   const clearAllFilters = () => {
     setQuery("")
+    setDebouncedQuery("")
+    setSelectedCities([])
+    setCityDraft("")
     setSelectedType("all")
     setSelectedPriceIdx("0")
     setSelectedRatingIdx("0")
+  }
+
+  const commitCityDraft = () => {
+    const t = cityDraft.trim()
+    if (!t) return
+    setSelectedCities((prev) => {
+      if (prev.some((c) => c.toLowerCase() === t.toLowerCase())) return prev
+      return [...prev, t]
+    })
+    setCityDraft("")
   }
 
   const totalPages = Math.ceil(total / PAGE_SIZE)
@@ -127,6 +269,22 @@ export function CatalogSection() {
                 placeholder="Поиск по названию бани, сауны..."
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
+                className="h-11 pl-10"
+              />
+            </div>
+            <div className="relative w-full lg:max-w-[240px]">
+              <MapPin className="absolute left-3 top-1/2 z-10 h-5 w-5 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                type="text"
+                placeholder="Город — Enter, добавить"
+                value={cityDraft}
+                onChange={(e) => setCityDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault()
+                    commitCityDraft()
+                  }
+                }}
                 className="h-11 pl-10"
               />
             </div>
@@ -170,9 +328,19 @@ export function CatalogSection() {
           {activeFilters.length > 0 && (
             <div className="flex flex-wrap items-center gap-2">
               <span className="text-sm text-muted-foreground">Фильтры:</span>
-              {activeFilters.map((filter) => (
-                <Badge key={filter as string} variant="secondary" className="text-xs">
-                  {filter}
+              {activeFilters.map((f) => (
+                <Badge key={f.key} variant="secondary" className="inline-flex items-center gap-1 text-xs">
+                  {f.label}
+                  {f.onRemove && (
+                    <button
+                      type="button"
+                      className="rounded-sm p-0.5 hover:bg-muted-foreground/20"
+                      aria-label="Убрать фильтр"
+                      onClick={f.onRemove}
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  )}
                 </Badge>
               ))}
               <Button variant="ghost" size="sm" className="h-6 text-xs" onClick={clearAllFilters}>
@@ -206,12 +374,14 @@ export function CatalogSection() {
               ? Array.from({ length: 6 }).map((_, i) => (
                   <div key={i} className="h-80 animate-pulse rounded-xl bg-muted" />
                 ))
-              : venues.map((venue) => (
+              : venues.map((venue) => {
+                  const cardImg = venueCardImageSrc(venue)
+                  return (
                   <Link key={venue.id} href={`/venues/${venue.slug}`}>
                     <Card className="group cursor-pointer overflow-hidden border-border bg-card transition-all hover:shadow-xl h-full">
                       <div className="relative aspect-[4/3] overflow-hidden bg-muted flex items-center justify-center">
-                        {venue.image_url ? (
-                          <img src={venue.image_url} alt={venue.name} className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105" />
+                        {cardImg ? (
+                          <img src={cardImg} alt={venue.name} className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105" />
                         ) : (
                           <div className="flex flex-col items-center gap-1 text-muted-foreground/40">
                             <ImageIcon className="h-8 w-8" />
@@ -255,7 +425,7 @@ export function CatalogSection() {
                       </CardContent>
                     </Card>
                   </Link>
-                ))}
+                )})}
           </div>
         )}
 

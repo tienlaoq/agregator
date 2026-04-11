@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -76,7 +77,29 @@ func main() {
 	bookingRepo := repository.NewBookingRepo(pgPool)
 	publisher := events.NewPublisher(js)
 
-	uc := usecase.NewBookingUseCase(bookingRepo, venueClient, paymentClient, publisher)
+	uc := usecase.NewBookingUseCase(bookingRepo, venueClient, paymentClient, publisher, cfg.VisitTimeZone)
+
+	autoCompleteCtx, autoCompleteCancel := context.WithCancel(ctx)
+	defer autoCompleteCancel()
+	go func() {
+		tick := time.NewTicker(2 * time.Minute)
+		defer tick.Stop()
+		for {
+			select {
+			case <-autoCompleteCtx.Done():
+				return
+			case <-tick.C:
+				n, err := uc.AutoCompletePastVisits(autoCompleteCtx)
+				if err != nil {
+					log.Error().Err(err).Msg("auto-complete past visits")
+					continue
+				}
+				if n > 0 {
+					log.Info().Int("count", n).Msg("bookings auto-completed after visit end")
+				}
+			}
+		}
+	}()
 
 	sub := events.NewSubscriber(js, uc, log)
 	if err := sub.SubscribePaymentEvents(); err != nil {

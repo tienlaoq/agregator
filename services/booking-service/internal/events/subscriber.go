@@ -6,6 +6,8 @@ import (
 
 	"github.com/nats-io/nats.go"
 	"github.com/rs/zerolog"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/tienlao/agregator/services/booking-service/internal/usecase"
 )
@@ -50,6 +52,11 @@ func (s *Subscriber) handlePaymentCompleted(msg *nats.Msg) {
 
 	ctx := context.Background()
 	if err := s.uc.ConfirmBooking(ctx, evt.BookingID, evt.PaymentID); err != nil {
+		if st, ok := status.FromError(err); ok && (st.Code() == codes.InvalidArgument || st.Code() == codes.NotFound) {
+			s.log.Warn().Err(err).Str("booking_id", evt.BookingID).Msg("confirm booking skipped (terminal or invalid state)")
+			_ = msg.Ack()
+			return
+		}
 		s.log.Error().Err(err).Str("booking_id", evt.BookingID).Msg("confirm booking failed")
 		_ = msg.Nak()
 		return

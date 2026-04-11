@@ -20,6 +20,11 @@ func NewBookingRepo(pool *pgxpool.Pool) *BookingRepo {
 	return &BookingRepo{pool: pool}
 }
 
+func (r *BookingRepo) Delete(ctx context.Context, id string) error {
+	_, err := r.pool.Exec(ctx, `DELETE FROM bookings WHERE id = $1`, id)
+	return err
+}
+
 func (r *BookingRepo) Create(ctx context.Context, b *domain.Booking) error {
 	const q = `
 		INSERT INTO bookings (user_id, venue_id, venue_name, service_id, date, time_from, time_to, guests, comment, status, total_price)
@@ -171,10 +176,38 @@ func (r *BookingRepo) SetPaymentID(ctx context.Context, bookingID, paymentID str
 }
 
 func (r *BookingRepo) HasCompleted(ctx context.Context, userID, venueID string) (bool, error) {
-	const q = `SELECT EXISTS(SELECT 1 FROM bookings WHERE user_id = $1 AND venue_id = $2 AND status = 'completed')`
+	const q = `SELECT EXISTS(
+		SELECT 1 FROM bookings
+		WHERE user_id = $1 AND venue_id = $2 AND status = 'completed' AND payment_id IS NOT NULL
+	)`
 	var exists bool
 	err := r.pool.QueryRow(ctx, q, userID, venueID).Scan(&exists)
 	return exists, err
+}
+
+func (r *BookingRepo) AutoCompleteVisitEnded(ctx context.Context, visitTimeZone string) ([]domain.BookingCompletedRef, error) {
+	const q = `
+		UPDATE bookings b
+		SET status = 'completed', updated_at = now()
+		WHERE b.status = 'confirmed'
+		  AND b.payment_id IS NOT NULL
+		  AND ((b.date + b.time_to) AT TIME ZONE $1) <= now()
+		RETURNING b.id::text, b.user_id::text, b.venue_id::text`
+	rows, err := r.pool.Query(ctx, q, visitTimeZone)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []domain.BookingCompletedRef
+	for rows.Next() {
+		var ref domain.BookingCompletedRef
+		if err := rows.Scan(&ref.ID, &ref.UserID, &ref.VenueID); err != nil {
+			return nil, err
+		}
+		out = append(out, ref)
+	}
+	return out, rows.Err()
 }
 
 func pgArgN(n int) string {

@@ -72,7 +72,13 @@ export default function ProfilePage() {
               <CardTitle>Личные данные</CardTitle>
               {profile && (
                 <Badge variant="secondary">
-                  {profile.role === "venue_owner" ? "Владелец" : profile.role === "admin" ? "Администратор" : "Посетитель"}
+                  {profile.role === "venue_owner"
+                    ? "Владелец"
+                    : profile.role === "master"
+                      ? "Пар-мастер"
+                      : profile.role === "admin"
+                        ? "Администратор"
+                        : "Посетитель"}
                 </Badge>
               )}
             </div>

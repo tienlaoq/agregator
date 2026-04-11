@@ -1,11 +1,13 @@
 bin/
 gen/
+.tools/
 *.exe
 *.test
 *.out
 .env
 .env.*
 !.env.example
+!deploy/.env.example
 node_modules/
 .next/
 vendor/

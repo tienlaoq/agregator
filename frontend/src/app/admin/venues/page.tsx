@@ -1,6 +1,7 @@
 "use client"
 
 import { useEffect, useState } from "react"
+import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { Button } from "@/components/ui/button"
@@ -15,6 +16,7 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { useAuthStore } from "@/store/auth"
+import { AdminVenueFullCard } from "@/components/admin/admin-venue-full-card"
 import { getAdminVenues, moderateVenue } from "@/lib/api"
 import type { Venue } from "@/lib/types"
 import {
@@ -30,6 +32,7 @@ import {
 } from "lucide-react"
 
 const STATUS_LABELS: Record<string, string> = {
+  draft: "Черновик",
   pending_review: "На проверке",
   active: "Активно",
   rejected: "Отклонено",
@@ -37,6 +40,7 @@ const STATUS_LABELS: Record<string, string> = {
 }
 
 const STATUS_COLORS: Record<string, string> = {
+  draft: "bg-slate-100 text-slate-800",
   pending_review: "bg-amber-100 text-amber-800",
   active: "bg-green-100 text-green-800",
   rejected: "bg-red-100 text-red-800",
@@ -101,6 +105,7 @@ export default function AdminVenuesPage() {
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
+            <SelectItem value="draft">Черновики</SelectItem>
             <SelectItem value="pending_review">На проверке</SelectItem>
             <SelectItem value="active">Активные</SelectItem>
             <SelectItem value="rejected">Отклонённые</SelectItem>
@@ -118,7 +123,9 @@ export default function AdminVenuesPage() {
             <p className="text-muted-foreground">
               {filterStatus === "pending_review"
                 ? "Нет заявок на модерацию"
-                : `Нет заведений со статусом «${STATUS_LABELS[filterStatus]}»`}
+                : filterStatus === "draft"
+                  ? "Нет черновиков"
+                  : `Нет заведений со статусом «${STATUS_LABELS[filterStatus] ?? filterStatus}»`}
             </p>
           </CardContent>
         </Card>
@@ -160,6 +167,8 @@ export default function AdminVenuesPage() {
               {venue.description && (
                 <p className="text-sm text-muted-foreground">{venue.description}</p>
               )}
+
+              <AdminVenueFullCard venue={venue} />
 
               {(venue.legal_entity_name || venue.inn) && (
                 <div className="rounded-md border border-primary/20 bg-primary/5 p-3 text-sm">
@@ -238,42 +247,65 @@ export default function AdminVenuesPage() {
                 </div>
               )}
 
+              {venue.status === "draft" && (
+                <p className="text-sm text-muted-foreground">
+                  Черновик: владелец ещё не отправил карточку на проверку. Модерация станет доступна после
+                  перехода в «На проверке».
+                </p>
+              )}
+
               {moderatingId !== venue.id && (
-                <div className="flex gap-2">
-                  {(venue.status === "pending_review" || venue.status === "rejected") && (
-                    <Button
-                      size="sm"
-                      className="gap-1.5 bg-green-600 hover:bg-green-700"
-                      disabled={mutation.isPending}
-                      onClick={() => handleAction(venue.id, "approve")}
-                    >
-                      <CheckCircle2 className="h-4 w-4" />
-                      Одобрить
+                <div className="flex flex-wrap gap-2">
+                  {venue.slug ? (
+                    <Button size="sm" variant="outline" className="gap-1.5" asChild>
+                      <Link
+                        href={`/venues/${venue.slug}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                      >
+                        <ExternalLink className="h-4 w-4" />
+                        Просмотр карточки
+                      </Link>
                     </Button>
-                  )}
-                  {venue.status !== "rejected" && (
-                    <Button
-                      size="sm"
-                      variant="destructive"
-                      className="gap-1.5"
-                      disabled={mutation.isPending}
-                      onClick={() => handleAction(venue.id, "reject")}
-                    >
-                      <XCircle className="h-4 w-4" />
-                      Отклонить
-                    </Button>
-                  )}
-                  {venue.status === "active" && (
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      className="gap-1.5"
-                      disabled={mutation.isPending}
-                      onClick={() => handleAction(venue.id, "suspend")}
-                    >
-                      <Pause className="h-4 w-4" />
-                      Приостановить
-                    </Button>
+                  ) : null}
+                  {venue.status !== "draft" && (
+                    <>
+                      {(venue.status === "pending_review" || venue.status === "rejected") && (
+                        <Button
+                          size="sm"
+                          className="gap-1.5 bg-green-600 hover:bg-green-700"
+                          disabled={mutation.isPending}
+                          onClick={() => handleAction(venue.id, "approve")}
+                        >
+                          <CheckCircle2 className="h-4 w-4" />
+                          Одобрить
+                        </Button>
+                      )}
+                      {venue.status !== "rejected" && (
+                        <Button
+                          size="sm"
+                          variant="destructive"
+                          className="gap-1.5"
+                          disabled={mutation.isPending}
+                          onClick={() => handleAction(venue.id, "reject")}
+                        >
+                          <XCircle className="h-4 w-4" />
+                          Отклонить
+                        </Button>
+                      )}
+                      {venue.status === "active" && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="gap-1.5"
+                          disabled={mutation.isPending}
+                          onClick={() => handleAction(venue.id, "suspend")}
+                        >
+                          <Pause className="h-4 w-4" />
+                          Приостановить
+                        </Button>
+                      )}
+                    </>
                   )}
                 </div>
               )}

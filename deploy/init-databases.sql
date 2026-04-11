@@ -4,6 +4,7 @@ CREATE DATABASE venue_db;
 CREATE DATABASE booking_db;
 CREATE DATABASE review_db;
 CREATE DATABASE payment_db;
+CREATE DATABASE master_db;
 
 \c venue_db
 CREATE EXTENSION IF NOT EXISTS postgis;

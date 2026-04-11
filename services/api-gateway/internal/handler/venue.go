@@ -1,21 +1,40 @@
 package handler
 
 import (
+	"encoding/base64"
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
+	"google.golang.org/grpc/metadata"
 	venuev1 "github.com/tienlao/agregator/gen/go/venue/v1"
+	pkgcities "github.com/tienlao/agregator/pkg/cities"
 	"github.com/tienlao/agregator/services/api-gateway/internal/middleware"
 )
 
 type VenueHandler struct {
-	client venuev1.VenueServiceClient
+	client     venuev1.VenueServiceClient
+	uploadRoot string // absolute or cwd-relative; files under uploadRoot/venues/{venueID}/
 }
 
-func NewVenueHandler(client venuev1.VenueServiceClient) *VenueHandler {
-	return &VenueHandler{client: client}
+func NewVenueHandler(client venuev1.VenueServiceClient, uploadRoot string) *VenueHandler {
+	return &VenueHandler{client: client, uploadRoot: uploadRoot}
+}
+
+func socialLinksMapForJSON(s string) map[string]any {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return map[string]any{}
+	}
+	var m map[string]any
+	if err := json.Unmarshal([]byte(s), &m); err != nil || m == nil {
+		return map[string]any{}
+	}
+	return m
 }
 
 func (h *VenueHandler) List(w http.ResponseWriter, r *http.Request) {
@@ -57,8 +76,45 @@ func (h *VenueHandler) Search(w http.ResponseWriter, r *http.Request) {
 		amenities = strings.Split(v, ",")
 	}
 
-	resp, err := h.client.SearchVenues(r.Context(), &venuev1.SearchVenuesRequest{
-		Query:     q.Get("q"),
+	query := strings.TrimSpace(q.Get("q"))
+	var cityList []string
+	if packed := strings.TrimSpace(q.Get("cities")); packed != "" {
+		// В query предпочитаем `|` (не режется прокси/браузером); `\x1e` — совместимость со старыми ссылками.
+		if strings.Contains(packed, pkgcities.Sep) {
+			cityList = pkgcities.Split(packed)
+		} else {
+			for _, p := range strings.Split(packed, "|") {
+				if t := strings.TrimSpace(p); t != "" {
+					cityList = append(cityList, t)
+				}
+			}
+		}
+	} else {
+		for _, c := range q["city"] {
+			if t := strings.TrimSpace(c); t != "" {
+				cityList = append(cityList, t)
+			}
+		}
+	}
+	grpcCity := pkgcities.Join(cityList)
+	// Один город и без текста — дублируем в query (старые venue / полнотекст).
+	if len(cityList) == 1 && query == "" {
+		query = cityList[0]
+	}
+
+	ctx := r.Context()
+	if len(cityList) > 0 {
+		// Значения gRPC metadata попадают в HTTP/2 headers — только ASCII; кириллица через base64.
+		pairs := make([]string, 0, len(cityList)*2)
+		for _, c := range cityList {
+			pairs = append(pairs, "x-city-b64", base64.RawURLEncoding.EncodeToString([]byte(c)))
+		}
+		ctx = metadata.AppendToOutgoingContext(ctx, pairs...)
+	}
+
+	resp, err := h.client.SearchVenues(ctx, &venuev1.SearchVenuesRequest{
+		Query:     query,
+		City:      grpcCity,
 		Latitude:  lat,
 		Longitude: lng,
 		RadiusKm:  radius,
@@ -83,6 +139,17 @@ func (h *VenueHandler) Search(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// venueDraftVisibleToViewer returns false if venue is draft and caller is neither owner nor admin.
+func venueDraftVisibleToViewer(status, ownerID, viewerUserID, viewerRole string) bool {
+	if status != "draft" {
+		return true
+	}
+	if viewerUserID != "" && viewerUserID == ownerID {
+		return true
+	}
+	return viewerRole == "admin"
+}
+
 func (h *VenueHandler) GetBySlug(w http.ResponseWriter, r *http.Request) {
 	slug := chi.URLParam(r, "slug")
 
@@ -93,8 +160,92 @@ func (h *VenueHandler) GetBySlug(w http.ResponseWriter, r *http.Request) {
 		grpcErrorToHTTP(w, err)
 		return
 	}
+	viewer := middleware.UserIDFromCtx(r.Context())
+	role := middleware.RoleFromCtx(r.Context())
+	if !venueDraftVisibleToViewer(resp.GetStatus(), resp.GetOwnerId(), viewer, role) {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "venue not found"})
+		return
+	}
 
 	writeJSON(w, http.StatusOK, venueToJSON(resp, false))
+}
+
+// slotEndFromDuration returns time_from + durationMin minutes (HH:MM).
+func slotEndFromDuration(timeFrom string, durationMin int) string {
+	t, err := time.Parse("15:04", timeFrom)
+	if err != nil {
+		return timeFrom
+	}
+	return t.Add(time.Duration(durationMin) * time.Minute).Format("15:04")
+}
+
+// bookingCandidateStartTimes returns HH:MM from 10:00 to 22:00 inclusive, step 30 minutes.
+func bookingCandidateStartTimes() []string {
+	const (
+		firstMin = 10 * 60
+		lastMin  = 22 * 60
+		step     = 30
+	)
+	out := make([]string, 0, (lastMin-firstMin)/step+1)
+	for m := firstMin; m <= lastMin; m += step {
+		out = append(out, fmt.Sprintf("%02d:%02d", m/60, m%60))
+	}
+	return out
+}
+
+// AvailabilityBySlug returns start times that are free for booking (same window as POST /bookings).
+func (h *VenueHandler) AvailabilityBySlug(w http.ResponseWriter, r *http.Request) {
+	slug := chi.URLParam(r, "slug")
+	date := r.URL.Query().Get("date")
+	if date == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "query date is required (YYYY-MM-DD)"})
+		return
+	}
+
+	durationMin := 120
+	if d := r.URL.Query().Get("duration_min"); d != "" {
+		if n, err := strconv.Atoi(d); err == nil && n >= 30 && n <= 720 {
+			durationMin = n
+		}
+	}
+
+	v, err := h.client.GetVenueBySlug(r.Context(), &venuev1.GetVenueBySlugRequest{Slug: slug})
+	if err != nil {
+		grpcErrorToHTTP(w, err)
+		return
+	}
+	viewer := middleware.UserIDFromCtx(r.Context())
+	role := middleware.RoleFromCtx(r.Context())
+	if !venueDraftVisibleToViewer(v.GetStatus(), v.GetOwnerId(), viewer, role) {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "venue not found"})
+		return
+	}
+
+	vid := v.GetId()
+	slots := bookingCandidateStartTimes()
+	available := make([]string, 0, len(slots))
+	ctx := r.Context()
+	for _, start := range slots {
+		timeTo := slotEndFromDuration(start, durationMin)
+		resp, err := h.client.CheckSlotAvailability(ctx, &venuev1.CheckSlotRequest{
+			VenueId:  vid,
+			Date:     date,
+			TimeFrom: start,
+			TimeTo:   timeTo,
+		})
+		if err != nil {
+			grpcErrorToHTTP(w, err)
+			return
+		}
+		if resp.GetAvailable() {
+			available = append(available, start)
+		}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"date":            date,
+		"available_slots": available,
+	})
 }
 
 func (h *VenueHandler) Create(w http.ResponseWriter, r *http.Request) {
@@ -123,6 +274,9 @@ func (h *VenueHandler) Create(w http.ResponseWriter, r *http.Request) {
 		OGRN              string                `json:"ogrn"`
 		PublicListingURL  string                `json:"public_listing_url"`
 		VerificationNote  string                `json:"verification_note"`
+		SocialLinks       json.RawMessage       `json:"social_links"`
+		Halls             []venueHallItemReq    `json:"halls"`
+		StartAsDraft      bool                  `json:"start_as_draft"`
 	}
 	if err := readJSON(r, &req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
@@ -137,6 +291,16 @@ func (h *VenueHandler) Create(w http.ResponseWriter, r *http.Request) {
 			Price:       s.Price,
 			Description: s.Description,
 		}
+	}
+
+	var grpcHalls []*venuev1.VenueHallInput
+	if len(req.Halls) > 0 {
+		grpcHalls = venueHallItemsToProto(req.Halls)
+	}
+
+	socialJSON := "{}"
+	if len(req.SocialLinks) > 0 {
+		socialJSON = string(req.SocialLinks)
 	}
 
 	resp, err := h.client.CreateVenue(r.Context(), &venuev1.CreateVenueRequest{
@@ -159,6 +323,9 @@ func (h *VenueHandler) Create(w http.ResponseWriter, r *http.Request) {
 		Ogrn:              req.OGRN,
 		PublicListingUrl:  req.PublicListingURL,
 		VerificationNote:  req.VerificationNote,
+		SocialLinks:       socialJSON,
+		Halls:             grpcHalls,
+		StartAsDraft:      req.StartAsDraft,
 	})
 	if err != nil {
 		grpcErrorToHTTP(w, err)
@@ -166,6 +333,24 @@ func (h *VenueHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusCreated, venueToJSON(resp, true))
+}
+
+func (h *VenueHandler) SubmitForReview(w http.ResponseWriter, r *http.Request) {
+	userID := middleware.UserIDFromCtx(r.Context())
+	if userID == "" {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
+	venueID := chi.URLParam(r, "id")
+	resp, err := h.client.SubmitVenueForReview(r.Context(), &venuev1.SubmitVenueForReviewRequest{
+		VenueId: venueID,
+		OwnerId: userID,
+	})
+	if err != nil {
+		grpcErrorToHTTP(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, venueToJSON(resp, true))
 }
 
 func (h *VenueHandler) Update(w http.ResponseWriter, r *http.Request) {
@@ -177,22 +362,25 @@ func (h *VenueHandler) Update(w http.ResponseWriter, r *http.Request) {
 	venueID := chi.URLParam(r, "id")
 
 	var req struct {
-		Name              *string  `json:"name"`
-		Description       *string  `json:"description"`
-		Address           *string  `json:"address"`
-		City              *string  `json:"city"`
-		Latitude          *float64 `json:"latitude"`
-		Longitude         *float64 `json:"longitude"`
-		PriceFrom         *int64   `json:"price_from"`
-		Capacity          *int32   `json:"capacity"`
-		Amenities         []string `json:"amenities"`
-		WorkingHours      *string  `json:"working_hours"`
-		Phone             *string  `json:"phone"`
-		LegalEntityName   *string  `json:"legal_entity_name"`
-		INN               *string  `json:"inn"`
-		OGRN              *string  `json:"ogrn"`
-		PublicListingURL  *string  `json:"public_listing_url"`
-		VerificationNote  *string  `json:"verification_note"`
+		Name              *string               `json:"name"`
+		Description       *string               `json:"description"`
+		Address           *string               `json:"address"`
+		City              *string               `json:"city"`
+		Latitude          *float64              `json:"latitude"`
+		Longitude         *float64              `json:"longitude"`
+		PriceFrom         *int64                `json:"price_from"`
+		Capacity          *int32                `json:"capacity"`
+		Amenities         *[]string             `json:"amenities"`
+		WorkingHours      *string               `json:"working_hours"`
+		Phone             *string               `json:"phone"`
+		LegalEntityName   *string               `json:"legal_entity_name"`
+		INN               *string               `json:"inn"`
+		OGRN              *string               `json:"ogrn"`
+		PublicListingURL  *string               `json:"public_listing_url"`
+		VerificationNote  *string               `json:"verification_note"`
+		SocialLinks       *json.RawMessage      `json:"social_links"`
+		Services          *[]venueServiceItemReq `json:"services"`
+		Halls             *[]venueHallItemReq    `json:"halls"`
 	}
 	if err := readJSON(r, &req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
@@ -200,9 +388,11 @@ func (h *VenueHandler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 
 	grpcReq := &venuev1.UpdateVenueRequest{
-		Id:        venueID,
-		OwnerId:   userID,
-		Amenities: req.Amenities,
+		Id:      venueID,
+		OwnerId: userID,
+	}
+	if req.Amenities != nil {
+		grpcReq.Amenities = *req.Amenities
 	}
 	if req.Name != nil {
 		grpcReq.Name = req.Name
@@ -249,6 +439,25 @@ func (h *VenueHandler) Update(w http.ResponseWriter, r *http.Request) {
 	if req.VerificationNote != nil {
 		grpcReq.VerificationNote = req.VerificationNote
 	}
+	if req.SocialLinks != nil {
+		s := string(*req.SocialLinks)
+		grpcReq.SocialLinks = &s
+	}
+	if req.Services != nil {
+		items := make([]*venuev1.VenueServiceItem, len(*req.Services))
+		for i, s := range *req.Services {
+			items[i] = &venuev1.VenueServiceItem{
+				Name:        s.Name,
+				DurationMin: s.DurationMin,
+				Price:       s.Price,
+				Description: s.Description,
+			}
+		}
+		grpcReq.ServicesReplace = &venuev1.VenueServicesReplace{Items: items}
+	}
+	if req.Halls != nil {
+		grpcReq.HallsReplace = &venuev1.VenueHallsReplace{Items: venueHallItemsToProto(*req.Halls)}
+	}
 
 	resp, err := h.client.UpdateVenue(r.Context(), grpcReq)
 	if err != nil {
@@ -282,11 +491,147 @@ func (h *VenueHandler) ListOwnerVenues(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// ListOwnerSlotBlocks returns manual busy intervals for the venue (owner only).
+func (h *VenueHandler) ListOwnerSlotBlocks(w http.ResponseWriter, r *http.Request) {
+	ownerID := middleware.UserIDFromCtx(r.Context())
+	if ownerID == "" {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
+	venueID := chi.URLParam(r, "venueId")
+	q := r.URL.Query()
+	dateFrom := q.Get("date_from")
+	dateTo := q.Get("date_to")
+	if dateFrom == "" || dateTo == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "укажите date_from и date_to в формате YYYY-MM-DD"})
+		return
+	}
+
+	resp, err := h.client.ListManualSlotBlocks(r.Context(), &venuev1.ListManualSlotBlocksRequest{
+		OwnerId:  ownerID,
+		VenueId:  venueID,
+		DateFrom: dateFrom,
+		DateTo:   dateTo,
+	})
+	if err != nil {
+		grpcErrorToHTTP(w, err)
+		return
+	}
+
+	blocks := make([]map[string]any, 0, len(resp.GetBlocks()))
+	for _, b := range resp.GetBlocks() {
+		blocks = append(blocks, manualSlotBlockToJSON(b))
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"blocks": blocks})
+}
+
+// CreateOwnerSlotBlock adds a manual busy interval (e.g. external booking).
+func (h *VenueHandler) CreateOwnerSlotBlock(w http.ResponseWriter, r *http.Request) {
+	ownerID := middleware.UserIDFromCtx(r.Context())
+	if ownerID == "" {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
+	venueID := chi.URLParam(r, "venueId")
+
+	var req struct {
+		Date     string `json:"date"`
+		TimeFrom string `json:"time_from"`
+		TimeTo   string `json:"time_to"`
+		Note     string `json:"note"`
+	}
+	if err := readJSON(r, &req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+
+	resp, err := h.client.CreateManualSlotBlock(r.Context(), &venuev1.CreateManualSlotBlockRequest{
+		OwnerId:  ownerID,
+		VenueId:  venueID,
+		Date:     req.Date,
+		TimeFrom: req.TimeFrom,
+		TimeTo:   req.TimeTo,
+		Note:     req.Note,
+	})
+	if err != nil {
+		grpcErrorToHTTP(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, map[string]any{"block": manualSlotBlockToJSON(resp.GetBlock())})
+}
+
+// DeleteOwnerSlotBlock removes a manual busy interval.
+func (h *VenueHandler) DeleteOwnerSlotBlock(w http.ResponseWriter, r *http.Request) {
+	ownerID := middleware.UserIDFromCtx(r.Context())
+	if ownerID == "" {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
+	venueID := chi.URLParam(r, "venueId")
+	blockID := chi.URLParam(r, "blockId")
+
+	_, err := h.client.DeleteManualSlotBlock(r.Context(), &venuev1.DeleteManualSlotBlockRequest{
+		OwnerId: ownerID,
+		VenueId: venueID,
+		BlockId: blockID,
+	})
+	if err != nil {
+		grpcErrorToHTTP(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func manualSlotBlockToJSON(b *venuev1.ManualSlotBlock) map[string]any {
+	if b == nil {
+		return nil
+	}
+	return map[string]any{
+		"id":        b.GetId(),
+		"venue_id":  b.GetVenueId(),
+		"date":      b.GetDate(),
+		"time_from": b.GetTimeFrom(),
+		"time_to":   b.GetTimeTo(),
+		"note":      b.GetNote(),
+	}
+}
+
 type venueServiceItemReq struct {
 	Name        string `json:"name"`
 	DurationMin int32  `json:"duration_min"`
 	Price       int64  `json:"price"`
 	Description string `json:"description"`
+}
+
+type venueHallItemReq struct {
+	ID        *string  `json:"id,omitempty"`
+	Name      string   `json:"name"`
+	PriceFrom int64    `json:"price_from"`
+	Capacity  int32    `json:"capacity"`
+	Amenities []string `json:"amenities"`
+	SortOrder int32    `json:"sort_order"`
+}
+
+func venueHallItemsToProto(items []venueHallItemReq) []*venuev1.VenueHallInput {
+	out := make([]*venuev1.VenueHallInput, 0, len(items))
+	for _, h := range items {
+		hi := &venuev1.VenueHallInput{
+			Name:      strings.TrimSpace(h.Name),
+			PriceFrom: h.PriceFrom,
+			Capacity:  h.Capacity,
+			Amenities: h.Amenities,
+			SortOrder: h.SortOrder,
+		}
+		if h.ID != nil {
+			s := strings.TrimSpace(*h.ID)
+			if s != "" {
+				hi.Id = &s
+			}
+		}
+		out = append(out, hi)
+	}
+	return out
 }
 
 func (h *VenueHandler) ListPending(w http.ResponseWriter, r *http.Request) {
@@ -344,6 +689,21 @@ func (h *VenueHandler) Moderate(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, venueToJSON(resp, true))
 }
 
+// venuePrimaryImageURL — обложка или первое фото (для image_url в JSON каталога/карточки).
+func venuePrimaryImageURL(v *venuev1.VenueResponse) string {
+	for _, p := range v.GetPhotos() {
+		if p.GetIsCover() && p.GetUrl() != "" {
+			return p.GetUrl()
+		}
+	}
+	for _, p := range v.GetPhotos() {
+		if p.GetUrl() != "" {
+			return p.GetUrl()
+		}
+	}
+	return ""
+}
+
 func venueToJSON(v *venuev1.VenueResponse, includeVerification bool) map[string]any {
 	services := make([]map[string]any, len(v.GetServices()))
 	for i, s := range v.GetServices() {
@@ -362,6 +722,27 @@ func venueToJSON(v *venuev1.VenueResponse, includeVerification bool) map[string]
 			"url":        p.GetUrl(),
 			"sort_order": p.GetSortOrder(),
 			"is_cover":   p.GetIsCover(),
+		}
+	}
+	halls := make([]map[string]any, len(v.GetHalls()))
+	for i, hall := range v.GetHalls() {
+		hPhotos := make([]map[string]any, len(hall.GetPhotos()))
+		for j, hp := range hall.GetPhotos() {
+			hPhotos[j] = map[string]any{
+				"id":         hp.GetId(),
+				"url":        hp.GetUrl(),
+				"sort_order": hp.GetSortOrder(),
+				"is_cover":   hp.GetIsCover(),
+			}
+		}
+		halls[i] = map[string]any{
+			"id":          hall.GetId(),
+			"name":        hall.GetName(),
+			"price_from":  hall.GetPriceFrom(),
+			"capacity":    hall.GetCapacity(),
+			"amenities":   hall.GetAmenities(),
+			"sort_order":  hall.GetSortOrder(),
+			"photos":      hPhotos,
 		}
 	}
 	result := map[string]any{
@@ -388,11 +769,17 @@ func venueToJSON(v *venuev1.VenueResponse, includeVerification bool) map[string]
 		"moderated_by":       v.GetModeratedBy(),
 		"services":           services,
 		"photos":             photos,
+		"halls":              halls,
 		"created_at":         v.GetCreatedAt().AsTime(),
+		"social_links":       socialLinksMapForJSON(v.GetSocialLinks()),
 	}
 
 	if v.GetModeratedAt() != nil {
 		result["moderated_at"] = v.GetModeratedAt().AsTime()
+	}
+
+	if u := venuePrimaryImageURL(v); u != "" {
+		result["image_url"] = u
 	}
 
 	if includeVerification {

@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 	"github.com/go-chi/cors"
 	authv1 "github.com/tienlao/agregator/gen/go/auth/v1"
 	bookingv1 "github.com/tienlao/agregator/gen/go/booking/v1"
+	masterv1 "github.com/tienlao/agregator/gen/go/master/v1"
 	paymentv1 "github.com/tienlao/agregator/gen/go/payment/v1"
 	reviewv1 "github.com/tienlao/agregator/gen/go/review/v1"
 	userv1 "github.com/tienlao/agregator/gen/go/user/v1"
@@ -29,12 +31,20 @@ func main() {
 	log := logger.New("api-gateway")
 
 	httpPort := config.GetEnv("HTTP_PORT", "8080")
+	uploadRoot := config.GetEnv("UPLOAD_ROOT", "./data/uploads")
+	if err := os.MkdirAll(filepath.Join(uploadRoot, "venues"), 0o755); err != nil {
+		log.Fatal().Err(err).Msg("failed to create upload directory")
+	}
+	if err := os.MkdirAll(filepath.Join(uploadRoot, "masters"), 0o755); err != nil {
+		log.Fatal().Err(err).Msg("failed to create master upload directory")
+	}
 	authAddr := config.GetEnv("AUTH_SERVICE_ADDR", "localhost:50051")
 	userAddr := config.GetEnv("USER_SERVICE_ADDR", "localhost:50052")
 	venueAddr := config.GetEnv("VENUE_SERVICE_ADDR", "localhost:50053")
 	bookingAddr := config.GetEnv("BOOKING_SERVICE_ADDR", "localhost:50054")
 	reviewAddr := config.GetEnv("REVIEW_SERVICE_ADDR", "localhost:50055")
 	paymentAddr := config.GetEnv("PAYMENT_SERVICE_ADDR", "localhost:50056")
+	masterAddr := config.GetEnv("MASTER_SERVICE_ADDR", "localhost:50057")
 
 	dialOpts := []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())}
 
@@ -74,12 +84,19 @@ func main() {
 	}
 	defer paymentConn.Close()
 
+	masterConn, err := grpc.NewClient(masterAddr, dialOpts...)
+	if err != nil {
+		log.Fatal().Err(err).Msg("failed to connect to master service")
+	}
+	defer masterConn.Close()
+
 	authClient := authv1.NewAuthServiceClient(authConn)
 	userClient := userv1.NewUserServiceClient(userConn)
 	venueClient := venuev1.NewVenueServiceClient(venueConn)
 	bookingClient := bookingv1.NewBookingServiceClient(bookingConn)
 	reviewClient := reviewv1.NewReviewServiceClient(reviewConn)
 	paymentClient := paymentv1.NewPaymentServiceClient(paymentConn)
+	masterClient := masterv1.NewMasterServiceClient(masterConn)
 
 	authHandler := handler.NewAuthHandler(authClient)
 	oauthHandler := handler.NewOAuthHandler(authClient, handler.OAuthConfig{
@@ -91,10 +108,11 @@ func main() {
 		FrontendURL:        config.GetEnv("FRONTEND_URL", "http://localhost:3000"),
 	})
 	userHandler := handler.NewUserHandler(userClient)
-	venueHandler := handler.NewVenueHandler(venueClient)
+	venueHandler := handler.NewVenueHandler(venueClient, uploadRoot)
 	bookingHandler := handler.NewBookingHandler(bookingClient, venueClient)
 	reviewHandler := handler.NewReviewHandler(reviewClient)
 	paymentHandler := handler.NewPaymentHandler(paymentClient)
+	masterHandler := handler.NewMasterHandler(masterClient, uploadRoot)
 
 	r := chi.NewRouter()
 
@@ -114,6 +132,9 @@ func main() {
 	r.Get("/healthz", handler.HealthCheck)
 
 	r.Route("/api/v1", func(api chi.Router) {
+		// Static venue uploads (must live on this router: /api/v1 is a mount catch-all).
+		api.Handle("/uploads/*", handler.ServeVenueUploads(uploadRoot))
+
 		// Auth (public)
 		api.Post("/auth/register", authHandler.Register)
 		api.Post("/auth/login", authHandler.Login)
@@ -129,10 +150,17 @@ func main() {
 		// Venues (public read)
 		api.Get("/venues", venueHandler.List)
 		api.Get("/venues/search", venueHandler.Search)
-		api.Get("/venues/{slug}", venueHandler.GetBySlug)
+		api.Group(func(pubSlug chi.Router) {
+			pubSlug.Use(middleware.AuthOptional(authClient))
+			pubSlug.Get("/venues/{slug}/availability", venueHandler.AvailabilityBySlug)
+			pubSlug.Get("/venues/{slug}", venueHandler.GetBySlug)
+		})
 
 		// Reviews (public read)
 		api.Get("/venues/{venueId}/reviews", reviewHandler.ListByVenue)
+
+		api.Get("/masters", masterHandler.ListPublic)
+		api.Get("/masters/{slug}", masterHandler.GetPublic)
 
 		// Payment webhook (public, called by YooKassa)
 		api.Post("/payments/webhook", paymentHandler.Webhook)
@@ -147,11 +175,36 @@ func main() {
 
 			// Venues (write, venue_owner only)
 			protected.With(middleware.RequireRole("venue_owner", "master")).Post("/venues", venueHandler.Create)
+			protected.With(middleware.RequireRole("venue_owner", "master")).Post("/venues/{id}/submit-for-review", venueHandler.SubmitForReview)
 			protected.With(middleware.RequireRole("venue_owner", "master")).Patch("/venues/{id}", venueHandler.Update)
+			protected.With(middleware.RequireRole("venue_owner", "master")).Post("/venues/{id}/photos", venueHandler.UploadVenuePhoto)
+			protected.With(middleware.RequireRole("venue_owner", "master")).Delete("/venues/{id}/photos/{photoId}", venueHandler.DeleteVenuePhoto)
+			protected.With(middleware.RequireRole("venue_owner", "master")).Post("/venues/{id}/photos/{photoId}/cover", venueHandler.SetVenueCoverPhoto)
+			protected.With(middleware.RequireRole("venue_owner", "master")).Post("/venues/{id}/halls/{hallId}/photos", venueHandler.UploadVenueHallPhoto)
+			protected.With(middleware.RequireRole("venue_owner", "master")).Delete("/venues/{id}/halls/{hallId}/photos/{photoId}", venueHandler.DeleteVenueHallPhoto)
+			protected.With(middleware.RequireRole("venue_owner", "master")).Post("/venues/{id}/halls/{hallId}/photos/{photoId}/cover", venueHandler.SetVenueHallCoverPhoto)
 
 			// Owner views
 			protected.With(middleware.RequireRole("venue_owner", "master")).Get("/owner/venues", venueHandler.ListOwnerVenues)
+			protected.With(middleware.RequireRole("venue_owner", "master")).Get("/owner/venues/{venueId}/slot-blocks", venueHandler.ListOwnerSlotBlocks)
+			protected.With(middleware.RequireRole("venue_owner", "master")).Post("/owner/venues/{venueId}/slot-blocks", venueHandler.CreateOwnerSlotBlock)
+			protected.With(middleware.RequireRole("venue_owner", "master")).Delete("/owner/venues/{venueId}/slot-blocks/{blockId}", venueHandler.DeleteOwnerSlotBlock)
 			protected.With(middleware.RequireRole("venue_owner", "master")).Get("/owner/venues/{venueId}/bookings", bookingHandler.ListVenueBookings)
+
+			// Кабинет мастера: подроутер + сначала более длинные пути (Chi /profile vs /profile/submit-for-review).
+			protected.Route("/owner/master", func(om chi.Router) {
+				om.Use(middleware.RequireRole("master"))
+				om.Post("/profile/submit-for-review", masterHandler.SubmitForReview)
+				om.Post("/profile/photos/{photoId}/cover", masterHandler.SetMasterCoverPhoto)
+				om.Delete("/profile/photos/{photoId}", masterHandler.DeleteMasterPhoto)
+				om.Post("/profile/photos", masterHandler.UploadMasterPhoto)
+				om.Get("/profile", masterHandler.GetMyProfile)
+				om.Post("/profile", masterHandler.CreateMyProfile)
+				om.Patch("/profile", masterHandler.PatchMyProfile)
+				om.Get("/bookings", masterHandler.ListMyBookings)
+			})
+
+			protected.With(middleware.RequireRole("user", "venue_owner", "master", "admin")).Post("/masters/{slug}/bookings", masterHandler.CreateBooking)
 
 			// Bookings
 			protected.Post("/bookings", bookingHandler.Create)
@@ -166,15 +219,19 @@ func main() {
 			// Admin routes
 			protected.With(middleware.RequireRole("admin")).Get("/admin/venues", venueHandler.ListPending)
 			protected.With(middleware.RequireRole("admin")).Post("/admin/venues/{id}/moderate", venueHandler.Moderate)
+
+			protected.With(middleware.RequireRole("admin")).Get("/admin/masters", masterHandler.ListForModeration)
+			protected.With(middleware.RequireRole("admin")).Post("/admin/masters/{id}/moderate", masterHandler.Moderate)
+			protected.With(middleware.RequireRole("admin")).Get("/admin/masters/{id}/moderation-history", masterHandler.ModerationHistory)
 		})
 	})
 
 	srv := &http.Server{
 		Addr:         ":" + httpPort,
 		Handler:      r,
-		ReadTimeout:  15 * time.Second,
-		WriteTimeout: 15 * time.Second,
-		IdleTimeout:  60 * time.Second,
+		ReadTimeout:  90 * time.Second,
+		WriteTimeout: 90 * time.Second,
+		IdleTimeout:  120 * time.Second,
 	}
 
 	go func() {

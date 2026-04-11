@@ -13,7 +13,7 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
-import { Flame, Menu, User, CalendarDays, LogOut, Shield, Building2 } from "lucide-react"
+import { Flame, Menu, User, CalendarDays, LogOut, Shield, Building2, Users } from "lucide-react"
 import { useAuthStore } from "@/store/auth"
 
 interface HeaderProps {
@@ -48,6 +48,9 @@ export function Header({ isLoggedIn = false, userName = "Иван", userAvatar, 
           <Link href="/venues" className="text-sm font-medium text-muted-foreground transition-colors hover:text-foreground">
             Каталог
           </Link>
+          <Link href="/masters" className="text-sm font-medium text-muted-foreground transition-colors hover:text-foreground">
+            Мастера
+          </Link>
           <Link href="/about" className="text-sm font-medium text-muted-foreground transition-colors hover:text-foreground">
             О нас
           </Link>
@@ -67,22 +70,36 @@ export function Header({ isLoggedIn = false, userName = "Иван", userAvatar, 
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent className="w-56" align="end" forceMount>
-                {userRole === "admin" && (
+                {userRole === "admin" ? (
+                  <>
+                    <DropdownMenuItem asChild>
+                      <Link href="/admin/venues" className="flex items-center gap-2">
+                        <Shield className="h-4 w-4" />
+                        Модерация заведений
+                      </Link>
+                    </DropdownMenuItem>
+                    <DropdownMenuItem asChild>
+                      <Link href="/admin/masters" className="flex items-center gap-2">
+                        <Users className="h-4 w-4" />
+                        Модерация мастеров
+                      </Link>
+                    </DropdownMenuItem>
+                  </>
+                ) : userRole === "master" ? (
                   <DropdownMenuItem asChild>
-                    <Link href="/admin/venues" className="flex items-center gap-2">
-                      <Shield className="h-4 w-4" />
-                      Модерация
+                    <Link href="/owner/master" className="flex items-center gap-2">
+                      <Users className="h-4 w-4" />
+                      Кабинет мастера
                     </Link>
                   </DropdownMenuItem>
-                )}
-                {userRole === "venue_owner" && (
+                ) : userRole === "venue_owner" ? (
                   <DropdownMenuItem asChild>
                     <Link href="/owner/venues" className="flex items-center gap-2">
                       <Building2 className="h-4 w-4" />
                       Мои заведения
                     </Link>
                   </DropdownMenuItem>
-                )}
+                ) : null}
                 <DropdownMenuItem asChild>
                   <Link href="/my/bookings" className="flex items-center gap-2">
                     <CalendarDays className="h-4 w-4" />
@@ -131,6 +148,13 @@ export function Header({ isLoggedIn = false, userName = "Иван", userAvatar, 
                 Каталог
               </Link>
               <Link
+                href="/masters"
+                className="text-lg font-medium"
+                onClick={() => setMobileMenuOpen(false)}
+              >
+                Мастера
+              </Link>
+              <Link
                 href="/about"
                 className="text-lg font-medium"
                 onClick={() => setMobileMenuOpen(false)}
@@ -149,6 +173,44 @@ export function Header({ isLoggedIn = false, userName = "Иван", userAvatar, 
                       </Avatar>
                       <span className="font-medium">{userName}</span>
                     </div>
+                    {userRole === "admin" ? (
+                      <>
+                        <Link
+                          href="/admin/venues"
+                          className="flex items-center gap-2 text-muted-foreground"
+                          onClick={() => setMobileMenuOpen(false)}
+                        >
+                          <Shield className="h-4 w-4 shrink-0" />
+                          Модерация заведений
+                        </Link>
+                        <Link
+                          href="/admin/masters"
+                          className="flex items-center gap-2 text-muted-foreground"
+                          onClick={() => setMobileMenuOpen(false)}
+                        >
+                          <Users className="h-4 w-4 shrink-0" />
+                          Модерация мастеров
+                        </Link>
+                      </>
+                    ) : userRole === "master" ? (
+                      <Link
+                        href="/owner/master"
+                        className="flex items-center gap-2 text-muted-foreground"
+                        onClick={() => setMobileMenuOpen(false)}
+                      >
+                        <Users className="h-4 w-4 shrink-0" />
+                        Кабинет мастера
+                      </Link>
+                    ) : userRole === "venue_owner" ? (
+                      <Link
+                        href="/owner/venues"
+                        className="flex items-center gap-2 text-muted-foreground"
+                        onClick={() => setMobileMenuOpen(false)}
+                      >
+                        <Building2 className="h-4 w-4 shrink-0" />
+                        Мои заведения
+                      </Link>
+                    ) : null}
                     <Link href="/my/bookings" className="text-muted-foreground" onClick={() => setMobileMenuOpen(false)}>
                       Мои бронирования
                     </Link>

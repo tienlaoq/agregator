@@ -2,10 +2,18 @@
 
 import { useState, useRef, useEffect } from "react"
 import { useRouter } from "next/navigation"
+import Link from "next/link"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Search, MapPin } from "lucide-react"
 import { RUSSIAN_CITIES } from "@/components/banya/city-combobox"
+
+const VENUES_CATALOG = "/venues#catalog"
+
+function venuesSearchHref(params: URLSearchParams): string {
+  const qs = params.toString()
+  return qs ? `/venues?${qs}#catalog` : VENUES_CATALOG
+}
 
 export function HeroSection() {
   const router = useRouter()
@@ -41,16 +49,11 @@ export function HeroSection() {
 
   const handleSearch = () => {
     const params = new URLSearchParams()
-    const q = name.trim()
-    if (q) params.set("q", q)
-    router.push(`/venues${params.toString() ? `?${params.toString()}` : ""}`)
-  }
-
-  const handleQuickCity = (c: string) => {
-    selectCity(c)
-    const params = new URLSearchParams()
-    params.set("q", c)
-    router.push(`/venues?${params.toString()}`)
+    const qName = name.trim()
+    const qCity = city.trim()
+    if (qName) params.set("q", qName)
+    if (qCity) params.set("city", qCity)
+    router.push(venuesSearchHref(params))
   }
 
   return (
@@ -127,17 +130,21 @@ export function HeroSection() {
         {/* Popular cities */}
         <div className="mt-6 flex flex-wrap items-center justify-center gap-2">
           <span className="text-sm text-white/70">Популярные:</span>
-          {["Москва", "Санкт-Петербург", "Казань", "Новосибирск"].map((c) => (
-            <Button
-              key={c}
-              variant="ghost"
-              size="sm"
-              className="h-7 border border-white/30 text-sm text-white hover:bg-white/20 hover:text-white"
-              onClick={() => handleQuickCity(c)}
-            >
-              {c}
-            </Button>
-          ))}
+          {["Москва", "Санкт-Петербург", "Казань", "Новосибирск"].map((c) => {
+            const params = new URLSearchParams()
+            params.set("city", c)
+            return (
+              <Button
+                key={c}
+                asChild
+                variant="ghost"
+                size="sm"
+                className="h-7 border border-white/30 text-sm text-white hover:bg-white/20 hover:text-white"
+              >
+                <Link href={venuesSearchHref(params)}>{c}</Link>
+              </Button>
+            )
+          })}
         </div>
       </div>
     </section>

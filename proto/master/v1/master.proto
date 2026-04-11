@@ -1,0 +1,218 @@
+syntax = "proto3";
+
+package master.v1;
+
+option go_package = "github.com/tienlao/agregator/gen/go/master/v1;masterv1";
+
+import "google/protobuf/timestamp.proto";
+
+service MasterService {
+  rpc CreateMyProfile(CreateMyProfileRequest) returns (MasterResponse);
+  rpc GetMyProfile(GetMyProfileRequest) returns (MasterResponse);
+  rpc UpdateMyProfile(UpdateMyProfileRequest) returns (MasterResponse);
+  rpc SubmitForReview(SubmitMasterForReviewRequest) returns (MasterResponse);
+
+  rpc ListPublicMasters(ListPublicMastersRequest) returns (ListMastersResponse);
+  rpc GetPublicMaster(GetPublicMasterRequest) returns (MasterResponse);
+
+  rpc ListForModeration(ListForModerationRequest) returns (ListMastersResponse);
+  rpc ModerateMaster(ModerateMasterRequest) returns (MasterResponse);
+  rpc ListModerationHistory(ListModerationHistoryRequest) returns (ListModerationHistoryResponse);
+
+  rpc CreateMasterBooking(CreateMasterBookingRequest) returns (MasterBookingResponse);
+  rpc ListMyMasterBookings(ListMyMasterBookingsRequest) returns (ListMasterBookingsResponse);
+
+  rpc AddMasterPhoto(AddMasterPhotoRequest) returns (MasterResponse);
+  rpc DeleteMasterPhoto(DeleteMasterPhotoRequest) returns (DeleteMasterPhotoResponse);
+  rpc SetMasterCoverPhoto(SetMasterCoverPhotoRequest) returns (MasterResponse);
+}
+
+message MasterServiceItem {
+  string id = 1;
+  string name = 2;
+  string description = 3;
+  int32 duration_min = 4;
+  int64 price = 5;
+  int32 sort_order = 6;
+}
+
+message MasterServiceItemInput {
+  optional string id = 1;
+  string name = 2;
+  string description = 3;
+  int32 duration_min = 4;
+  int64 price = 5;
+  int32 sort_order = 6;
+}
+
+message MasterPhoto {
+  string id = 1;
+  string url = 2;
+  int32 sort_order = 3;
+  bool is_cover = 4;
+}
+
+message Master {
+  string id = 1;
+  string user_id = 2;
+  string slug = 3;
+  string display_name = 4;
+  string bio = 5;
+  string phone = 6;
+  string city = 7;
+  string work_format = 8;
+  int32 travel_radius_km = 9;
+  int32 experience_years = 10;
+  repeated string specializations = 11;
+  int64 hourly_rate = 12;
+  string availability_json = 13;
+  string status = 14;
+  string moderation_comment = 15;
+  optional string moderated_by = 16;
+  optional google.protobuf.Timestamp moderated_at = 17;
+  repeated MasterServiceItem services = 18;
+  google.protobuf.Timestamp created_at = 19;
+  google.protobuf.Timestamp updated_at = 20;
+  repeated MasterPhoto photos = 21;
+  // ip | gph | self_employed — куда перечисляется оплата; в публичном API не отдаётся.
+  string payout_legal_form = 22;
+}
+
+message MasterResponse {
+  Master master = 1;
+}
+
+message CreateMyProfileRequest {
+  string user_id = 1;
+  string display_name = 2;
+}
+
+message GetMyProfileRequest {
+  string user_id = 1;
+}
+
+message UpdateMyProfileRequest {
+  string user_id = 1;
+  optional string display_name = 2;
+  optional string bio = 3;
+  optional string phone = 4;
+  optional string city = 5;
+  optional string work_format = 6;
+  optional int32 travel_radius_km = 7;
+  optional int32 experience_years = 8;
+  repeated string specializations = 9;
+  optional int64 hourly_rate = 10;
+  optional string availability_json = 11;
+  repeated MasterServiceItemInput services_replace = 12;
+  // When true, replace all services with services_replace (empty list clears services).
+  bool apply_services_replace = 13;
+  // When true, replace specializations with the repeated field (empty clears).
+  bool apply_specializations = 14;
+  optional string payout_legal_form = 15;
+}
+
+message SubmitMasterForReviewRequest {
+  string user_id = 1;
+}
+
+message ListPublicMastersRequest {
+  string city = 1;
+  int32 limit = 2;
+  int32 offset = 3;
+}
+
+message ListMastersResponse {
+  repeated Master masters = 1;
+  int32 total = 2;
+}
+
+message GetPublicMasterRequest {
+  string slug = 1;
+}
+
+message ListForModerationRequest {
+  string status_filter = 1;
+  int32 limit = 2;
+  int32 offset = 3;
+}
+
+message ModerateMasterRequest {
+  string master_id = 1;
+  string moderator_id = 2;
+  string action = 3;
+  string comment = 4;
+}
+
+message ModerationHistoryEntry {
+  string id = 1;
+  string master_id = 2;
+  string old_status = 3;
+  string new_status = 4;
+  string comment = 5;
+  string changed_by = 6;
+  google.protobuf.Timestamp created_at = 7;
+}
+
+message ListModerationHistoryRequest {
+  string master_id = 1;
+  int32 limit = 2;
+}
+
+message ListModerationHistoryResponse {
+  repeated ModerationHistoryEntry entries = 1;
+}
+
+message CreateMasterBookingRequest {
+  string client_user_id = 1;
+  string master_slug = 2;
+  optional string master_service_id = 3;
+  string date = 4;
+  string time_from = 5;
+  string time_to = 6;
+  string comment = 7;
+}
+
+message MasterBooking {
+  string id = 1;
+  string master_id = 2;
+  string client_user_id = 3;
+  string master_service_id = 4;
+  string date = 5;
+  string time_from = 6;
+  string time_to = 7;
+  string comment = 8;
+  string status = 9;
+  google.protobuf.Timestamp created_at = 10;
+}
+
+message MasterBookingResponse {
+  MasterBooking booking = 1;
+}
+
+message ListMyMasterBookingsRequest {
+  string user_id = 1;
+  string status_filter = 2;
+}
+
+message ListMasterBookingsResponse {
+  repeated MasterBooking bookings = 1;
+}
+
+message AddMasterPhotoRequest {
+  string user_id = 1;
+  string url = 2;
+}
+
+message DeleteMasterPhotoRequest {
+  string user_id = 1;
+  string photo_id = 2;
+}
+
+message DeleteMasterPhotoResponse {
+  string deleted_url = 1;
+}
+
+message SetMasterCoverPhotoRequest {
+  string user_id = 1;
+  string photo_id = 2;
+}

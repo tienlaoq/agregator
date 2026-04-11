@@ -10,4 +10,5 @@ use (
 	./services/review-service
 	./services/user-service
 	./services/venue-service
+	./services/master-service
 )

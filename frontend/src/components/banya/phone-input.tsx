@@ -100,3 +100,19 @@ export function getRawPhone(formatted: string): string {
   if (digits.length < 11) return formatted
   return `+${digits}`
 }
+
+/** Значение из API (+7…, 8… или цифры) → строка для отображения в PhoneInput. */
+export function displayPhoneFromStored(stored: string): string {
+  const trimmed = stored?.trim() ?? ""
+  if (!trimmed) return ""
+  const digits = trimmed.replace(/\D/g, "")
+  if (digits.length === 0) return ""
+  let normalized = digits
+  if (normalized.startsWith("8")) {
+    normalized = "7" + normalized.slice(1)
+  }
+  if (!normalized.startsWith("7")) {
+    normalized = "7" + normalized
+  }
+  return formatPhone(normalized)
+}

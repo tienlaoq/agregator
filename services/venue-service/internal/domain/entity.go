@@ -7,6 +7,7 @@ import (
 )
 
 const (
+	StatusDraft         = "draft"
 	StatusPendingReview = "pending_review"
 	StatusActive        = "active"
 	StatusRejected      = "rejected"
@@ -41,8 +42,11 @@ type Venue struct {
 	OGRN              string
 	PublicListingURL  string
 	VerificationNote  string
-	Services          []VenueService
+	// SocialLinks is a JSON object string, e.g. {"vk":"https://vk.com/..."}; empty → "{}".
+	SocialLinks string
+	Services    []VenueService
 	Photos            []VenuePhoto
+	Halls             []VenueHall
 	CreatedAt         time.Time
 	UpdatedAt         time.Time
 }
@@ -64,6 +68,7 @@ type VenueService struct {
 	DurationMin int32
 	Price       int64
 	Description string
+	SortOrder   int32
 }
 
 type VenuePhoto struct {
@@ -74,6 +79,36 @@ type VenuePhoto struct {
 	IsCover   bool
 }
 
+// VenueHall is a rentable space inside a venue (Russian: зал).
+type VenueHall struct {
+	ID          uuid.UUID
+	VenueID     uuid.UUID
+	Name        string
+	PriceFrom   int64
+	Capacity    int32
+	Amenities   []string
+	SortOrder   int32
+	Photos      []VenueHallPhoto
+}
+
+type VenueHallPhoto struct {
+	ID        uuid.UUID
+	HallID    uuid.UUID
+	URL       string
+	SortOrder int32
+	IsCover   bool
+}
+
+// VenueHallUpsert is used to create or update halls (nil ID = insert).
+type VenueHallUpsert struct {
+	ID        *uuid.UUID
+	Name      string
+	PriceFrom int64
+	Capacity  int32
+	Amenities []string
+	SortOrder int32
+}
+
 type ReservedSlot struct {
 	ID        uuid.UUID
 	VenueID   uuid.UUID
@@ -81,4 +116,14 @@ type ReservedSlot struct {
 	Date      string
 	TimeFrom  string
 	TimeTo    string
+}
+
+// ManualSlotBlock is a reserved interval without an aggregator booking (external / phone booking).
+type ManualSlotBlock struct {
+	ID       uuid.UUID
+	VenueID  uuid.UUID
+	Date     string // YYYY-MM-DD
+	TimeFrom string // HH:MM
+	TimeTo   string // HH:MM
+	Note     string
 }

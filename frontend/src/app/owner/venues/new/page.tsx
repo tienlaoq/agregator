@@ -7,11 +7,17 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Separator } from "@/components/ui/separator";
 import { createVenue } from "@/lib/api";
 import { useAuthStore } from "@/store/auth";
-import { VENUE_TYPE_LABELS } from "@/lib/types";
-import type { CreateVenueRequest } from "@/lib/types";
+import {
+  DEFAULT_VENUE_SOCIAL_LINKS,
+  VENUE_TYPE_LABELS,
+  trimVenueSocialLinks,
+  venueServiceLinesForApi,
+  type CreateVenueFormState,
+} from "@/lib/types";
+import { VenueSocialLinksFields } from "@/components/banya/venue-social-links-fields";
+import { VenueServicesFields } from "@/components/banya/venue-services-fields";
 import { CityCombobox } from "@/components/banya/city-combobox";
 import { AddressSuggest } from "@/components/banya/address-suggest";
 import { PhoneInput, getRawPhone } from "@/components/banya/phone-input";
@@ -23,7 +29,7 @@ export default function CreateVenuePage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
-  const [form, setForm] = useState<CreateVenueRequest>({
+  const [form, setForm] = useState<CreateVenueFormState>({
     name: "",
     type: "banya",
     address: "",
@@ -31,6 +37,7 @@ export default function CreateVenuePage() {
     description: "",
     phone: "",
     price_from: 0,
+    capacity: 10,
     amenities: [],
     services: [],
     legal_entity_name: "",
@@ -38,25 +45,19 @@ export default function CreateVenuePage() {
     ogrn: "",
     public_listing_url: "",
     verification_note: "",
+    social_links: { ...DEFAULT_VENUE_SOCIAL_LINKS },
   });
 
   const [newAmenity, setNewAmenity] = useState("");
-  const [newService, setNewService] = useState({
-    name: "",
-    description: "",
-    price: 0,
-    duration_minutes: 0,
-  });
-
   useEffect(() => {
     if (hydrated && (!token || user?.role !== "venue_owner")) {
       router.push("/auth/login");
     }
   }, [hydrated, token, user, router]);
 
-  const updateField = <K extends keyof CreateVenueRequest>(
+  const updateField = <K extends keyof CreateVenueFormState>(
     key: K,
-    value: CreateVenueRequest[K],
+    value: CreateVenueFormState[K],
   ) => {
     setForm((prev) => ({ ...prev, [key]: value }));
   };
@@ -75,20 +76,6 @@ export default function CreateVenuePage() {
     );
   };
 
-  const addService = () => {
-    if (newService.name.trim()) {
-      updateField("services", [...form.services, { ...newService }]);
-      setNewService({ name: "", description: "", price: 0, duration_minutes: 0 });
-    }
-  };
-
-  const removeService = (index: number) => {
-    updateField(
-      "services",
-      form.services.filter((_, i) => i !== index),
-    );
-  };
-
   const submittingRef = useRef(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -104,6 +91,19 @@ export default function CreateVenuePage() {
         inn: form.inn.replace(/\D/g, ""),
         ogrn: form.ogrn.replace(/\D/g, ""),
         verification_note: form.verification_note?.trim() || undefined,
+        social_links: trimVenueSocialLinks(form.social_links ?? DEFAULT_VENUE_SOCIAL_LINKS),
+        services: venueServiceLinesForApi(form.services),
+        price_from: 0,
+        amenities: [],
+        halls: [
+          {
+            name: "Основной зал",
+            price_from: form.price_from,
+            capacity: form.capacity,
+            amenities: form.amenities,
+            sort_order: 0,
+          },
+        ],
       });
       router.push("/owner/venues");
     } catch {
@@ -146,7 +146,7 @@ export default function CreateVenuePage() {
                     key={value}
                     type="button"
                     onClick={() =>
-                      updateField("type", value as CreateVenueRequest["type"])
+                      updateField("type", value as CreateVenueFormState["type"])
                     }
                     className={`rounded-lg border p-2.5 text-center text-sm transition-colors ${
                       form.type === value
@@ -200,18 +200,50 @@ export default function CreateVenuePage() {
               />
             </div>
 
-            <div className="space-y-2">
-              <Label htmlFor="price">Цена от (₽/час)</Label>
-              <Input
-                id="price"
-                type="number"
-                min={0}
-                placeholder="1500"
-                value={form.price_from || ""}
-                onChange={(e) => updateField("price_from", Number(e.target.value))}
-                required
-              />
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="space-y-2">
+                <Label htmlFor="price">Цена зала (₽/час)</Label>
+                <Input
+                  id="price"
+                  type="number"
+                  min={0}
+                  placeholder="1500"
+                  value={form.price_from || ""}
+                  onChange={(e) =>
+                    updateField("price_from", Number(e.target.value))
+                  }
+                  required
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="capacity">Вместимость зала (чел.)</Label>
+                <Input
+                  id="capacity"
+                  type="number"
+                  min={1}
+                  value={form.capacity || ""}
+                  onChange={(e) =>
+                    updateField("capacity", Number(e.target.value))
+                  }
+                  required
+                />
+              </div>
             </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle>Соцсети и мессенджеры</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            <p className="text-sm text-muted-foreground">
+              По желанию — ссылки для гостей (ВК, Telegram, MAX и др.).
+            </p>
+            <VenueSocialLinksFields
+              value={form.social_links ?? DEFAULT_VENUE_SOCIAL_LINKS}
+              onChange={(next) => updateField("social_links", next)}
+            />
           </CardContent>
         </Card>
 
@@ -280,7 +312,7 @@ export default function CreateVenuePage() {
         {/* Amenities */}
         <Card>
           <CardHeader>
-            <CardTitle>Удобства</CardTitle>
+            <CardTitle>Удобства в зале</CardTitle>
           </CardHeader>
           <CardContent className="space-y-3">
             <div className="flex flex-wrap gap-2">
@@ -319,84 +351,10 @@ export default function CreateVenuePage() {
           </CardContent>
         </Card>
 
-        {/* Services */}
-        <Card>
-          <CardHeader>
-            <CardTitle>Услуги</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            {form.services.map((s, i) => (
-              <div
-                key={i}
-                className="flex items-center justify-between rounded-lg border p-3"
-              >
-                <div>
-                  <p className="font-medium">{s.name}</p>
-                  <p className="text-xs text-muted-foreground">
-                    {s.duration_minutes} мин &middot;{" "}
-                    {s.price.toLocaleString("ru-RU")} ₽
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => removeService(i)}
-                  className="text-muted-foreground hover:text-destructive"
-                >
-                  <X className="h-4 w-4" />
-                </button>
-              </div>
-            ))}
-
-            <Separator />
-
-            <div className="space-y-3 rounded-lg bg-muted/30 p-3">
-              <p className="text-sm font-medium">Добавить услугу</p>
-              <div className="grid gap-3 sm:grid-cols-2">
-                <Input
-                  placeholder="Название услуги"
-                  value={newService.name}
-                  onChange={(e) =>
-                    setNewService({ ...newService, name: e.target.value })
-                  }
-                />
-                <Input
-                  placeholder="Описание"
-                  value={newService.description}
-                  onChange={(e) =>
-                    setNewService({ ...newService, description: e.target.value })
-                  }
-                />
-                <Input
-                  type="number"
-                  placeholder="Цена (₽)"
-                  value={newService.price || ""}
-                  onChange={(e) =>
-                    setNewService({
-                      ...newService,
-                      price: Number(e.target.value),
-                    })
-                  }
-                />
-                <Input
-                  type="number"
-                  min={0}
-                  placeholder="Длительность (минут)"
-                  value={newService.duration_minutes || ""}
-                  onChange={(e) =>
-                    setNewService({
-                      ...newService,
-                      duration_minutes: Number(e.target.value),
-                    })
-                  }
-                />
-              </div>
-              <Button type="button" variant="outline" size="sm" onClick={addService}>
-                <Plus className="mr-1 h-4 w-4" />
-                Добавить
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
+        <VenueServicesFields
+          value={form.services}
+          onChange={(next) => updateField("services", next)}
+        />
 
         {error && (
           <p className="text-sm text-destructive">{error}</p>

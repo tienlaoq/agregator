@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { createBooking } from "@/lib/api";
+import { createBooking, formatApiErrorMessage } from "@/lib/api";
 import { useAuthStore } from "@/store/auth";
 import { Calendar, Clock, Users } from "lucide-react";
 
@@ -20,6 +20,14 @@ const TIME_SLOTS = [
   "09:00", "10:00", "11:00", "12:00", "13:00", "14:00",
   "15:00", "16:00", "17:00", "18:00", "19:00", "20:00", "21:00",
 ];
+
+function localDateMinYYYYMMDD(): string {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
 
 export function BookingForm({ venueId, venueName, priceFrom }: BookingFormProps) {
   const { token } = useAuthStore();
@@ -38,12 +46,22 @@ export function BookingForm({ venueId, venueName, priceFrom }: BookingFormProps)
       return;
     }
     setError("");
+    const todayLocal = localDateMinYYYYMMDD();
+    if (!date || date < todayLocal) {
+      setError("Выберите сегодняшнюю или будущую дату.");
+      return;
+    }
     setLoading(true);
     try {
       await createBooking({ venue_id: venueId, date, time_from: time, guests });
       setSuccess(true);
-    } catch {
-      setError("Не удалось создать бронирование. Попробуйте позже.");
+    } catch (e) {
+      setError(
+        formatApiErrorMessage(
+          e,
+          "Не удалось создать бронирование. Попробуйте позже.",
+        ),
+      );
     } finally {
       setLoading(false);
     }
@@ -72,7 +90,7 @@ export function BookingForm({ venueId, venueName, priceFrom }: BookingFormProps)
     );
   }
 
-  const today = new Date().toISOString().split("T")[0];
+  const today = localDateMinYYYYMMDD();
 
   return (
     <Card>

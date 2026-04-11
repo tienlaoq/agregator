@@ -64,9 +64,12 @@ func main() {
 		os.Getenv("TELEGRAM_CHAT_ID"),
 		os.Getenv("FRONTEND_URL"),
 	)
+	if !tgNotifier.Enabled() {
+		log.Warn().Msg("Telegram notifications disabled: set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID (e.g. in deploy/.env)")
+	}
 
 	grpcServer := grpc.NewServer()
-	venuev1.RegisterVenueServiceServer(grpcServer, delivery.NewServer(uc, publisher, tgNotifier))
+	venuev1.RegisterVenueServiceServer(grpcServer, delivery.NewServer(uc, publisher, tgNotifier, log))
 
 	lis, err := net.Listen("tcp", ":"+cfg.GRPCPort)
 	if err != nil {

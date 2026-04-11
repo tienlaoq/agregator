@@ -37,6 +37,37 @@ func EmailFromCtx(ctx context.Context) string {
 	return ""
 }
 
+// AuthOptional validates Bearer token when present and attaches user id/role to context; no header means anonymous.
+// Malformed or invalid token returns 401.
+func AuthOptional(authClient authv1.AuthServiceClient) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			header := r.Header.Get("Authorization")
+			if header == "" {
+				next.ServeHTTP(w, r)
+				return
+			}
+			token, ok := strings.CutPrefix(header, "Bearer ")
+			if !ok || token == "" {
+				http.Error(w, `{"error":"invalid authorization header"}`, http.StatusUnauthorized)
+				return
+			}
+			resp, err := authClient.ValidateToken(r.Context(), &authv1.ValidateTokenRequest{
+				AccessToken: token,
+			})
+			if err != nil || !resp.GetValid() {
+				http.Error(w, `{"error":"invalid or expired token"}`, http.StatusUnauthorized)
+				return
+			}
+			ctx := r.Context()
+			ctx = context.WithValue(ctx, CtxUserID, resp.GetUserId())
+			ctx = context.WithValue(ctx, CtxRole, resp.GetRole())
+			ctx = context.WithValue(ctx, CtxEmail, resp.GetEmail())
+			next.ServeHTTP(w, r.WithContext(ctx))
+		})
+	}
+}
+
 func Auth(authClient authv1.AuthServiceClient) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

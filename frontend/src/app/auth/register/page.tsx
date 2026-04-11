@@ -10,7 +10,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Separator } from "@/components/ui/separator"
-import { register, getProfile, ApiError } from "@/lib/api"
+import { register, userFromRegisterResponse, ApiError } from "@/lib/api"
 import { useAuthStore } from "@/store/auth"
 import { Flame } from "lucide-react"
 
@@ -50,7 +50,7 @@ export default function RegisterPage() {
       const res = await register({ name, email, password, role: "user" })
       localStorage.setItem("token", res.access_token)
       localStorage.setItem("refresh_token", res.refresh_token)
-      const user = await getProfile()
+      const user = userFromRegisterResponse(res, { name, email, role: "user" })
       authLogin(res.access_token, res.refresh_token, user)
       router.push("/")
     } catch (err) {
@@ -152,10 +152,20 @@ export default function RegisterPage() {
               Уже есть аккаунт?{" "}
               <Link href="/auth/login" className="font-medium text-primary hover:underline">Войти</Link>
             </p>
-            <p>
-              Вы владелец бани?{" "}
-              <Link href="/partner" className="font-medium text-primary hover:underline">Подать заявку</Link>
-            </p>
+            <div className="space-y-2">
+              <p>
+                Вы владелец бани?{" "}
+                <Link href="/partner" className="font-medium text-primary hover:underline">
+                  Подать заявку
+                </Link>
+              </p>
+              <p>
+                Вы пар-мастер?{" "}
+                <Link href="/partner/master" className="font-medium text-primary hover:underline">
+                  Подать заявку
+                </Link>
+              </p>
+            </div>
           </div>
         </CardContent>
       </Card>

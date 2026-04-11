@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -13,6 +14,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	venuev1 "github.com/tienlao/agregator/gen/go/venue/v1"
+	pkgcities "github.com/tienlao/agregator/pkg/cities"
 	"github.com/tienlao/agregator/services/api-gateway/internal/middleware"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -23,6 +25,7 @@ import (
 // mockVenueClient implements venuev1.VenueServiceClient for tests.
 type mockVenueClient struct {
 	OnCreateVenue            func(ctx context.Context, in *venuev1.CreateVenueRequest, opts ...grpc.CallOption) (*venuev1.VenueResponse, error)
+	OnSubmitVenueForReview   func(ctx context.Context, in *venuev1.SubmitVenueForReviewRequest, opts ...grpc.CallOption) (*venuev1.VenueResponse, error)
 	OnUpdateVenue            func(ctx context.Context, in *venuev1.UpdateVenueRequest, opts ...grpc.CallOption) (*venuev1.VenueResponse, error)
 	OnGetVenue               func(ctx context.Context, in *venuev1.GetVenueRequest, opts ...grpc.CallOption) (*venuev1.VenueResponse, error)
 	OnGetVenueBySlug         func(ctx context.Context, in *venuev1.GetVenueBySlugRequest, opts ...grpc.CallOption) (*venuev1.VenueResponse, error)
@@ -40,6 +43,13 @@ type mockVenueClient struct {
 func (m *mockVenueClient) CreateVenue(ctx context.Context, in *venuev1.CreateVenueRequest, opts ...grpc.CallOption) (*venuev1.VenueResponse, error) {
 	if m.OnCreateVenue != nil {
 		return m.OnCreateVenue(ctx, in, opts...)
+	}
+	return nil, nil
+}
+
+func (m *mockVenueClient) SubmitVenueForReview(ctx context.Context, in *venuev1.SubmitVenueForReviewRequest, opts ...grpc.CallOption) (*venuev1.VenueResponse, error) {
+	if m.OnSubmitVenueForReview != nil {
+		return m.OnSubmitVenueForReview(ctx, in, opts...)
 	}
 	return nil, nil
 }
@@ -128,6 +138,42 @@ func (m *mockVenueClient) ListPendingVenues(ctx context.Context, in *venuev1.Lis
 	return nil, nil
 }
 
+func (m *mockVenueClient) CreateManualSlotBlock(ctx context.Context, in *venuev1.CreateManualSlotBlockRequest, opts ...grpc.CallOption) (*venuev1.CreateManualSlotBlockResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "CreateManualSlotBlock")
+}
+
+func (m *mockVenueClient) DeleteManualSlotBlock(ctx context.Context, in *venuev1.DeleteManualSlotBlockRequest, opts ...grpc.CallOption) (*venuev1.DeleteManualSlotBlockResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "DeleteManualSlotBlock")
+}
+
+func (m *mockVenueClient) ListManualSlotBlocks(ctx context.Context, in *venuev1.ListManualSlotBlocksRequest, opts ...grpc.CallOption) (*venuev1.ListManualSlotBlocksResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "ListManualSlotBlocks")
+}
+
+func (m *mockVenueClient) AddVenuePhoto(ctx context.Context, in *venuev1.AddVenuePhotoRequest, opts ...grpc.CallOption) (*venuev1.VenueResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "AddVenuePhoto")
+}
+
+func (m *mockVenueClient) DeleteVenuePhoto(ctx context.Context, in *venuev1.DeleteVenuePhotoRequest, opts ...grpc.CallOption) (*venuev1.DeleteVenuePhotoResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "DeleteVenuePhoto")
+}
+
+func (m *mockVenueClient) SetVenueCoverPhoto(ctx context.Context, in *venuev1.SetVenueCoverPhotoRequest, opts ...grpc.CallOption) (*venuev1.VenueResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "SetVenueCoverPhoto")
+}
+
+func (m *mockVenueClient) AddVenueHallPhoto(ctx context.Context, in *venuev1.AddVenueHallPhotoRequest, opts ...grpc.CallOption) (*venuev1.VenueResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "AddVenueHallPhoto")
+}
+
+func (m *mockVenueClient) DeleteVenueHallPhoto(ctx context.Context, in *venuev1.DeleteVenueHallPhotoRequest, opts ...grpc.CallOption) (*venuev1.DeleteVenueHallPhotoResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "DeleteVenueHallPhoto")
+}
+
+func (m *mockVenueClient) SetVenueHallCoverPhoto(ctx context.Context, in *venuev1.SetVenueHallCoverPhotoRequest, opts ...grpc.CallOption) (*venuev1.VenueResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "SetVenueHallCoverPhoto")
+}
+
 func sampleVenueResponse() *venuev1.VenueResponse {
 	return &venuev1.VenueResponse{
 		Id:        "venue-1",
@@ -160,7 +206,7 @@ func TestList_Success(t *testing.T) {
 			}, nil
 		},
 	}
-	h := NewVenueHandler(mock)
+	h := NewVenueHandler(mock, t.TempDir())
 
 	req := httptest.NewRequest(http.MethodGet, "/venues?page=1&page_size=10", nil)
 	rr := httptest.NewRecorder()
@@ -178,6 +224,87 @@ func TestList_Success(t *testing.T) {
 	assert.EqualValues(t, 10, body["page_size"])
 }
 
+func TestSearch_CityOnlyDuplicatesIntoQuery(t *testing.T) {
+	mock := &mockVenueClient{
+		OnSearchVenues: func(ctx context.Context, in *venuev1.SearchVenuesRequest, opts ...grpc.CallOption) (*venuev1.ListVenuesResponse, error) {
+			assert.Equal(t, "Пенза", in.GetQuery())
+			assert.Equal(t, "Пенза", in.GetCity())
+			return &venuev1.ListVenuesResponse{Total: 0, Page: 1, PageSize: 12}, nil
+		},
+	}
+	h := NewVenueHandler(mock, t.TempDir())
+
+	req := httptest.NewRequest(http.MethodGet, "/venues/search?city=Пенза&page=1&page_size=12", nil)
+	rr := httptest.NewRecorder()
+	h.Search(rr, req)
+
+	require.Equal(t, http.StatusOK, rr.Code)
+}
+
+func TestSearch_MultipleCitiesJoinsGRPCCity(t *testing.T) {
+	var got *venuev1.SearchVenuesRequest
+	mock := &mockVenueClient{
+		OnSearchVenues: func(ctx context.Context, in *venuev1.SearchVenuesRequest, opts ...grpc.CallOption) (*venuev1.ListVenuesResponse, error) {
+			got = in
+			return &venuev1.ListVenuesResponse{Total: 0, Page: 1, PageSize: 12}, nil
+		},
+	}
+	h := NewVenueHandler(mock, t.TempDir())
+
+	// Рекомендуемый формат в query: `|` между городами.
+	q := url.Values{}
+	q.Set("cities", "Пенза|Москва")
+	q.Set("page", "1")
+	q.Set("page_size", "12")
+	req := httptest.NewRequest(http.MethodGet, "/venues/search?"+q.Encode(), nil)
+	rr := httptest.NewRecorder()
+	h.Search(rr, req)
+
+	require.Equal(t, http.StatusOK, rr.Code)
+	require.NotNil(t, got)
+	assert.Contains(t, got.GetCity(), pkgcities.Sep)
+	assert.Equal(t, "", got.GetQuery())
+}
+
+func TestSearch_MultipleCitiesLegacyUnitSeparatorInQuery(t *testing.T) {
+	var got *venuev1.SearchVenuesRequest
+	mock := &mockVenueClient{
+		OnSearchVenues: func(ctx context.Context, in *venuev1.SearchVenuesRequest, opts ...grpc.CallOption) (*venuev1.ListVenuesResponse, error) {
+			got = in
+			return &venuev1.ListVenuesResponse{Total: 0, Page: 1, PageSize: 12}, nil
+		},
+	}
+	h := NewVenueHandler(mock, t.TempDir())
+
+	// Как в адресной строке браузера: Москва \x1e Пенза
+	raw := "/venues/search?cities=%D0%9C%D0%BE%D1%81%D0%BA%D0%B2%D0%B0%1E%D0%9F%D0%B5%D0%BD%D0%B7%D0%B0&page=1&page_size=12"
+	req := httptest.NewRequest(http.MethodGet, raw, nil)
+	rr := httptest.NewRecorder()
+	h.Search(rr, req)
+
+	require.Equal(t, http.StatusOK, rr.Code)
+	require.NotNil(t, got)
+	assert.Contains(t, got.GetCity(), pkgcities.Sep)
+	assert.Equal(t, "", got.GetQuery())
+}
+
+func TestSearch_QAndCityKeepsSeparate(t *testing.T) {
+	mock := &mockVenueClient{
+		OnSearchVenues: func(ctx context.Context, in *venuev1.SearchVenuesRequest, opts ...grpc.CallOption) (*venuev1.ListVenuesResponse, error) {
+			assert.Equal(t, "сауна", in.GetQuery())
+			assert.Equal(t, "Пенза", in.GetCity())
+			return &venuev1.ListVenuesResponse{Total: 0, Page: 1, PageSize: 12}, nil
+		},
+	}
+	h := NewVenueHandler(mock, t.TempDir())
+
+	req := httptest.NewRequest(http.MethodGet, "/venues/search?q=сауна&city=Пенза&page=1&page_size=12", nil)
+	rr := httptest.NewRecorder()
+	h.Search(rr, req)
+
+	require.Equal(t, http.StatusOK, rr.Code)
+}
+
 func TestGetBySlug_Success(t *testing.T) {
 	mock := &mockVenueClient{
 		OnGetVenueBySlug: func(ctx context.Context, in *venuev1.GetVenueBySlugRequest, opts ...grpc.CallOption) (*venuev1.VenueResponse, error) {
@@ -188,7 +315,7 @@ func TestGetBySlug_Success(t *testing.T) {
 			return v, nil
 		},
 	}
-	h := NewVenueHandler(mock)
+	h := NewVenueHandler(mock, t.TempDir())
 
 	req := httptest.NewRequest(http.MethodGet, "/venues/cozy-banya", nil)
 	ctx := withRouteParams(req.Context(), "slug", "cozy-banya")
@@ -214,7 +341,7 @@ func TestGetBySlug_NotFound(t *testing.T) {
 			return nil, status.Error(codes.NotFound, "venue not found")
 		},
 	}
-	h := NewVenueHandler(mock)
+	h := NewVenueHandler(mock, t.TempDir())
 
 	req := httptest.NewRequest(http.MethodGet, "/venues/missing", nil)
 	ctx := withRouteParams(req.Context(), "slug", "missing")
@@ -227,6 +354,48 @@ func TestGetBySlug_NotFound(t *testing.T) {
 	var body map[string]string
 	require.NoError(t, json.NewDecoder(rr.Body).Decode(&body))
 	assert.Equal(t, "venue not found", body["error"])
+}
+
+func TestGetBySlug_DraftHiddenForAnonymous(t *testing.T) {
+	mock := &mockVenueClient{
+		OnGetVenueBySlug: func(ctx context.Context, in *venuev1.GetVenueBySlugRequest, opts ...grpc.CallOption) (*venuev1.VenueResponse, error) {
+			v := sampleVenueResponse()
+			v.Status = "draft"
+			return v, nil
+		},
+	}
+	h := NewVenueHandler(mock, t.TempDir())
+
+	req := httptest.NewRequest(http.MethodGet, "/venues/cozy-banya", nil)
+	ctx := withRouteParams(req.Context(), "slug", "cozy-banya")
+	req = req.WithContext(ctx)
+
+	rr := httptest.NewRecorder()
+	h.GetBySlug(rr, req)
+
+	require.Equal(t, http.StatusNotFound, rr.Code)
+}
+
+func TestGetBySlug_DraftVisibleForAdmin(t *testing.T) {
+	mock := &mockVenueClient{
+		OnGetVenueBySlug: func(ctx context.Context, in *venuev1.GetVenueBySlugRequest, opts ...grpc.CallOption) (*venuev1.VenueResponse, error) {
+			v := sampleVenueResponse()
+			v.Status = "draft"
+			return v, nil
+		},
+	}
+	h := NewVenueHandler(mock, t.TempDir())
+
+	req := httptest.NewRequest(http.MethodGet, "/venues/cozy-banya", nil)
+	ctx := withRouteParams(req.Context(), "slug", "cozy-banya")
+	ctx = context.WithValue(ctx, middleware.CtxUserID, "admin-user")
+	ctx = context.WithValue(ctx, middleware.CtxRole, "admin")
+	req = req.WithContext(ctx)
+
+	rr := httptest.NewRecorder()
+	h.GetBySlug(rr, req)
+
+	require.Equal(t, http.StatusOK, rr.Code)
 }
 
 func TestCreate_Success(t *testing.T) {
@@ -243,7 +412,7 @@ func TestCreate_Success(t *testing.T) {
 			return sampleVenueResponse(), nil
 		},
 	}
-	h := NewVenueHandler(mock)
+	h := NewVenueHandler(mock, t.TempDir())
 
 	payload := `{"name":"New Spa","type":"banya","description":"d","address":"Main st","city":"X","latitude":1,"longitude":2,"price_from":100,"capacity":10,"amenities":["pool"],"working_hours":"9-5","phone":"1","services":[],"legal_entity_name":"ИП Тестов Тест Тестович","inn":"7707083893","ogrn":"1027700132195","public_listing_url":"https://yandex.ru/maps/org/x"}`
 	req := httptest.NewRequest(http.MethodPost, "/venues", strings.NewReader(payload))
@@ -261,7 +430,7 @@ func TestCreate_Success(t *testing.T) {
 }
 
 func TestCreate_Unauthorized(t *testing.T) {
-	h := NewVenueHandler(&mockVenueClient{})
+	h := NewVenueHandler(&mockVenueClient{}, t.TempDir())
 
 	payload := `{"name":"X","type":"banya"}`
 	req := httptest.NewRequest(http.MethodPost, "/venues", strings.NewReader(payload))
@@ -289,7 +458,7 @@ func TestModerate_Success(t *testing.T) {
 			return v, nil
 		},
 	}
-	h := NewVenueHandler(mock)
+	h := NewVenueHandler(mock, t.TempDir())
 
 	payload := `{"action":"approve","comment":"looks good"}`
 	req := httptest.NewRequest(http.MethodPost, "/admin/venues/venue-id/moderate", strings.NewReader(payload))
@@ -310,7 +479,7 @@ func TestModerate_Success(t *testing.T) {
 }
 
 func TestModerate_Unauthorized(t *testing.T) {
-	h := NewVenueHandler(&mockVenueClient{})
+	h := NewVenueHandler(&mockVenueClient{}, t.TempDir())
 
 	payload := `{"action":"approve","comment":"x"}`
 	req := httptest.NewRequest(http.MethodPost, "/admin/venues/v1/moderate", strings.NewReader(payload))
@@ -341,7 +510,7 @@ func TestListPending_Success(t *testing.T) {
 			}, nil
 		},
 	}
-	h := NewVenueHandler(mock)
+	h := NewVenueHandler(mock, t.TempDir())
 
 	req := httptest.NewRequest(http.MethodGet, "/admin/venues/pending?page=2&page_size=5&status=pending_review", nil)
 	rr := httptest.NewRecorder()

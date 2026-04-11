@@ -17,17 +17,28 @@ export function CTASection() {
             Добавьте своё заведение на БаняГид и получайте новых клиентов каждый день. 
             Бесплатная регистрация и удобная система бронирования.
           </p>
-          <Button
-            size="lg"
-            variant="secondary"
-            asChild
-            className="gap-2 bg-primary-foreground text-primary hover:bg-primary-foreground/90"
-          >
-            <Link href="/partner">
-              Добавить заведение
-              <ArrowRight className="h-4 w-4" />
-            </Link>
-          </Button>
+          <div className="flex flex-col items-center gap-3">
+            <Button
+              size="lg"
+              variant="secondary"
+              asChild
+              className="gap-2 bg-primary-foreground text-primary hover:bg-primary-foreground/90"
+            >
+              <Link href="/partner">
+                Добавить заведение
+                <ArrowRight className="h-4 w-4" />
+              </Link>
+            </Button>
+            <p className="text-sm text-primary-foreground/90">
+              Вы пар-мастер?{" "}
+              <Link
+                href="/partner/master"
+                className="font-medium text-primary-foreground underline underline-offset-4 hover:text-primary-foreground"
+              >
+                Подать заявку
+              </Link>
+            </p>
+          </div>
         </div>
       </div>
     </section>

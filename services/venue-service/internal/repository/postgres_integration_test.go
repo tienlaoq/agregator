@@ -40,6 +40,11 @@ func TestMain(m *testing.M) {
 			filepath.Join(migrationsDir, "002_moderation.up.sql"),
 			filepath.Join(migrationsDir, "003_city.up.sql"),
 			filepath.Join(migrationsDir, "004_moderation_extended.up.sql"),
+			filepath.Join(migrationsDir, "005_owner_verification.up.sql"),
+			filepath.Join(migrationsDir, "006_reserved_slots_exclusion.up.sql"),
+			filepath.Join(migrationsDir, "007_manual_slot_blocks.up.sql"),
+			filepath.Join(migrationsDir, "008_venue_social_links.up.sql"),
+			filepath.Join(migrationsDir, "009_venue_service_sort_order.up.sql"),
 		),
 		testcontainers.WithWaitStrategy(
 			wait.ForAll(
@@ -125,9 +130,31 @@ func TestIntegration_ListByStatus(t *testing.T) {
 		require.NoError(t, repo.Create(ctx, v))
 	}
 
+	withPhoto := &domain.Venue{
+		OwnerID: uuid.New(),
+		Name:    "ListByStatus с фото " + uuid.New().String()[:8],
+		Type:    "banya",
+		Address: "ул. Тестовая",
+		City:    "Москва",
+	}
+	require.NoError(t, repo.Create(ctx, withPhoto))
+	_, err := repo.AddVenuePhoto(ctx, withPhoto.ID, "https://example.com/moderation-list-by-status.jpg")
+	require.NoError(t, err)
+
 	result, err := repo.ListByStatus(ctx, domain.StatusPendingReview, 1, 100)
 	require.NoError(t, err)
-	assert.GreaterOrEqual(t, int(result.Total), 3)
+	assert.GreaterOrEqual(t, int(result.Total), 4)
+
+	var listed *domain.Venue
+	for i := range result.Venues {
+		if result.Venues[i].ID == withPhoto.ID {
+			listed = &result.Venues[i]
+			break
+		}
+	}
+	require.NotNil(t, listed, "venue with photo must appear in ListByStatus")
+	assert.Len(t, listed.Photos, 1)
+	assert.Equal(t, "https://example.com/moderation-list-by-status.jpg", listed.Photos[0].URL)
 }
 
 func TestIntegration_ModerationWorkflow(t *testing.T) {
@@ -180,6 +207,7 @@ func TestIntegration_ModerationWorkflow(t *testing.T) {
 	got, err = repo.GetByID(ctx, venue.ID)
 	require.NoError(t, err)
 	assert.Equal(t, domain.StatusPendingReview, got.Status)
+	assert.False(t, got.IsActive)
 }
 
 func TestIntegration_SlotReservation(t *testing.T) {
@@ -212,6 +240,62 @@ func TestIntegration_SlotReservation(t *testing.T) {
 	require.NoError(t, err)
 
 	available, err = repo.CheckSlot(ctx, venue.ID, testDate, "10:00", "12:00")
+	require.NoError(t, err)
+	assert.True(t, available)
+}
+
+func TestIntegration_SlotOverlapRejected(t *testing.T) {
+	repo := NewVenueRepo(testPool)
+	ctx := context.Background()
+
+	venue := &domain.Venue{
+		OwnerID: uuid.New(),
+		Name:    "Баня Пересечение " + uuid.New().String()[:8],
+		Type:    "banya",
+		Address: "ул. Пересечений, 2",
+		City:    "Москва",
+	}
+	require.NoError(t, repo.Create(ctx, venue))
+
+	testDate := "2025-07-20"
+	require.NoError(t, repo.ReserveSlot(ctx, venue.ID, uuid.New(), testDate, "10:00", "12:00"))
+
+	err := repo.ReserveSlot(ctx, venue.ID, uuid.New(), testDate, "11:00", "13:00")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrSlotUnavailable)
+}
+
+func TestIntegration_ManualSlotBlockOccupiesSlot(t *testing.T) {
+	repo := NewVenueRepo(testPool)
+	ctx := context.Background()
+
+	venue := &domain.Venue{
+		OwnerID: uuid.New(),
+		Name:    "Баня РучнойБлок " + uuid.New().String()[:8],
+		Type:    "banya",
+		Address: "ул. Блоков, 3",
+		City:    "Москва",
+	}
+	require.NoError(t, repo.Create(ctx, venue))
+
+	testDate := "2025-08-10"
+	blockID, err := repo.CreateManualSlotBlock(ctx, venue.ID, testDate, "14:00", "16:00", "по телефону")
+	require.NoError(t, err)
+	assert.NotEqual(t, uuid.Nil, blockID)
+
+	available, err := repo.CheckSlot(ctx, venue.ID, testDate, "15:00", "17:00")
+	require.NoError(t, err)
+	assert.False(t, available)
+
+	err = repo.ReserveSlot(ctx, venue.ID, uuid.New(), testDate, "15:00", "17:00")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrSlotUnavailable)
+
+	deleted, err := repo.DeleteManualSlotBlock(ctx, venue.ID, blockID)
+	require.NoError(t, err)
+	assert.True(t, deleted)
+
+	available, err = repo.CheckSlot(ctx, venue.ID, testDate, "15:00", "17:00")
 	require.NoError(t, err)
 	assert.True(t, available)
 }

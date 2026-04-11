@@ -8,6 +8,7 @@ import "google/protobuf/timestamp.proto";
 
 service VenueService {
   rpc CreateVenue(CreateVenueRequest) returns (VenueResponse);
+  rpc SubmitVenueForReview(SubmitVenueForReviewRequest) returns (VenueResponse);
   rpc UpdateVenue(UpdateVenueRequest) returns (VenueResponse);
   rpc GetVenue(GetVenueRequest) returns (VenueResponse);
   rpc GetVenueBySlug(GetVenueBySlugRequest) returns (VenueResponse);
@@ -17,9 +18,18 @@ service VenueService {
   rpc CheckSlotAvailability(CheckSlotRequest) returns (CheckSlotResponse);
   rpc ReserveSlot(ReserveSlotRequest) returns (ReserveSlotResponse);
   rpc ReleaseSlot(ReleaseSlotRequest) returns (ReleaseSlotResponse);
+  rpc CreateManualSlotBlock(CreateManualSlotBlockRequest) returns (CreateManualSlotBlockResponse);
+  rpc DeleteManualSlotBlock(DeleteManualSlotBlockRequest) returns (DeleteManualSlotBlockResponse);
+  rpc ListManualSlotBlocks(ListManualSlotBlocksRequest) returns (ListManualSlotBlocksResponse);
   rpc UpdateRating(UpdateRatingRequest) returns (UpdateRatingResponse);
   rpc ModerateVenue(ModerateVenueRequest) returns (VenueResponse);
   rpc ListPendingVenues(ListPendingVenuesRequest) returns (ListVenuesResponse);
+  rpc AddVenuePhoto(AddVenuePhotoRequest) returns (VenueResponse);
+  rpc DeleteVenuePhoto(DeleteVenuePhotoRequest) returns (DeleteVenuePhotoResponse);
+  rpc SetVenueCoverPhoto(SetVenueCoverPhotoRequest) returns (VenueResponse);
+  rpc AddVenueHallPhoto(AddVenueHallPhotoRequest) returns (VenueResponse);
+  rpc DeleteVenueHallPhoto(DeleteVenueHallPhotoRequest) returns (DeleteVenueHallPhotoResponse);
+  rpc SetVenueHallCoverPhoto(SetVenueHallCoverPhotoRequest) returns (VenueResponse);
 }
 
 message CreateVenueRequest {
@@ -43,6 +53,17 @@ message CreateVenueRequest {
   string ogrn = 17;
   string public_listing_url = 18;
   string verification_note = 19;
+  // JSON object of public profile URLs, e.g. {"vk":"https://vk.com/...","telegram":"https://t.me/..."}
+  string social_links = 20;
+  // Залы внутри заведения (опционально при создании).
+  repeated VenueHallInput halls = 21;
+  // Если true — статус draft (не в очереди модерации), иначе как раньше pending_review.
+  bool start_as_draft = 22;
+}
+
+message SubmitVenueForReviewRequest {
+  string venue_id = 1;
+  string owner_id = 2;
 }
 
 message UpdateVenueRequest {
@@ -64,6 +85,16 @@ message UpdateVenueRequest {
   optional string ogrn = 16;
   optional string public_listing_url = 17;
   optional string verification_note = 18;
+  optional string social_links = 19;
+  // When set, replaces all venue_services rows for this venue (order = repeated order).
+  optional VenueServicesReplace services_replace = 20;
+  // Полная замена списка залов; пересчитывает price_from/capacity/amenities на карточке.
+  optional VenueHallsReplace halls_replace = 21;
+}
+
+// Full replace of the services list (owner cabinet). Empty items = remove all services.
+message VenueServicesReplace {
+  repeated VenueServiceItem items = 1;
 }
 
 message GetVenueRequest {
@@ -93,6 +124,8 @@ message SearchVenuesRequest {
   repeated string amenities = 9;
   int32 page = 10;
   int32 page_size = 11;
+  // Подстрока города (как в карточке заведения), без учёта регистра
+  string city = 12;
 }
 
 message ListOwnerVenuesRequest {
@@ -120,7 +153,7 @@ message VenueResponse {
   repeated VenueServiceItem services = 18;
   repeated VenuePhoto photos = 19;
   google.protobuf.Timestamp created_at = 20;
-  string status = 21; // pending_review, active, rejected, suspended
+  string status = 21; // draft, pending_review, active, rejected, suspended
   string moderation_comment = 22;
   string city = 23;
   google.protobuf.Timestamp moderated_at = 24;
@@ -130,6 +163,8 @@ message VenueResponse {
   string ogrn = 28;
   string public_listing_url = 29;
   string verification_note = 30;
+  string social_links = 31;
+  repeated VenueHall halls = 32;
 }
 
 message ListVenuesResponse {
@@ -152,6 +187,37 @@ message VenuePhoto {
   string url = 2;
   int32 sort_order = 3;
   bool is_cover = 4;
+}
+
+message VenueHallPhoto {
+  string id = 1;
+  string url = 2;
+  int32 sort_order = 3;
+  bool is_cover = 4;
+}
+
+message VenueHall {
+  string id = 1;
+  string name = 2;
+  int64 price_from = 3;
+  int32 capacity = 4;
+  repeated string amenities = 5;
+  int32 sort_order = 6;
+  repeated VenueHallPhoto photos = 7;
+}
+
+// id пустой — создать новый зал; с id — обновить существующий (принадлежит заведению).
+message VenueHallInput {
+  optional string id = 1;
+  string name = 2;
+  int64 price_from = 3;
+  int32 capacity = 4;
+  repeated string amenities = 5;
+  int32 sort_order = 6;
+}
+
+message VenueHallsReplace {
+  repeated VenueHallInput items = 1;
 }
 
 message CheckSlotRequest {
@@ -186,6 +252,49 @@ message ReleaseSlotResponse {
   bool success = 1;
 }
 
+message ManualSlotBlock {
+  string id = 1;
+  string venue_id = 2;
+  string date = 3;       // YYYY-MM-DD
+  string time_from = 4;  // HH:MM
+  string time_to = 5;    // HH:MM
+  string note = 6;
+}
+
+message CreateManualSlotBlockRequest {
+  string owner_id = 1;
+  string venue_id = 2;
+  string date = 3;
+  string time_from = 4;
+  string time_to = 5;
+  string note = 6; // optional, e.g. "бронь по телефону"
+}
+
+message CreateManualSlotBlockResponse {
+  ManualSlotBlock block = 1;
+}
+
+message DeleteManualSlotBlockRequest {
+  string owner_id = 1;
+  string venue_id = 2;
+  string block_id = 3;
+}
+
+message DeleteManualSlotBlockResponse {
+  bool success = 1;
+}
+
+message ListManualSlotBlocksRequest {
+  string owner_id = 1;
+  string venue_id = 2;
+  string date_from = 3; // YYYY-MM-DD inclusive
+  string date_to = 4;   // YYYY-MM-DD inclusive
+}
+
+message ListManualSlotBlocksResponse {
+  repeated ManualSlotBlock blocks = 1;
+}
+
 message UpdateRatingRequest {
   string venue_id = 1;
   double avg_rating = 2;
@@ -205,4 +314,51 @@ message ListPendingVenuesRequest {
   int32 page = 1;
   int32 page_size = 2;
   string status = 3; // filter by specific status, empty = pending_review
+}
+
+message AddVenuePhotoRequest {
+  string venue_id = 1;
+  string owner_id = 2;
+  string url = 3; // public path, e.g. /api/v1/uploads/venues/{id}/{file}
+}
+
+message DeleteVenuePhotoRequest {
+  string venue_id = 1;
+  string owner_id = 2;
+  string photo_id = 3;
+}
+
+message DeleteVenuePhotoResponse {
+  string url = 1; // stored URL so gateway can remove file from disk
+}
+
+message SetVenueCoverPhotoRequest {
+  string venue_id = 1;
+  string owner_id = 2;
+  string photo_id = 3;
+}
+
+message AddVenueHallPhotoRequest {
+  string venue_id = 1;
+  string hall_id = 2;
+  string owner_id = 3;
+  string url = 4;
+}
+
+message DeleteVenueHallPhotoRequest {
+  string venue_id = 1;
+  string hall_id = 2;
+  string owner_id = 3;
+  string photo_id = 4;
+}
+
+message DeleteVenueHallPhotoResponse {
+  string url = 1;
+}
+
+message SetVenueHallCoverPhotoRequest {
+  string venue_id = 1;
+  string hall_id = 2;
+  string owner_id = 3;
+  string photo_id = 4;
 }

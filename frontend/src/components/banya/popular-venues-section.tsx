@@ -6,7 +6,7 @@ import { Card, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { ArrowRight, Star, MapPin, ImageIcon } from "lucide-react"
 import Link from "next/link"
-import { getVenues } from "@/lib/api"
+import { getVenues, venueCardImageSrc } from "@/lib/api"
 import type { Venue } from "@/lib/types"
 import { VENUE_TYPE_LABELS } from "@/lib/types"
 
@@ -44,12 +44,14 @@ export function PopularVenuesSection() {
             ? Array.from({ length: 3 }).map((_, i) => (
                 <div key={i} className="h-80 animate-pulse rounded-xl bg-muted" />
               ))
-            : venues.map((venue) => (
+            : venues.map((venue) => {
+                const cardImg = venueCardImageSrc(venue)
+                return (
                 <Link key={venue.id} href={`/venues/${venue.slug}`}>
                   <Card className="group cursor-pointer overflow-hidden border-border bg-card transition-all hover:shadow-xl h-full">
                     <div className="relative aspect-[4/3] overflow-hidden bg-muted flex items-center justify-center">
-                      {venue.image_url ? (
-                        <img src={venue.image_url} alt={venue.name} className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105" />
+                      {cardImg ? (
+                        <img src={cardImg} alt={venue.name} className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105" />
                       ) : (
                         <div className="flex flex-col items-center gap-1 text-muted-foreground/40">
                           <ImageIcon className="h-8 w-8" />
@@ -86,7 +88,7 @@ export function PopularVenuesSection() {
                     </CardContent>
                   </Card>
                 </Link>
-              ))}
+              )})}
         </div>
       </div>
     </section>

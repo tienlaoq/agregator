@@ -21,5 +21,6 @@ apply_migrations venue-service venue_db
 apply_migrations booking-service booking_db
 apply_migrations review-service review_db
 apply_migrations payment-service payment_db
+apply_migrations master-service master_db
 
 echo "All migrations applied."

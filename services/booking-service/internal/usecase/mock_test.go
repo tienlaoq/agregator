@@ -11,18 +11,27 @@ import (
 )
 
 type mockBookingRepo struct {
-	CreateFunc        func(ctx context.Context, b *domain.Booking) error
-	GetByIDFunc       func(ctx context.Context, id string) (*domain.Booking, error)
-	ListByUserFunc    func(ctx context.Context, userID, status string, offset, limit int) ([]*domain.Booking, int, error)
-	ListByVenueFunc   func(ctx context.Context, venueID, status, date string, offset, limit int) ([]*domain.Booking, int, error)
-	UpdateStatusFunc  func(ctx context.Context, id, status string) error
-	SetPaymentIDFunc  func(ctx context.Context, bookingID, paymentID string) error
-	HasCompletedFunc  func(ctx context.Context, userID, venueID string) (bool, error)
+	CreateFunc                 func(ctx context.Context, b *domain.Booking) error
+	DeleteFunc                 func(ctx context.Context, id string) error
+	GetByIDFunc                func(ctx context.Context, id string) (*domain.Booking, error)
+	ListByUserFunc             func(ctx context.Context, userID, status string, offset, limit int) ([]*domain.Booking, int, error)
+	ListByVenueFunc            func(ctx context.Context, venueID, status, date string, offset, limit int) ([]*domain.Booking, int, error)
+	UpdateStatusFunc           func(ctx context.Context, id, status string) error
+	SetPaymentIDFunc           func(ctx context.Context, bookingID, paymentID string) error
+	HasCompletedFunc           func(ctx context.Context, userID, venueID string) (bool, error)
+	AutoCompleteVisitEndedFunc func(ctx context.Context, visitTimeZone string) ([]domain.BookingCompletedRef, error)
 }
 
 func (m *mockBookingRepo) Create(ctx context.Context, b *domain.Booking) error {
 	if m.CreateFunc != nil {
 		return m.CreateFunc(ctx, b)
+	}
+	return nil
+}
+
+func (m *mockBookingRepo) Delete(ctx context.Context, id string) error {
+	if m.DeleteFunc != nil {
+		return m.DeleteFunc(ctx, id)
 	}
 	return nil
 }
@@ -69,7 +78,15 @@ func (m *mockBookingRepo) HasCompleted(ctx context.Context, userID, venueID stri
 	return false, nil
 }
 
+func (m *mockBookingRepo) AutoCompleteVisitEnded(ctx context.Context, visitTimeZone string) ([]domain.BookingCompletedRef, error) {
+	if m.AutoCompleteVisitEndedFunc != nil {
+		return m.AutoCompleteVisitEndedFunc(ctx, visitTimeZone)
+	}
+	return nil, nil
+}
+
 type mockVenueClient struct {
+	GetVenueFunc              func(ctx context.Context, in *venuev1.GetVenueRequest, opts ...grpc.CallOption) (*venuev1.VenueResponse, error)
 	CheckSlotAvailabilityFunc func(ctx context.Context, in *venuev1.CheckSlotRequest, opts ...grpc.CallOption) (*venuev1.CheckSlotResponse, error)
 	ReserveSlotFunc           func(ctx context.Context, in *venuev1.ReserveSlotRequest, opts ...grpc.CallOption) (*venuev1.ReserveSlotResponse, error)
 	ReleaseSlotFunc           func(ctx context.Context, in *venuev1.ReleaseSlotRequest, opts ...grpc.CallOption) (*venuev1.ReleaseSlotResponse, error)
@@ -79,12 +96,23 @@ func (m *mockVenueClient) CreateVenue(ctx context.Context, in *venuev1.CreateVen
 	return nil, nil
 }
 
+func (m *mockVenueClient) SubmitVenueForReview(ctx context.Context, in *venuev1.SubmitVenueForReviewRequest, opts ...grpc.CallOption) (*venuev1.VenueResponse, error) {
+	return nil, nil
+}
+
 func (m *mockVenueClient) UpdateVenue(ctx context.Context, in *venuev1.UpdateVenueRequest, opts ...grpc.CallOption) (*venuev1.VenueResponse, error) {
 	return nil, nil
 }
 
 func (m *mockVenueClient) GetVenue(ctx context.Context, in *venuev1.GetVenueRequest, opts ...grpc.CallOption) (*venuev1.VenueResponse, error) {
-	return nil, nil
+	if m.GetVenueFunc != nil {
+		return m.GetVenueFunc(ctx, in, opts...)
+	}
+	return &venuev1.VenueResponse{
+		Id:        in.GetId(),
+		Name:      "Mock venue",
+		PriceFrom: 0,
+	}, nil
 }
 
 func (m *mockVenueClient) GetVenueBySlug(ctx context.Context, in *venuev1.GetVenueBySlugRequest, opts ...grpc.CallOption) (*venuev1.VenueResponse, error) {
@@ -124,6 +152,18 @@ func (m *mockVenueClient) ReleaseSlot(ctx context.Context, in *venuev1.ReleaseSl
 	return nil, nil
 }
 
+func (m *mockVenueClient) CreateManualSlotBlock(ctx context.Context, in *venuev1.CreateManualSlotBlockRequest, opts ...grpc.CallOption) (*venuev1.CreateManualSlotBlockResponse, error) {
+	return nil, nil
+}
+
+func (m *mockVenueClient) DeleteManualSlotBlock(ctx context.Context, in *venuev1.DeleteManualSlotBlockRequest, opts ...grpc.CallOption) (*venuev1.DeleteManualSlotBlockResponse, error) {
+	return nil, nil
+}
+
+func (m *mockVenueClient) ListManualSlotBlocks(ctx context.Context, in *venuev1.ListManualSlotBlocksRequest, opts ...grpc.CallOption) (*venuev1.ListManualSlotBlocksResponse, error) {
+	return nil, nil
+}
+
 func (m *mockVenueClient) UpdateRating(ctx context.Context, in *venuev1.UpdateRatingRequest, opts ...grpc.CallOption) (*venuev1.UpdateRatingResponse, error) {
 	return nil, nil
 }
@@ -133,6 +173,18 @@ func (m *mockVenueClient) ModerateVenue(ctx context.Context, in *venuev1.Moderat
 }
 
 func (m *mockVenueClient) ListPendingVenues(ctx context.Context, in *venuev1.ListPendingVenuesRequest, opts ...grpc.CallOption) (*venuev1.ListVenuesResponse, error) {
+	return nil, nil
+}
+
+func (m *mockVenueClient) AddVenuePhoto(ctx context.Context, in *venuev1.AddVenuePhotoRequest, opts ...grpc.CallOption) (*venuev1.VenueResponse, error) {
+	return nil, nil
+}
+
+func (m *mockVenueClient) DeleteVenuePhoto(ctx context.Context, in *venuev1.DeleteVenuePhotoRequest, opts ...grpc.CallOption) (*venuev1.DeleteVenuePhotoResponse, error) {
+	return nil, nil
+}
+
+func (m *mockVenueClient) SetVenueCoverPhoto(ctx context.Context, in *venuev1.SetVenueCoverPhotoRequest, opts ...grpc.CallOption) (*venuev1.VenueResponse, error) {
 	return nil, nil
 }
 
@@ -160,9 +212,10 @@ func (m *mockPaymentClient) HandleWebhook(ctx context.Context, in *paymentv1.Web
 }
 
 type mockEventPublisher struct {
-	PublishBookingCreatedFunc   func(ctx context.Context, b *domain.Booking) error
-	PublishBookingConfirmedFunc func(ctx context.Context, b *domain.Booking) error
-	PublishBookingCancelledFunc func(ctx context.Context, b *domain.Booking) error
+	PublishBookingCreatedFunc    func(ctx context.Context, b *domain.Booking) error
+	PublishBookingConfirmedFunc  func(ctx context.Context, b *domain.Booking) error
+	PublishBookingCancelledFunc  func(ctx context.Context, b *domain.Booking) error
+	PublishBookingCompletedFunc  func(ctx context.Context, b *domain.Booking) error
 }
 
 func (m *mockEventPublisher) PublishBookingCreated(ctx context.Context, b *domain.Booking) error {
@@ -182,6 +235,13 @@ func (m *mockEventPublisher) PublishBookingConfirmed(ctx context.Context, b *dom
 func (m *mockEventPublisher) PublishBookingCancelled(ctx context.Context, b *domain.Booking) error {
 	if m.PublishBookingCancelledFunc != nil {
 		return m.PublishBookingCancelledFunc(ctx, b)
+	}
+	return nil
+}
+
+func (m *mockEventPublisher) PublishBookingCompleted(ctx context.Context, b *domain.Booking) error {
+	if m.PublishBookingCompletedFunc != nil {
+		return m.PublishBookingCompletedFunc(ctx, b)
 	}
 	return nil
 }

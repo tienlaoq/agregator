@@ -35,7 +35,7 @@ func main() {
 		log.Fatal().Err(err).Msg("failed to connect to postgres")
 	}
 	defer pgPool.Close()
-	log.Info().Msg("connected to postgres")
+	log.Info().Msg("connected to postgres")	
 
 	rdb, err := pkgredis.NewClient(ctx, cfg.Redis)
 	if err != nil {

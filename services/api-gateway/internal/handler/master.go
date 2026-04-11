@@ -1,0 +1,488 @@
+package handler
+
+import (
+	"bytes"
+	"encoding/json"
+	"errors"
+	"io"
+	"net/http"
+	"strconv"
+	"strings"
+
+	"github.com/go-chi/chi/v5"
+	masterv1 "github.com/tienlao/agregator/gen/go/master/v1"
+	"github.com/tienlao/agregator/services/api-gateway/internal/middleware"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
+)
+
+type MasterHandler struct {
+	client     masterv1.MasterServiceClient
+	uploadRoot string
+}
+
+func NewMasterHandler(c masterv1.MasterServiceClient, uploadRoot string) *MasterHandler {
+	return &MasterHandler{client: c, uploadRoot: uploadRoot}
+}
+
+func masterProtoToJSON(m *masterv1.Master) map[string]any {
+	if m == nil {
+		return nil
+	}
+	svcs := make([]map[string]any, 0, len(m.GetServices()))
+	for _, s := range m.GetServices() {
+		svcs = append(svcs, map[string]any{
+			"id":           s.GetId(),
+			"name":         s.GetName(),
+			"description":  s.GetDescription(),
+			"duration_min": s.GetDurationMin(),
+			"price":        s.GetPrice(),
+			"sort_order":   s.GetSortOrder(),
+		})
+	}
+	photos := make([]map[string]any, 0, len(m.GetPhotos()))
+	for _, p := range m.GetPhotos() {
+		photos = append(photos, map[string]any{
+			"id":         p.GetId(),
+			"url":        p.GetUrl(),
+			"sort_order": p.GetSortOrder(),
+			"is_cover":   p.GetIsCover(),
+		})
+	}
+	out := map[string]any{
+		"id":                 m.GetId(),
+		"user_id":            m.GetUserId(),
+		"slug":               m.GetSlug(),
+		"display_name":       m.GetDisplayName(),
+		"bio":                m.GetBio(),
+		"phone":              m.GetPhone(),
+		"city":               m.GetCity(),
+		"work_format":        m.GetWorkFormat(),
+		"travel_radius_km":   m.GetTravelRadiusKm(),
+		"experience_years":   m.GetExperienceYears(),
+		"specializations":    m.GetSpecializations(),
+		"hourly_rate":        m.GetHourlyRate(),
+		"availability_json":  m.GetAvailabilityJson(),
+		"payout_legal_form":  m.GetPayoutLegalForm(),
+		"status":             m.GetStatus(),
+		"moderation_comment": m.GetModerationComment(),
+		"services":           svcs,
+		"photos":             photos,
+	}
+	if m.GetCreatedAt() != nil {
+		out["created_at"] = m.GetCreatedAt().AsTime().Format("2006-01-02T15:04:05Z07:00")
+	}
+	if m.GetUpdatedAt() != nil {
+		out["updated_at"] = m.GetUpdatedAt().AsTime().Format("2006-01-02T15:04:05Z07:00")
+	}
+	if m.ModeratedBy != nil {
+		out["moderated_by"] = *m.ModeratedBy
+	}
+	if m.ModeratedAt != nil {
+		out["moderated_at"] = m.GetModeratedAt().AsTime().Format("2006-01-02T15:04:05Z07:00")
+	}
+	return out
+}
+
+func masterProtoToJSONPublic(m *masterv1.Master) map[string]any {
+	out := masterProtoToJSON(m)
+	delete(out, "payout_legal_form")
+	return out
+}
+
+// ListPublic GET /api/v1/masters
+func (h *MasterHandler) ListPublic(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	limit, _ := strconv.Atoi(q.Get("limit"))
+	off, _ := strconv.Atoi(q.Get("offset"))
+	resp, err := h.client.ListPublicMasters(r.Context(), &masterv1.ListPublicMastersRequest{
+		City:   q.Get("city"),
+		Limit:  int32(limit),
+		Offset: int32(off),
+	})
+	if err != nil {
+		grpcErrorToHTTP(w, err)
+		return
+	}
+	list := make([]map[string]any, 0, len(resp.GetMasters()))
+	for _, m := range resp.GetMasters() {
+		list = append(list, masterProtoToJSONPublic(m))
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"masters": list, "total": resp.GetTotal()})
+}
+
+// GetPublic GET /api/v1/masters/{slug}
+func (h *MasterHandler) GetPublic(w http.ResponseWriter, r *http.Request) {
+	slug := chi.URLParam(r, "slug")
+	resp, err := h.client.GetPublicMaster(r.Context(), &masterv1.GetPublicMasterRequest{Slug: slug})
+	if err != nil {
+		grpcErrorToHTTP(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, masterProtoToJSONPublic(resp.GetMaster()))
+}
+
+// CreateMyProfile POST /api/v1/owner/master/profile
+func (h *MasterHandler) CreateMyProfile(w http.ResponseWriter, r *http.Request) {
+	uid := middleware.UserIDFromCtx(r.Context())
+	if uid == "" {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
+	var body struct {
+		DisplayName string `json:"display_name"`
+	}
+	if err := readJSON(r, &body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+		return
+	}
+	resp, err := h.client.CreateMyProfile(r.Context(), &masterv1.CreateMyProfileRequest{
+		UserId:      uid,
+		DisplayName: strings.TrimSpace(body.DisplayName),
+	})
+	if err != nil {
+		grpcErrorToHTTP(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, masterProtoToJSON(resp.GetMaster()))
+}
+
+// GetMyProfile GET /api/v1/owner/master/profile
+// Всегда 200: { "profile": <object|null> } — отсутствие профиля не считается HTTP-ошибкой.
+func (h *MasterHandler) GetMyProfile(w http.ResponseWriter, r *http.Request) {
+	uid := middleware.UserIDFromCtx(r.Context())
+	if uid == "" {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
+	resp, err := h.client.GetMyProfile(r.Context(), &masterv1.GetMyProfileRequest{UserId: uid})
+	if err != nil {
+		if st, ok := status.FromError(err); ok && st.Code() == codes.NotFound {
+			writeJSON(w, http.StatusOK, map[string]any{"profile": nil})
+			return
+		}
+		grpcErrorToHTTP(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"profile": masterProtoToJSON(resp.GetMaster())})
+}
+
+type masterServicePatch struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	DurationMin int32  `json:"duration_min"`
+	Price       int64  `json:"price"`
+	SortOrder   int32  `json:"sort_order"`
+}
+
+// updateReqFromRaw builds gRPC UpdateMyProfileRequest from JSON fields (same rules as PATCH body).
+func (h *MasterHandler) updateReqFromRaw(uid string, raw map[string]json.RawMessage) (*masterv1.UpdateMyProfileRequest, error) {
+	req := &masterv1.UpdateMyProfileRequest{UserId: uid}
+
+	setString := func(key string, field **string) {
+		if v, ok := raw[key]; ok {
+			var s string
+			if err := json.Unmarshal(v, &s); err == nil {
+				*field = proto.String(s)
+			}
+		}
+	}
+	setInt32 := func(key string, field **int32) {
+		if v, ok := raw[key]; ok {
+			var n int32
+			if err := json.Unmarshal(v, &n); err == nil {
+				*field = proto.Int32(n)
+			}
+		}
+	}
+	setInt64 := func(key string, field **int64) {
+		if v, ok := raw[key]; ok {
+			var n int64
+			if err := json.Unmarshal(v, &n); err == nil {
+				*field = proto.Int64(n)
+			}
+		}
+	}
+	var dn, bio, phone, city, wf, avj, plf *string
+	var tr, ex *int32
+	var hr *int64
+	setString("display_name", &dn)
+	setString("bio", &bio)
+	setString("phone", &phone)
+	setString("city", &city)
+	setString("work_format", &wf)
+	setString("availability_json", &avj)
+	setString("payout_legal_form", &plf)
+	setInt32("travel_radius_km", &tr)
+	setInt32("experience_years", &ex)
+	setInt64("hourly_rate", &hr)
+	req.DisplayName = dn
+	req.Bio = bio
+	req.Phone = phone
+	req.City = city
+	req.WorkFormat = wf
+	req.AvailabilityJson = avj
+	req.TravelRadiusKm = tr
+	req.ExperienceYears = ex
+	req.HourlyRate = hr
+	req.PayoutLegalForm = plf
+
+	if _, ok := raw["specializations"]; ok {
+		req.ApplySpecializations = true
+		var specs []string
+		_ = json.Unmarshal(raw["specializations"], &specs)
+		req.Specializations = specs
+	}
+	if v, ok := raw["services"]; ok {
+		var items []masterServicePatch
+		if err := json.Unmarshal(v, &items); err != nil {
+			return nil, errors.New("invalid services")
+		}
+		// Пустой массив не заменяет услуги в БД (иначе легко получить 0 услуг и 400 при отправке на модерацию).
+		if len(items) > 0 {
+			req.ApplyServicesReplace = true
+			for _, it := range items {
+				inp := &masterv1.MasterServiceItemInput{
+					Name:        it.Name,
+					Description: it.Description,
+					DurationMin: it.DurationMin,
+					Price:       it.Price,
+					SortOrder:   it.SortOrder,
+				}
+				if it.ID != "" {
+					inp.Id = proto.String(it.ID)
+				}
+				req.ServicesReplace = append(req.ServicesReplace, inp)
+			}
+		}
+	}
+	return req, nil
+}
+
+// PatchMyProfile PATCH /api/v1/owner/master/profile
+func (h *MasterHandler) PatchMyProfile(w http.ResponseWriter, r *http.Request) {
+	uid := middleware.UserIDFromCtx(r.Context())
+	if uid == "" {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
+	var raw map[string]json.RawMessage
+	if err := readJSON(r, &raw); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+		return
+	}
+	req, err := h.updateReqFromRaw(uid, raw)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+
+	resp, err := h.client.UpdateMyProfile(r.Context(), req)
+	if err != nil {
+		grpcErrorToHTTP(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, masterProtoToJSON(resp.GetMaster()))
+}
+
+// SubmitForReview POST /api/v1/owner/master/profile/submit-for-review
+// Тело — те же поля, что у PATCH (опционально). Если переданы — сначала сохраняются, затем отправка на модерацию (одна сессия, без гонки с отдельным PATCH).
+func (h *MasterHandler) SubmitForReview(w http.ResponseWriter, r *http.Request) {
+	uid := middleware.UserIDFromCtx(r.Context())
+	if uid == "" {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
+	bodyBytes, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<20))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid body"})
+		return
+	}
+	trimmed := bytes.TrimSpace(bodyBytes)
+	if len(trimmed) > 0 {
+		var raw map[string]json.RawMessage
+		if err := json.Unmarshal(trimmed, &raw); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+			return
+		}
+		if len(raw) > 0 {
+			upd, err := h.updateReqFromRaw(uid, raw)
+			if err != nil {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+				return
+			}
+			if _, err := h.client.UpdateMyProfile(r.Context(), upd); err != nil {
+				grpcErrorToHTTP(w, err)
+				return
+			}
+		}
+	}
+	resp, err := h.client.SubmitForReview(r.Context(), &masterv1.SubmitMasterForReviewRequest{UserId: uid})
+	if err != nil {
+		grpcErrorToHTTP(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, masterProtoToJSON(resp.GetMaster()))
+}
+
+// ListMyBookings GET /api/v1/owner/master/bookings
+func (h *MasterHandler) ListMyBookings(w http.ResponseWriter, r *http.Request) {
+	uid := middleware.UserIDFromCtx(r.Context())
+	if uid == "" {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
+	resp, err := h.client.ListMyMasterBookings(r.Context(), &masterv1.ListMyMasterBookingsRequest{
+		UserId:        uid,
+		StatusFilter:  r.URL.Query().Get("status"),
+	})
+	if err != nil {
+		grpcErrorToHTTP(w, err)
+		return
+	}
+	out := make([]map[string]any, 0, len(resp.GetBookings()))
+	for _, b := range resp.GetBookings() {
+		out = append(out, map[string]any{
+			"id":                b.GetId(),
+			"master_id":         b.GetMasterId(),
+			"client_user_id":    b.GetClientUserId(),
+			"master_service_id": b.GetMasterServiceId(),
+			"date":              b.GetDate(),
+			"time_from":         b.GetTimeFrom(),
+			"time_to":           b.GetTimeTo(),
+			"comment":           b.GetComment(),
+			"status":            b.GetStatus(),
+			"created_at":        b.GetCreatedAt().AsTime().Format("2006-01-02T15:04:05Z07:00"),
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"bookings": out})
+}
+
+// CreateBooking POST /api/v1/masters/{slug}/bookings
+func (h *MasterHandler) CreateBooking(w http.ResponseWriter, r *http.Request) {
+	uid := middleware.UserIDFromCtx(r.Context())
+	if uid == "" {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
+	slug := chi.URLParam(r, "slug")
+	var body struct {
+		MasterServiceID string `json:"master_service_id"`
+		Date            string `json:"date"`
+		TimeFrom        string `json:"time_from"`
+		TimeTo          string `json:"time_to"`
+		Comment         string `json:"comment"`
+	}
+	if err := readJSON(r, &body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+		return
+	}
+	grpcReq := &masterv1.CreateMasterBookingRequest{
+		ClientUserId: uid,
+		MasterSlug:   slug,
+		Date:         body.Date,
+		TimeFrom:     body.TimeFrom,
+		TimeTo:       body.TimeTo,
+		Comment:      body.Comment,
+	}
+	if body.MasterServiceID != "" {
+		grpcReq.MasterServiceId = proto.String(body.MasterServiceID)
+	}
+	resp, err := h.client.CreateMasterBooking(r.Context(), grpcReq)
+	if err != nil {
+		grpcErrorToHTTP(w, err)
+		return
+	}
+	b := resp.GetBooking()
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"id":                b.GetId(),
+		"master_id":         b.GetMasterId(),
+		"client_user_id":    b.GetClientUserId(),
+		"master_service_id": b.GetMasterServiceId(),
+		"date":              b.GetDate(),
+		"time_from":         b.GetTimeFrom(),
+		"time_to":           b.GetTimeTo(),
+		"comment":           b.GetComment(),
+		"status":            b.GetStatus(),
+		"created_at":        b.GetCreatedAt().AsTime().Format("2006-01-02T15:04:05Z07:00"),
+	})
+}
+
+// ListForModeration GET /api/v1/admin/masters
+func (h *MasterHandler) ListForModeration(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	limit, _ := strconv.Atoi(q.Get("limit"))
+	off, _ := strconv.Atoi(q.Get("offset"))
+	resp, err := h.client.ListForModeration(r.Context(), &masterv1.ListForModerationRequest{
+		StatusFilter: q.Get("status"),
+		Limit:        int32(limit),
+		Offset:       int32(off),
+	})
+	if err != nil {
+		grpcErrorToHTTP(w, err)
+		return
+	}
+	list := make([]map[string]any, 0, len(resp.GetMasters()))
+	for _, m := range resp.GetMasters() {
+		list = append(list, masterProtoToJSON(m))
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"masters": list, "total": resp.GetTotal()})
+}
+
+// Moderate POST /api/v1/admin/masters/{id}/moderate
+func (h *MasterHandler) Moderate(w http.ResponseWriter, r *http.Request) {
+	modID := middleware.UserIDFromCtx(r.Context())
+	if modID == "" {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		return
+	}
+	id := chi.URLParam(r, "id")
+	var body struct {
+		Action  string `json:"action"`
+		Comment string `json:"comment"`
+	}
+	if err := readJSON(r, &body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+		return
+	}
+	resp, err := h.client.ModerateMaster(r.Context(), &masterv1.ModerateMasterRequest{
+		MasterId:     id,
+		ModeratorId:  modID,
+		Action:       body.Action,
+		Comment:      body.Comment,
+	})
+	if err != nil {
+		grpcErrorToHTTP(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, masterProtoToJSON(resp.GetMaster()))
+}
+
+// ModerationHistory GET /api/v1/admin/masters/{id}/moderation-history
+func (h *MasterHandler) ModerationHistory(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	lim, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	resp, err := h.client.ListModerationHistory(r.Context(), &masterv1.ListModerationHistoryRequest{
+		MasterId: id,
+		Limit:    int32(lim),
+	})
+	if err != nil {
+		grpcErrorToHTTP(w, err)
+		return
+	}
+	entries := make([]map[string]any, 0, len(resp.GetEntries()))
+	for _, e := range resp.GetEntries() {
+		entries = append(entries, map[string]any{
+			"id":         e.GetId(),
+			"master_id":  e.GetMasterId(),
+			"old_status": e.GetOldStatus(),
+			"new_status": e.GetNewStatus(),
+			"comment":    e.GetComment(),
+			"changed_by": e.GetChangedBy(),
+			"created_at": e.GetCreatedAt().AsTime().Format("2006-01-02T15:04:05Z07:00"),
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"entries": entries})
+}

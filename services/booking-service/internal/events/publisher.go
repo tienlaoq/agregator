@@ -37,6 +37,10 @@ func (p *Publisher) PublishBookingCancelled(ctx context.Context, b *domain.Booki
 	return p.publish("booking.cancelled", b)
 }
 
+func (p *Publisher) PublishBookingCompleted(ctx context.Context, b *domain.Booking) error {
+	return p.publish("booking.completed", b)
+}
+
 func (p *Publisher) publish(subject string, b *domain.Booking) error {
 	data, err := json.Marshal(bookingEvent{
 		BookingID: b.ID,

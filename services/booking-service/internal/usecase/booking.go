@@ -3,6 +3,7 @@ package usecase
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"google.golang.org/grpc/codes"
@@ -18,13 +19,15 @@ type EventPublisher interface {
 	PublishBookingCreated(ctx context.Context, b *domain.Booking) error
 	PublishBookingConfirmed(ctx context.Context, b *domain.Booking) error
 	PublishBookingCancelled(ctx context.Context, b *domain.Booking) error
+	PublishBookingCompleted(ctx context.Context, b *domain.Booking) error
 }
 
 type BookingUseCase struct {
-	repo          domain.BookingRepository
-	venueClient   venuev1.VenueServiceClient
-	paymentClient paymentv1.PaymentServiceClient
-	publisher     EventPublisher
+	repo           domain.BookingRepository
+	venueClient    venuev1.VenueServiceClient
+	paymentClient  paymentv1.PaymentServiceClient
+	publisher      EventPublisher
+	visitTimeZone  string
 }
 
 func NewBookingUseCase(
@@ -32,12 +35,17 @@ func NewBookingUseCase(
 	venueClient venuev1.VenueServiceClient,
 	paymentClient paymentv1.PaymentServiceClient,
 	publisher EventPublisher,
+	visitTimeZone string,
 ) *BookingUseCase {
+	if visitTimeZone == "" {
+		visitTimeZone = "Europe/Moscow"
+	}
 	return &BookingUseCase{
 		repo:          repo,
 		venueClient:   venueClient,
 		paymentClient: paymentClient,
 		publisher:     publisher,
+		visitTimeZone: visitTimeZone,
 	}
 }
 
@@ -54,6 +62,34 @@ type CreateBookingInput struct {
 }
 
 func (uc *BookingUseCase) CreateBooking(ctx context.Context, in CreateBookingInput) (*domain.Booking, error) {
+	if strings.TrimSpace(in.TimeTo) == "" {
+		return nil, pkgerr.InvalidArgument("укажите время окончания визита")
+	}
+
+	vResp, err := uc.venueClient.GetVenue(ctx, &venuev1.GetVenueRequest{Id: in.VenueID})
+	if err != nil {
+		return nil, fmt.Errorf("get venue: %w", err)
+	}
+	if vResp == nil {
+		return nil, pkgerr.NotFound("заведение не найдено")
+	}
+
+	minutes, err := slotDurationMinutes(in.TimeFrom, in.TimeTo)
+	if err != nil {
+		return nil, err
+	}
+	if minutes < 30 {
+		return nil, pkgerr.InvalidArgument("минимальная длительность брони 30 минут")
+	}
+	if minutes > 720 {
+		return nil, pkgerr.InvalidArgument("максимальная длительность брони 12 часов")
+	}
+
+	totalPrice, err := computeBookingTotalPrice(vResp, in.ServiceID, minutes)
+	if err != nil {
+		return nil, err
+	}
+
 	slotResp, err := uc.venueClient.CheckSlotAvailability(ctx, &venuev1.CheckSlotRequest{
 		VenueId:  in.VenueID,
 		Date:     in.Date,
@@ -64,7 +100,7 @@ func (uc *BookingUseCase) CreateBooking(ctx context.Context, in CreateBookingInp
 		return nil, fmt.Errorf("check slot: %w", err)
 	}
 	if !slotResp.Available {
-		return nil, pkgerr.InvalidArgument("selected time slot is not available")
+		return nil, pkgerr.InvalidArgument("выбранное время уже занято, выберите другое")
 	}
 
 	dateParsed, err := time.Parse("2006-01-02", in.Date)
@@ -72,17 +108,32 @@ func (uc *BookingUseCase) CreateBooking(ctx context.Context, in CreateBookingInp
 		return nil, pkgerr.InvalidArgument("invalid date format, expected YYYY-MM-DD")
 	}
 
+	loc, lerr := time.LoadLocation(uc.visitTimeZone)
+	if lerr != nil {
+		loc = time.UTC
+	}
+	now := time.Now().In(loc)
+	todayStart := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc)
+	visitStart := time.Date(
+		dateParsed.Year(), dateParsed.Month(), dateParsed.Day(),
+		0, 0, 0, 0, loc,
+	)
+	if visitStart.Before(todayStart) {
+		return nil, pkgerr.InvalidArgument("дата визита не может быть в прошлом")
+	}
+
 	b := &domain.Booking{
-		UserID:    in.UserID,
-		VenueID:   in.VenueID,
-		VenueName: in.VenueName,
-		ServiceID: in.ServiceID,
-		Date:      dateParsed,
-		TimeFrom:  in.TimeFrom,
-		TimeTo:    in.TimeTo,
-		Guests:    in.Guests,
-		Comment:   in.Comment,
-		Status:    "pending",
+		UserID:     in.UserID,
+		VenueID:    in.VenueID,
+		VenueName:  in.VenueName,
+		ServiceID:  in.ServiceID,
+		Date:       dateParsed,
+		TimeFrom:   in.TimeFrom,
+		TimeTo:     in.TimeTo,
+		Guests:     in.Guests,
+		Comment:    in.Comment,
+		Status:     "pending",
+		TotalPrice: totalPrice,
 	}
 	if err := uc.repo.Create(ctx, b); err != nil {
 		return nil, fmt.Errorf("create booking: %w", err)
@@ -96,6 +147,10 @@ func (uc *BookingUseCase) CreateBooking(ctx context.Context, in CreateBookingInp
 		TimeTo:    in.TimeTo,
 	})
 	if err != nil {
+		_ = uc.repo.Delete(ctx, b.ID)
+		if st, ok := status.FromError(err); ok && st.Code() == codes.InvalidArgument {
+			return nil, pkgerr.InvalidArgument("выбранное время уже занято, выберите другое")
+		}
 		return nil, fmt.Errorf("reserve slot: %w", err)
 	}
 
@@ -106,6 +161,11 @@ func (uc *BookingUseCase) CreateBooking(ctx context.Context, in CreateBookingInp
 		IdempotencyKey: b.ID,
 	})
 	if err != nil {
+		_, _ = uc.venueClient.ReleaseSlot(ctx, &venuev1.ReleaseSlotRequest{
+			VenueId:   in.VenueID,
+			BookingId: b.ID,
+		})
+		_ = uc.repo.Delete(ctx, b.ID)
 		return nil, fmt.Errorf("create payment: %w", err)
 	}
 
@@ -179,18 +239,34 @@ func (uc *BookingUseCase) CancelBooking(ctx context.Context, id, userID string) 
 }
 
 func (uc *BookingUseCase) ConfirmBooking(ctx context.Context, id, paymentID string) error {
-	if err := uc.repo.SetPaymentID(ctx, id, paymentID); err != nil {
-		return fmt.Errorf("set payment id: %w", err)
-	}
-	if err := uc.repo.UpdateStatus(ctx, id, "confirmed"); err != nil {
+	b, err := uc.repo.GetByID(ctx, id)
+	if err != nil {
 		return err
 	}
-
-	b, err := uc.repo.GetByID(ctx, id)
-	if err == nil {
+	switch b.Status {
+	case "confirmed", "completed", "cancelled":
+		return nil
+	case "payment_pending":
+		if b.PaymentID != "" && b.PaymentID != paymentID {
+			return pkgerr.InvalidArgument("payment does not match booking")
+		}
+		if b.PaymentID == "" {
+			if err := uc.repo.SetPaymentID(ctx, id, paymentID); err != nil {
+				return fmt.Errorf("set payment id: %w", err)
+			}
+		}
+		if err := uc.repo.UpdateStatus(ctx, id, "confirmed"); err != nil {
+			return err
+		}
+		b, err = uc.repo.GetByID(ctx, id)
+		if err != nil {
+			return err
+		}
 		_ = uc.publisher.PublishBookingConfirmed(ctx, b)
+		return nil
+	default:
+		return pkgerr.InvalidArgument("booking cannot be confirmed from current status")
 	}
-	return nil
 }
 
 func (uc *BookingUseCase) CompleteBooking(ctx context.Context, id string) (*domain.Booking, error) {
@@ -200,6 +276,9 @@ func (uc *BookingUseCase) CompleteBooking(ctx context.Context, id string) (*doma
 	}
 	if b.Status != "confirmed" {
 		return nil, pkgerr.InvalidArgument("only confirmed bookings can be completed")
+	}
+	if b.PaymentID == "" {
+		return nil, pkgerr.InvalidArgument("booking has no payment")
 	}
 	if err := uc.repo.UpdateStatus(ctx, id, "completed"); err != nil {
 		return nil, err
@@ -217,7 +296,7 @@ func (uc *BookingUseCase) CancelBookingByPayment(ctx context.Context, bookingID 
 		}
 		return err
 	}
-	if b.Status == "cancelled" || b.Status == "completed" {
+	if b.Status != "payment_pending" {
 		return nil
 	}
 
@@ -237,4 +316,60 @@ func (uc *BookingUseCase) CancelBookingByPayment(ctx context.Context, bookingID 
 
 func (uc *BookingUseCase) HasCompletedBooking(ctx context.Context, userID, venueID string) (bool, error) {
 	return uc.repo.HasCompleted(ctx, userID, venueID)
+}
+
+func slotDurationMinutes(timeFrom, timeTo string) (int, error) {
+	tf, err := time.Parse("15:04", timeFrom)
+	if err != nil {
+		return 0, pkgerr.InvalidArgument("неверное время начала, ожидается ЧЧ:ММ")
+	}
+	tt, err := time.Parse("15:04", timeTo)
+	if err != nil {
+		return 0, pkgerr.InvalidArgument("неверное время окончания, ожидается ЧЧ:ММ")
+	}
+	if !tt.After(tf) {
+		return 0, pkgerr.InvalidArgument("время окончания должно быть позже времени начала")
+	}
+	return int(tt.Sub(tf).Minutes()), nil
+}
+
+func hourlyTotal(priceFrom int64, minutes int) int64 {
+	if minutes <= 0 || priceFrom <= 0 {
+		return 0
+	}
+	h := (minutes + 59) / 60
+	if h < 1 {
+		h = 1
+	}
+	return priceFrom * int64(h)
+}
+
+func computeBookingTotalPrice(v *venuev1.VenueResponse, serviceID string, minutes int) (int64, error) {
+	sid := strings.TrimSpace(serviceID)
+	if sid != "" {
+		for _, s := range v.GetServices() {
+			if s.GetId() != sid {
+				continue
+			}
+			if p := s.GetPrice(); p > 0 {
+				return p, nil
+			}
+			return hourlyTotal(v.GetPriceFrom(), minutes), nil
+		}
+		return 0, pkgerr.InvalidArgument("выбранная услуга не найдена у этого заведения")
+	}
+	return hourlyTotal(v.GetPriceFrom(), minutes), nil
+}
+
+// AutoCompletePastVisits переводит confirmed → completed после окончания слота (date+time_to) в visitTimeZone.
+func (uc *BookingUseCase) AutoCompletePastVisits(ctx context.Context) (int, error) {
+	refs, err := uc.repo.AutoCompleteVisitEnded(ctx, uc.visitTimeZone)
+	if err != nil {
+		return 0, err
+	}
+	for _, ref := range refs {
+		b := &domain.Booking{ID: ref.ID, UserID: ref.UserID, VenueID: ref.VenueID, Status: "completed"}
+		_ = uc.publisher.PublishBookingCompleted(ctx, b)
+	}
+	return len(refs), nil
 }

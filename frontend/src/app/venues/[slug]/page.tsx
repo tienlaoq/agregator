@@ -1,9 +1,10 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useEffect, useMemo, useState } from "react"
 import { useParams } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Label } from "@/components/ui/label"
 import { Badge } from "@/components/ui/badge"
 import { Calendar } from "@/components/ui/calendar"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
@@ -16,7 +17,7 @@ import {
 } from "@/components/ui/select"
 import { Progress } from "@/components/ui/progress"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
-import { format } from "date-fns"
+import { format, isBefore, startOfDay } from "date-fns"
 import { ru } from "date-fns/locale"
 import {
   Star,
@@ -29,12 +30,131 @@ import {
   ShieldCheck,
   ImageIcon,
   ArrowLeft,
+  ChevronLeft,
+  ChevronRight,
+  ExternalLink,
 } from "lucide-react"
 import Link from "next/link"
-import { getVenueBySlug, getVenueReviews, createBooking } from "@/lib/api"
+import {
+  createBooking,
+  formatApiErrorMessage,
+  getVenueAvailability,
+  getVenueBySlug,
+  getVenueReviews,
+  venueMediaUrl,
+} from "@/lib/api"
 import type { Venue, Review } from "@/lib/types"
-import { VENUE_TYPE_LABELS } from "@/lib/types"
+import {
+  VENUE_SOCIAL_PUBLIC_LABELS,
+  VENUE_TYPE_LABELS,
+  venueServiceDurationMinutes,
+  type VenueSocialLinkKey,
+} from "@/lib/types"
 import { useAuthStore } from "@/store/auth"
+import { cn } from "@/lib/utils"
+
+function socialHref(url: string): string {
+  const u = url.trim()
+  if (!u) return "#"
+  if (/^https?:\/\//i.test(u)) return u
+  return `https://${u}`
+}
+
+function hhmmToMinutes(s: string): number | null {
+  const m = s.match(/^(\d{1,2}):(\d{2})$/)
+  if (!m) return null
+  const h = parseInt(m[1], 10)
+  const min = parseInt(m[2], 10)
+  if (
+    !Number.isFinite(h) ||
+    !Number.isFinite(min) ||
+    min < 0 ||
+    min > 59 ||
+    h < 0 ||
+    h > 23
+  ) {
+    return null
+  }
+  return h * 60 + min
+}
+
+/** Сетка «время начала»: 10:00–22:00 с шагом 30 мин (совпадает с api-gateway). */
+function thirtyMinuteStartGridFrom10To22(): string[] {
+  const out: string[] = []
+  for (let m = 10 * 60; m <= 22 * 60; m += 30) {
+    out.push(
+      `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`,
+    )
+  }
+  return out
+}
+
+/** Окончание визита в тот же день: от +30 мин до +12 ч, шаг 30 минут. */
+function endTimeOptionsThirtyMinutes(startHHMM: string): string[] {
+  const startTotal = hhmmToMinutes(startHHMM)
+  if (startTotal == null) return []
+  const out: string[] = []
+  for (let delta = 30; delta <= 720; delta += 30) {
+    const total = startTotal + delta
+    if (total >= 24 * 60) break
+    const eh = Math.floor(total / 60)
+    const em = total % 60
+    out.push(`${String(eh).padStart(2, "0")}:${String(em).padStart(2, "0")}`)
+  }
+  return out
+}
+
+function defaultEndTimeForDuration(
+  startHHMM: string,
+  preferredDurMin: number,
+): string {
+  const opts = endTimeOptionsThirtyMinutes(startHHMM)
+  if (opts.length === 0) return ""
+  const startM = hhmmToMinutes(startHHMM)
+  if (startM == null) return opts[0] ?? ""
+  const need = Math.max(30, Math.min(720, preferredDurMin))
+  for (const o of opts) {
+    const om = hhmmToMinutes(o)
+    if (om != null && om - startM >= need) return o
+  }
+  return opts[opts.length - 1] ?? ""
+}
+
+/** Длина интервала в минутах (тот же день, to > from). */
+function slotLengthMinutes(from: string, to: string): number | null {
+  const [fh, fm] = from.split(":").map((x) => parseInt(x, 10))
+  const [th, tm] = to.split(":").map((x) => parseInt(x, 10))
+  if (![fh, fm, th, tm].every((n) => Number.isFinite(n))) return null
+  const v = th * 60 + tm - (fh * 60 + fm)
+  return v > 0 ? v : null
+}
+
+/** Слайды карусели: порядок как в кабинете (обложка → sort_order), без дублей по URL. */
+function venueCarouselSlides(venue: Venue): { id: string; src: string }[] {
+  const seen = new Set<string>()
+  const out: { id: string; src: string }[] = []
+
+  const sorted = [...(venue.photos ?? [])].sort((a, b) => {
+    if (Boolean(a.is_cover) !== Boolean(b.is_cover)) return a.is_cover ? -1 : 1
+    return (a.sort_order ?? 0) - (b.sort_order ?? 0)
+  })
+  for (const p of sorted) {
+    const src = venueMediaUrl(p.url)
+    if (!src || seen.has(src)) continue
+    seen.add(src)
+    out.push({ id: p.id, src })
+  }
+
+  const legacy = venue.image_url?.trim()
+  if (legacy) {
+    const src = venueMediaUrl(legacy)
+    if (src && !seen.has(src)) {
+      out.push({ id: "legacy-image-url", src })
+    }
+  }
+
+  return out
+}
 
 export default function VenueDetailPage() {
   const params = useParams()
@@ -48,9 +168,62 @@ export default function VenueDetailPage() {
 
   const [date, setDate] = useState<Date>()
   const [time, setTime] = useState("")
+  const [timeTo, setTimeTo] = useState("")
+  /** «none» — почасовая оплата по price_from; иначе id услуги */
+  const [serviceId, setServiceId] = useState<string>("none")
   const [guests, setGuests] = useState(2)
   const [booking, setBooking] = useState(false)
   const [bookingMsg, setBookingMsg] = useState("")
+  const [availableSlots, setAvailableSlots] = useState<string[]>([])
+  const [slotsLoading, setSlotsLoading] = useState(false)
+  const [galleryIndex, setGalleryIndex] = useState(0)
+
+  const slotDurationMin = useMemo(() => {
+    if (time && timeTo) {
+      const m = slotLengthMinutes(time, timeTo)
+      if (m != null && m >= 30 && m <= 720) return m
+    }
+    if (serviceId !== "none" && venue) {
+      const s = venue.services?.find((x) => x.id === serviceId)
+      if (s) {
+        const d = venueServiceDurationMinutes(s)
+        return Math.min(720, Math.max(30, d > 0 ? d : 120))
+      }
+    }
+    return 120
+  }, [time, timeTo, serviceId, venue])
+
+  const slotValid = useMemo(() => {
+    if (!time || !timeTo) return false
+    const m = slotLengthMinutes(time, timeTo)
+    return m != null && m >= 30 && m <= 720 && m % 30 === 0
+  }, [time, timeTo])
+
+  const visitEndOptions = useMemo(() => endTimeOptionsThirtyMinutes(time), [time])
+
+  const startTimeGrid = useMemo(() => thirtyMinuteStartGridFrom10To22(), [])
+  const availableStartSet = useMemo(
+    () => new Set(availableSlots),
+    [availableSlots],
+  )
+
+  const priceHint = useMemo(() => {
+    if (!venue) return null
+    if (serviceId !== "none") {
+      const s = venue.services?.find((x) => x.id === serviceId)
+      if (s && Number(s.price) > 0) {
+        return `${Number(s.price).toLocaleString("ru-RU")} ₽`
+      }
+    }
+    if (venue.price_from > 0 && slotValid) {
+      const mins = slotLengthMinutes(time, timeTo)
+      if (mins != null) {
+        const hours = Math.ceil(mins / 60)
+        return `≈ ${(venue.price_from * hours).toLocaleString("ru-RU")} ₽`
+      }
+    }
+    return null
+  }, [venue, serviceId, time, timeTo, slotValid])
 
   useEffect(() => {
     if (!slug) return
@@ -65,20 +238,97 @@ export default function VenueDetailPage() {
       .finally(() => setLoading(false))
   }, [slug])
 
+  useEffect(() => {
+    setGalleryIndex(0)
+  }, [slug, venue?.id])
+
+  useEffect(() => {
+    setDate((d) => {
+      if (!d) return d
+      return isBefore(startOfDay(d), startOfDay(new Date())) ? undefined : d
+    })
+  }, [slug])
+
+  useEffect(() => {
+    if (!slug || !date) {
+      setAvailableSlots([])
+      return
+    }
+    const iso = format(date, "yyyy-MM-dd")
+    setSlotsLoading(true)
+    setAvailableSlots([])
+    getVenueAvailability(slug, iso, slotDurationMin)
+      .then((r) => setAvailableSlots(r.available_slots ?? []))
+      .catch(() => setAvailableSlots([]))
+      .finally(() => setSlotsLoading(false))
+  }, [slug, date, slotDurationMin])
+
+  useEffect(() => {
+    if (!time || !venue) {
+      if (!time) setTimeTo("")
+      return
+    }
+    let addMin = 120
+    if (serviceId !== "none") {
+      const s = venue.services?.find((x) => x.id === serviceId)
+      if (s) {
+        const d = venueServiceDurationMinutes(s)
+        addMin = Math.max(30, d > 0 ? d : 120)
+      }
+    }
+    setTimeTo(defaultEndTimeForDuration(time, addMin))
+  }, [time, serviceId, venue])
+
+  useEffect(() => {
+    if (!time || !timeTo || !venue) return
+    const opts = endTimeOptionsThirtyMinutes(time)
+    if (opts.length === 0 || opts.includes(timeTo)) return
+    let addMin = 120
+    if (serviceId !== "none") {
+      const s = venue.services?.find((x) => x.id === serviceId)
+      if (s) {
+        const d = venueServiceDurationMinutes(s)
+        addMin = Math.max(30, d > 0 ? d : 120)
+      }
+    }
+    setTimeTo(defaultEndTimeForDuration(time, addMin))
+  }, [time, timeTo, serviceId, venue])
+
+  useEffect(() => {
+    if (time && availableSlots.length > 0 && !availableStartSet.has(time)) {
+      setTime("")
+    }
+  }, [time, availableSlots.length, availableStartSet])
+
   const handleBook = async () => {
-    if (!venue || !date || !time) return
+    if (!venue || !date || !time || !slotValid || !timeTo) return
+    if (isBefore(startOfDay(date), startOfDay(new Date()))) {
+      setBookingMsg("Нельзя выбрать прошедшую дату.")
+      return
+    }
     setBooking(true)
     setBookingMsg("")
     try {
-      await createBooking({
+      const b = await createBooking({
         venue_id: venue.id,
         date: format(date, "yyyy-MM-dd"),
         time_from: time,
+        time_to: timeTo,
         guests,
+        ...(serviceId !== "none" ? { service_id: serviceId } : {}),
       })
+      if (b.payment_url) {
+        window.location.assign(b.payment_url)
+        return
+      }
       setBookingMsg("Бронирование создано!")
-    } catch {
-      setBookingMsg("Не удалось забронировать. Попробуйте позже.")
+    } catch (e) {
+      setBookingMsg(
+        formatApiErrorMessage(
+          e,
+          "Не удалось забронировать. Попробуйте позже.",
+        ),
+      )
     } finally {
       setBooking(false)
     }
@@ -120,6 +370,13 @@ export default function VenueDetailPage() {
   })
   const totalReviews = reviews.length
 
+  const carouselSlides = venueCarouselSlides(venue)
+  const galleryActiveIndex =
+    carouselSlides.length > 0
+      ? Math.min(galleryIndex, carouselSlides.length - 1)
+      : 0
+  const activeSlide = carouselSlides[galleryActiveIndex]
+
   return (
     <section className="bg-background py-10 md:py-16">
       <div className="container mx-auto px-4">
@@ -131,11 +388,100 @@ export default function VenueDetailPage() {
         <div className="grid gap-8 lg:grid-cols-3">
           {/* Main Content */}
           <div className="lg:col-span-2">
-            {/* Photo area */}
+            {/* Галерея: крупное фото + ряд миниатюр под ним */}
             <div className="mb-8">
-              {venue.image_url ? (
-                <div className="relative aspect-[16/9] overflow-hidden rounded-xl">
-                  <img src={venue.image_url} alt={venue.name} className="h-full w-full object-cover" />
+              {carouselSlides.length > 0 && activeSlide ? (
+                <div className="space-y-3">
+                  <div
+                    className="relative outline-none"
+                    role="region"
+                    aria-label={`Фотографии: ${venue.name}`}
+                    tabIndex={0}
+                    onKeyDown={(e) => {
+                      if (carouselSlides.length < 2) return
+                      if (e.key === "ArrowLeft") {
+                        e.preventDefault()
+                        setGalleryIndex(
+                          (i) =>
+                            (i - 1 + carouselSlides.length) %
+                            carouselSlides.length,
+                        )
+                      } else if (e.key === "ArrowRight") {
+                        e.preventDefault()
+                        setGalleryIndex((i) => (i + 1) % carouselSlides.length)
+                      }
+                    }}
+                  >
+                    <div className="relative aspect-[16/9] overflow-hidden rounded-xl bg-muted">
+                      <img
+                        src={activeSlide.src}
+                        alt={`${venue.name} — фото ${galleryActiveIndex + 1} из ${carouselSlides.length}`}
+                        className="h-full w-full object-cover"
+                      />
+                    </div>
+                    {carouselSlides.length > 1 ? (
+                      <>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="icon"
+                          className="absolute left-2 top-1/2 z-10 size-9 -translate-y-1/2 border-border/80 bg-background/90 shadow-sm hover:bg-background"
+                          aria-label="Предыдущее фото"
+                          onClick={() =>
+                            setGalleryIndex(
+                              (i) =>
+                                (i - 1 + carouselSlides.length) %
+                                carouselSlides.length,
+                            )
+                          }
+                        >
+                          <ChevronLeft className="size-5" />
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="icon"
+                          className="absolute right-2 top-1/2 z-10 size-9 -translate-y-1/2 border-border/80 bg-background/90 shadow-sm hover:bg-background"
+                          aria-label="Следующее фото"
+                          onClick={() =>
+                            setGalleryIndex(
+                              (i) => (i + 1) % carouselSlides.length,
+                            )
+                          }
+                        >
+                          <ChevronRight className="size-5" />
+                        </Button>
+                      </>
+                    ) : null}
+                  </div>
+                  <div
+                    className="flex gap-2 overflow-x-auto pb-1 pt-0.5 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+                    role="tablist"
+                    aria-label="Миниатюры фотографий"
+                  >
+                    {carouselSlides.map((slide, i) => (
+                      <button
+                        key={slide.id}
+                        type="button"
+                        role="tab"
+                        aria-selected={i === galleryActiveIndex}
+                        aria-label={`Фото ${i + 1}`}
+                        onClick={() => setGalleryIndex(i)}
+                        className={cn(
+                          "relative h-16 w-16 shrink-0 overflow-hidden rounded-md bg-muted transition-[opacity,box-shadow]",
+                          i === galleryActiveIndex
+                            ? "ring-2 ring-primary ring-offset-2 ring-offset-background"
+                            : "opacity-90 hover:opacity-100",
+                        )}
+                      >
+                        <img
+                          src={slide.src}
+                          alt=""
+                          className="h-full w-full object-cover"
+                        />
+                      </button>
+                    ))}
+                  </div>
                 </div>
               ) : (
                 <div className="flex aspect-[16/9] items-center justify-center rounded-xl bg-muted">
@@ -173,6 +519,36 @@ export default function VenueDetailPage() {
                     {venue.phone}
                   </div>
                 )}
+                {venue.social_links &&
+                  typeof venue.social_links === "object" &&
+                  !Array.isArray(venue.social_links) && (
+                    <div className="mt-1 flex flex-wrap gap-x-4 gap-y-2">
+                      {(Object.entries(venue.social_links) as [string, unknown][])
+                        .filter(
+                          ([, u]) =>
+                            typeof u === "string" && u.trim().length > 0,
+                        )
+                        .map(([key, u]) => {
+                          const url = String(u).trim()
+                          const label =
+                            VENUE_SOCIAL_PUBLIC_LABELS[
+                              key as VenueSocialLinkKey
+                            ] ?? key
+                          return (
+                            <a
+                              key={key}
+                              href={socialHref(url)}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="inline-flex items-center gap-1.5 text-sm font-medium text-primary hover:underline"
+                            >
+                              <ExternalLink className="h-4 w-4 shrink-0" />
+                              {label}
+                            </a>
+                          )
+                        })}
+                    </div>
+                  )}
               </div>
             </div>
 
@@ -203,8 +579,10 @@ export default function VenueDetailPage() {
                       <CardContent className="flex items-center justify-between p-4">
                         <div>
                           <p className="font-medium text-card-foreground">{svc.name}</p>
-                          {svc.duration_minutes > 0 && (
-                            <p className="text-sm text-muted-foreground">{svc.duration_minutes} мин</p>
+                          {venueServiceDurationMinutes(svc) > 0 && (
+                            <p className="text-sm text-muted-foreground">
+                              {venueServiceDurationMinutes(svc)} мин
+                            </p>
                           )}
                         </div>
                         {svc.price > 0 && (
@@ -219,17 +597,85 @@ export default function VenueDetailPage() {
               </div>
             )}
 
-            {/* Amenities */}
-            {venue.amenities && venue.amenities.length > 0 && (
+            {/* Залы */}
+            {venue.halls && venue.halls.length > 0 ? (
+              <div className="mb-8">
+                <h2 className="mb-4 text-xl font-semibold text-foreground">Залы</h2>
+                <div className="space-y-6">
+                  {venue.halls.map((hall) => {
+                    const hPhotos = [...(hall.photos ?? [])].sort(
+                      (a, b) =>
+                        (a.sort_order ?? 0) - (b.sort_order ?? 0),
+                    )
+                    return (
+                      <Card key={hall.id} className="border-border overflow-hidden">
+                        <CardContent className="p-0">
+                          {hPhotos.length > 0 ? (
+                            <div className="grid grid-cols-2 gap-0.5 sm:grid-cols-3 md:grid-cols-4">
+                              {hPhotos.slice(0, 8).map((p) => (
+                                <div
+                                  key={p.id}
+                                  className="relative aspect-[4/3] bg-muted"
+                                >
+                                  <img
+                                    src={venueMediaUrl(p.url)}
+                                    alt=""
+                                    className="h-full w-full object-cover"
+                                  />
+                                </div>
+                              ))}
+                            </div>
+                          ) : null}
+                          <div className="space-y-3 p-4 sm:p-5">
+                            <h3 className="text-lg font-semibold text-foreground">
+                              {hall.name}
+                            </h3>
+                            <div className="flex flex-wrap gap-3 text-sm text-muted-foreground">
+                              {hall.price_from > 0 ? (
+                                <span>
+                                  от{" "}
+                                  <span className="font-semibold text-primary">
+                                    {hall.price_from.toLocaleString("ru-RU")} ₽
+                                  </span>
+                                  /час
+                                </span>
+                              ) : null}
+                              {hall.capacity > 0 ? (
+                                <span>до {hall.capacity} гостей</span>
+                              ) : null}
+                            </div>
+                            {hall.amenities && hall.amenities.length > 0 ? (
+                              <div className="flex flex-wrap gap-2">
+                                {hall.amenities.map((a) => (
+                                  <Badge
+                                    key={`${hall.id}-${a}`}
+                                    variant="secondary"
+                                    className="px-3 py-1 text-sm"
+                                  >
+                                    {a}
+                                  </Badge>
+                                ))}
+                              </div>
+                            ) : null}
+                          </div>
+                        </CardContent>
+                      </Card>
+                    )
+                  })}
+                </div>
+              </div>
+            ) : venue.amenities && venue.amenities.length > 0 ? (
               <div className="mb-8">
                 <h2 className="mb-4 text-xl font-semibold text-foreground">Удобства</h2>
                 <div className="flex flex-wrap gap-2">
                   {venue.amenities.map((a) => (
-                    <Badge key={a} variant="secondary" className="text-sm px-3 py-1">{a}</Badge>
+                    <Badge key={a} variant="secondary" className="px-3 py-1 text-sm">
+                      {a}
+                    </Badge>
                   ))}
                 </div>
               </div>
-            )}
+            ) : null}
 
             {/* Reviews */}
             <div>
@@ -357,23 +803,111 @@ export default function VenueDetailPage() {
                       </Button>
                     </PopoverTrigger>
                     <PopoverContent className="w-auto p-0" align="start">
-                      <Calendar mode="single" selected={date} onSelect={setDate} initialFocus />
+                      <Calendar
+                        mode="single"
+                        selected={date}
+                        onSelect={setDate}
+                        initialFocus
+                        disabled={(d) =>
+                          isBefore(startOfDay(d), startOfDay(new Date()))
+                        }
+                      />
                     </PopoverContent>
                   </Popover>
                 </div>
 
-                <div>
-                  <label className="mb-2 block text-sm font-medium text-card-foreground">Время</label>
-                  <Select value={time} onValueChange={setTime}>
-                    <SelectTrigger>
-                      <SelectValue placeholder="Выберите время" />
+                {venue.services && venue.services.length > 0 && (
+                  <div className="space-y-2">
+                    <Label className="text-card-foreground">Услуга</Label>
+                    <Select value={serviceId} onValueChange={setServiceId}>
+                      <SelectTrigger>
+                        <SelectValue placeholder="Как бронируете" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="none">Почасово (без пакета)</SelectItem>
+                        {venue.services.map((s) => (
+                          <SelectItem key={s.id} value={s.id}>
+                            {s.name}
+                            {Number(s.price) > 0
+                              ? ` · ${Number(s.price).toLocaleString("ru-RU")} ₽`
+                              : ""}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <p className="text-xs text-muted-foreground">
+                      Пакет — фиксированная цена; почасово — по тарифу «от N ₽/час» за выбранную длительность.
+                    </p>
+                  </div>
+                )}
+
+                <div className="space-y-2">
+                  <Label className="text-card-foreground">Время начала</Label>
+                  <Select
+                    value={time}
+                    onValueChange={setTime}
+                    disabled={!date || slotsLoading}
+                  >
+                    <SelectTrigger className="w-full font-normal">
+                      <SelectValue
+                        placeholder={
+                          !date
+                            ? "Сначала выберите дату"
+                            : slotsLoading
+                              ? "Проверяем свободные слоты…"
+                              : "Выберите время"
+                        }
+                      />
                     </SelectTrigger>
                     <SelectContent>
-                      {["10:00", "11:00", "12:00", "13:00", "14:00", "15:00", "16:00", "17:00", "18:00", "19:00", "20:00", "21:00", "22:00"].map((t) => (
-                        <SelectItem key={t} value={t}>{t}</SelectItem>
+                      {!slotsLoading && date && availableSlots.length === 0 ? (
+                        <SelectItem value="_none" disabled>
+                          Нет свободных окон на эту дату
+                        </SelectItem>
+                      ) : (
+                        startTimeGrid.map((t) => (
+                          <SelectItem
+                            key={t}
+                            value={t}
+                            disabled={!availableStartSet.has(t)}
+                          >
+                            {t}
+                          </SelectItem>
+                        ))
+                      )}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="space-y-2">
+                  <Label className="text-card-foreground">Окончание визита</Label>
+                  <Select
+                    value={timeTo}
+                    onValueChange={setTimeTo}
+                    disabled={!time || visitEndOptions.length === 0}
+                  >
+                    <SelectTrigger className="w-full font-normal">
+                      <SelectValue
+                        placeholder={
+                          !time
+                            ? "Сначала выберите начало"
+                            : "Выберите время окончания"
+                        }
+                      />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {visitEndOptions.map((t) => (
+                        <SelectItem key={t} value={t}>
+                          {t}
+                        </SelectItem>
                       ))}
                     </SelectContent>
                   </Select>
+                  {Boolean(time && timeTo && !slotValid) && (
+                    <p className="text-xs text-destructive">
+                      Проверьте интервал: длительность от 30 мин до 12 ч, шаг 30 минут.
+                    </p>
+                  )}
                 </div>
 
                 <div>
@@ -393,21 +927,24 @@ export default function VenueDetailPage() {
                 </div>
 
                 <div className="border-t border-border pt-4">
-                  {venue.price_from > 0 && (
-                    <div className="mb-4 flex items-center justify-between">
-                      <span className="text-muted-foreground">Ориентировочно</span>
-                      <span className="text-2xl font-bold text-foreground">
-                        {(venue.price_from * 2).toLocaleString("ru-RU")} ₽
-                      </span>
+                  {priceHint && (
+                    <div className="mb-4 flex items-center justify-between gap-2">
+                      <span className="text-muted-foreground">К оплате</span>
+                      <span className="text-2xl font-bold text-foreground">{priceHint}</span>
                     </div>
+                  )}
+                  {!priceHint && (
+                    <p className="mb-4 text-sm text-muted-foreground">
+                      Стоимость появится после выбора услуги или длительности.
+                    </p>
                   )}
                   <Button
                     className="w-full"
                     size="lg"
-                    disabled={!user || !date || !time || booking}
+                    disabled={!user || !date || !time || !slotValid || booking}
                     onClick={handleBook}
                   >
-                    {booking ? "Бронирование..." : "Забронировать"}
+                    {booking ? "Переход к оплате…" : "Забронировать"}
                   </Button>
                   {bookingMsg && (
                     <p className={`mt-2 text-sm text-center ${bookingMsg.includes("создано") ? "text-green-600" : "text-destructive"}`}>

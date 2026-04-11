@@ -1,7 +1,7 @@
 "use client"
 
-import { useState, useRef } from "react"
-import { useRouter } from "next/navigation"
+import { useState, useRef, useMemo } from "react"
+import { usePathname, useRouter } from "next/navigation"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
@@ -15,12 +15,13 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { Badge } from "@/components/ui/badge"
-import { register, getProfile, createVenue, ApiError } from "@/lib/api"
+import { register, createVenue, userFromRegisterResponse, ApiError } from "@/lib/api"
 import { useAuthStore } from "@/store/auth"
 import { CityCombobox } from "@/components/banya/city-combobox"
 import { AddressSuggest } from "@/components/banya/address-suggest"
 import { PhoneInput, getRawPhone } from "@/components/banya/phone-input"
-import type { CreateVenueRequest } from "@/lib/types"
+import { DEFAULT_VENUE_SOCIAL_LINKS, type CreateVenueRequest } from "@/lib/types"
+import type { PartnerCabinetRole } from "@/lib/partner-roles"
 import Link from "next/link"
 import {
   Flame,
@@ -30,7 +31,6 @@ import {
   TrendingUp,
   CalendarCheck,
   ShieldCheck,
-  Star,
   Building2,
   FileText,
   Link2,
@@ -68,6 +68,13 @@ function isOwnerVerificationComplete(
 
 export default function PartnerPage() {
   const router = useRouter()
+  const pathname = usePathname()
+  const partnerRole = useMemo<PartnerCabinetRole>(
+    () => (pathname?.startsWith("/partner/master") ? "master" : "venue_owner"),
+    [pathname],
+  )
+  const isMasterTrack = partnerRole === "master"
+
   const authLogin = useAuthStore((s) => s.login)
   const [step, setStep] = useState<Step>(1)
   const [error, setError] = useState("")
@@ -92,7 +99,7 @@ export default function PartnerPage() {
   const [contactPhone, setContactPhone] = useState("")
   const [contactPassword, setContactPassword] = useState("")
 
-  const [createdVenueSlug, setCreatedVenueSlug] = useState("")
+  const [createdVenueId, setCreatedVenueId] = useState("")
   const submittingRef = useRef(false)
 
   const handleSubmit = async () => {
@@ -107,12 +114,22 @@ export default function PartnerPage() {
         email: contactEmail,
         phone: rawPhone,
         password: contactPassword,
-        role: "venue_owner",
+        role: partnerRole,
       })
       localStorage.setItem("token", res.access_token)
       localStorage.setItem("refresh_token", res.refresh_token)
-      const user = await getProfile()
+      const user = userFromRegisterResponse(res, {
+        name: contactName,
+        email: contactEmail,
+        phone: rawPhone,
+        role: partnerRole,
+      })
       authLogin(res.access_token, res.refresh_token, user)
+
+      if (partnerRole === "master") {
+        router.push("/owner/master/profile")
+        return
+      }
 
       const venueData: CreateVenueRequest = {
         name: venueName,
@@ -122,16 +139,20 @@ export default function PartnerPage() {
         description: venueDescription,
         phone: rawPhone,
         price_from: 0,
+        capacity: 0,
         amenities: [],
+        halls: [],
         services: [],
         legal_entity_name: legalEntityName.trim(),
         inn: inn.replace(/\D/g, ""),
         ogrn: ogrn.replace(/\D/g, ""),
         public_listing_url: publicListingUrl.trim(),
         verification_note: verificationNote.trim() || undefined,
+        social_links: { ...DEFAULT_VENUE_SOCIAL_LINKS },
+        start_as_draft: true,
       }
       const venue = await createVenue(venueData)
-      setCreatedVenueSlug(venue.slug || venue.id)
+      setCreatedVenueId(venue.id)
       setStep(4)
     } catch (err) {
       if (err instanceof ApiError) {
@@ -156,7 +177,7 @@ export default function PartnerPage() {
       {step !== 4 && (
         <div className="container mx-auto mb-8 px-4">
           <div className="mx-auto flex max-w-2xl items-center justify-center gap-2">
-            {[1, 2, 3].map((s) => (
+            {(isMasterTrack ? [1, 3] : [1, 2, 3]).map((s, idx, arr) => (
               <div key={s} className="flex items-center gap-2">
                 <div
                   className={`flex h-8 w-8 items-center justify-center rounded-full text-sm font-medium transition-colors ${
@@ -167,12 +188,22 @@ export default function PartnerPage() {
                         : "bg-muted text-muted-foreground"
                   }`}
                 >
-                  {s < step ? <CheckCircle2 className="h-5 w-5" /> : s}
+                  {s < step ? <CheckCircle2 className="h-5 w-5" /> : isMasterTrack ? idx + 1 : s}
                 </div>
                 <span className={`hidden text-sm sm:inline ${s === step ? "font-medium text-foreground" : "text-muted-foreground"}`}>
-                  {s === 1 ? "Выгоды" : s === 2 ? "О заведении" : "Контакты"}
+                  {s === 1
+                    ? "Выгоды"
+                    : isMasterTrack
+                      ? "Контакты"
+                      : s === 2
+                        ? "О заведении"
+                        : "Контакты"}
                 </span>
-                {s < 3 && <div className={`h-px w-8 sm:w-16 ${s < step ? "bg-primary" : "bg-border"}`} />}
+                {idx < arr.length - 1 && (
+                  <div
+                    className={`h-px w-8 sm:w-16 ${arr[idx] < step ? "bg-primary" : "bg-border"}`}
+                  />
+                )}
               </div>
             ))}
           </div>
@@ -188,10 +219,14 @@ export default function PartnerPage() {
                 <Flame className="h-8 w-8 text-primary-foreground" />
               </div>
               <h1 className="mb-3 text-3xl font-bold text-foreground md:text-4xl">
-                Развивайте бизнес с БаняГид
+                {isMasterTrack
+                  ? "Профиль пар-мастера на БаняГид"
+                  : "Развивайте бизнес с БаняГид"}
               </h1>
               <p className="mx-auto max-w-xl text-lg text-muted-foreground">
-                Присоединяйтесь к платформе, которой доверяют сотни заведений по всей России
+                {isMasterTrack
+                  ? "Заполните профиль, пройдите модерацию и получайте заявки от клиентов. Пока профиль не одобрен, он не отображается в каталоге."
+                  : "Присоединяйтесь к платформе, которой доверяют сотни заведений по всей России"}
               </p>
             </div>
 
@@ -254,21 +289,12 @@ export default function PartnerPage() {
               </Card>
             </div>
 
-            {/* Social proof */}
-            <div className="mb-10 rounded-xl bg-secondary/50 p-6 text-center">
-              <div className="mb-3 flex items-center justify-center gap-1">
-                {[1, 2, 3, 4, 5].map((s) => (
-                  <Star key={s} className="h-5 w-5 fill-amber-400 text-amber-400" />
-                ))}
-              </div>
-              <p className="mb-2 text-muted-foreground italic">
-                «За первый месяц на БаняГид мы получили 40 новых бронирований. Раньше столько набирали за квартал.»
-              </p>
-              <p className="text-sm font-medium text-foreground">— Алексей, владелец «Русская Банька на Дровах»</p>
-            </div>
-
             <div className="flex justify-center">
-              <Button size="lg" className="gap-2 px-10" onClick={() => setStep(2)}>
+              <Button
+                size="lg"
+                className="gap-2 px-10"
+                onClick={() => setStep(isMasterTrack ? 3 : 2)}
+              >
                 Подать заявку
                 <ArrowRight className="h-4 w-4" />
               </Button>
@@ -277,11 +303,31 @@ export default function PartnerPage() {
             <p className="mt-4 text-center text-sm text-muted-foreground">
               Регистрация бесплатная. Без скрытых платежей.
             </p>
+            <p className="mt-3 text-center text-sm text-muted-foreground">
+              {isMasterTrack ? (
+                <>
+                  Владелец сети?{" "}
+                  <Link href="/partner" className="font-medium text-primary hover:underline">
+                    Оформление для владельца
+                  </Link>
+                </>
+              ) : (
+                <>
+                  Вы пар-мастер?{" "}
+                  <Link
+                    href="/partner/master"
+                    className="font-medium text-primary hover:underline"
+                  >
+                    Подать заявку
+                  </Link>
+                </>
+              )}
+            </p>
           </div>
         )}
 
         {/* Step 2: Venue Information */}
-        {step === 2 && (
+        {step === 2 && !isMasterTrack && (
           <div className="mx-auto max-w-lg">
             <Card className="border-border">
               <CardHeader className="text-center">
@@ -454,20 +500,25 @@ export default function PartnerPage() {
                   <Users className="h-6 w-6 text-primary" />
                 </div>
                 <CardTitle className="text-2xl text-card-foreground">Контактные данные</CardTitle>
-                <CardDescription>Создадим аккаунт владельца и свяжемся, если будут вопросы</CardDescription>
+                <CardDescription>
+                  {isMasterTrack
+                    ? "Создадим аккаунт пар-мастера; затем заполните профиль в кабинете"
+                    : "Создадим аккаунт владельца и свяжемся, если будут вопросы"}
+                </CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
-                {/* Venue summary */}
-                <div className="rounded-lg bg-secondary/50 p-3">
-                  <div className="flex items-center gap-2">
-                    <Building2 className="h-4 w-4 text-primary" />
-                    <span className="font-medium text-card-foreground">{venueName}</span>
-                    <Badge variant="secondary" className="text-xs">
-                      {venueType === "banya" ? "Баня" : venueType === "sauna" ? "Сауна" : "Хаммам"}
-                    </Badge>
+                {!isMasterTrack && (
+                  <div className="rounded-lg bg-secondary/50 p-3">
+                    <div className="flex items-center gap-2">
+                      <Building2 className="h-4 w-4 text-primary" />
+                      <span className="font-medium text-card-foreground">{venueName}</span>
+                      <Badge variant="secondary" className="text-xs">
+                        {venueType === "banya" ? "Баня" : venueType === "sauna" ? "Сауна" : "Хаммам"}
+                      </Badge>
+                    </div>
+                    <p className="mt-1 text-sm text-muted-foreground">{venueCity}, {venueAddress}</p>
                   </div>
-                  <p className="mt-1 text-sm text-muted-foreground">{venueCity}, {venueAddress}</p>
-                </div>
+                )}
 
                 <div className="space-y-2">
                   <Label htmlFor="contactName">Ваше имя</Label>
@@ -518,7 +569,11 @@ export default function PartnerPage() {
                 {error && <p className="text-sm text-destructive">{error}</p>}
 
                 <div className="flex gap-3 pt-2">
-                  <Button variant="outline" className="gap-2" onClick={() => setStep(2)}>
+                  <Button
+                    variant="outline"
+                    className="gap-2"
+                    onClick={() => setStep(isMasterTrack ? 1 : 2)}
+                  >
                     <ArrowLeft className="h-4 w-4" />
                     Назад
                   </Button>
@@ -527,7 +582,13 @@ export default function PartnerPage() {
                     onClick={handleSubmit}
                     disabled={loading || !contactName || !contactEmail || !contactPhone || !contactPassword}
                   >
-                    {loading ? "Создаём аккаунт и заведение..." : "Завершить регистрацию"}
+                    {loading
+                      ? isMasterTrack
+                        ? "Регистрация..."
+                        : "Создаём аккаунт и заведение..."
+                      : isMasterTrack
+                        ? "Зарегистрироваться"
+                        : "Завершить регистрацию"}
                     {!loading && <CheckCircle2 className="h-4 w-4" />}
                   </Button>
                 </div>
@@ -535,7 +596,9 @@ export default function PartnerPage() {
             </Card>
 
             <p className="mt-4 text-center text-sm text-muted-foreground">
-              Шаг 3 из 3 · После регистрации вы сможете заполнить страницу заведения
+              {isMasterTrack
+                ? "Шаг 2 из 2 · Далее откроется кабинет для заполнения профиля мастера"
+                : "Шаг 3 из 3 · Карточка будет создана как черновик; на модерацию вы отправите её после заполнения"}
             </p>
           </div>
         )}
@@ -552,7 +615,10 @@ export default function PartnerPage() {
                   Добро пожаловать в БаняГид!
                 </h2>
                 <p className="mb-6 text-muted-foreground">
-                  Аккаунт создан, а «{venueName}» уже добавлена на платформу. Осталось заполнить детали — цены, фото, удобства.
+                  Аккаунт создан. Карточка «{venueName}» сохранена как{" "}
+                  <strong>черновик</strong>: модератор её не видит, пока вы не
+                  заполните витрину и не отправите заявку на проверку из
+                  редактирования карточки.
                 </p>
 
                 <div className="mb-6 rounded-lg bg-secondary/50 p-4 text-left">
@@ -567,19 +633,29 @@ export default function PartnerPage() {
                 </div>
 
                 <div className="flex flex-col gap-3 sm:flex-row">
-                  <Button asChild className="flex-1 gap-2">
-                    <Link href={`/owner/venues`}>
+                  <Button asChild className="flex-1 gap-2" size="lg">
+                    <Link
+                      href={
+                        createdVenueId
+                          ? `/owner/venues/${createdVenueId}/edit`
+                          : "/owner/venues"
+                      }
+                    >
                       <Settings className="h-4 w-4" />
-                      Перейти в личный кабинет
+                      Заполнить карточку
                     </Link>
                   </Button>
                   <Button asChild variant="outline" className="flex-1 gap-2">
-                    <Link href={`/venues/${createdVenueSlug}`}>
-                      <ArrowRight className="h-4 w-4" />
-                      Посмотреть страницу
+                    <Link href="/owner/venues">
+                      <Building2 className="h-4 w-4" />
+                      Все мои заведения
                     </Link>
                   </Button>
                 </div>
+                <p className="mt-4 text-center text-xs text-muted-foreground">
+                  Публичная страница появится после публикации; в черновике она
+                  недоступна по ссылке для гостей.
+                </p>
               </CardContent>
             </Card>
           </div>
