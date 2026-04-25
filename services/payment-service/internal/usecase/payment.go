@@ -3,6 +3,7 @@ package usecase
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -18,11 +19,12 @@ type EventPublisher interface {
 }
 
 type PaymentUseCase struct {
-	repo      domain.PaymentRepository
-	yookassa  *YooKassaClient
-	rdb       *redis.Client
-	publisher EventPublisher
-	returnURL string
+	repo       domain.PaymentRepository
+	yookassa   *YooKassaClient
+	rdb        *redis.Client
+	publisher  EventPublisher
+	returnURL  string
+	feeBPS     int64
 }
 
 func NewPaymentUseCase(
@@ -31,38 +33,84 @@ func NewPaymentUseCase(
 	rdb *redis.Client,
 	publisher EventPublisher,
 	returnURL string,
+	platformFeeBPS int,
 ) *PaymentUseCase {
+	if platformFeeBPS <= 0 {
+		platformFeeBPS = 1500
+	}
 	return &PaymentUseCase{
 		repo:      repo,
 		yookassa:  yookassa,
 		rdb:       rdb,
 		publisher: publisher,
 		returnURL: returnURL,
+		feeBPS:    int64(platformFeeBPS),
 	}
 }
 
-func (uc *PaymentUseCase) CreatePayment(ctx context.Context, bookingID string, amount int64, description, idempotencyKey string) (*domain.Payment, error) {
-	idempKey := fmt.Sprintf("payment:idempotency:%s", idempotencyKey)
+type CreatePaymentInput struct {
+	BookingID               string
+	Amount                  int64
+	Description             string
+	IdempotencyKey          string
+	CounterpartyType        string
+	CounterpartyID          string
+	YooKassaSellerAccountID string
+}
+
+func (uc *PaymentUseCase) CreatePayment(ctx context.Context, in CreatePaymentInput) (*domain.Payment, error) {
+	if in.Amount <= 0 {
+		return nil, status.Error(codes.InvalidArgument, "amount must be positive")
+	}
+	sellerID := strings.TrimSpace(in.YooKassaSellerAccountID)
+	if !uc.yookassa.mockMode && sellerID == "" {
+		return nil, status.Error(codes.InvalidArgument, "yookassa_seller_account_id is required for live ЮKassa split")
+	}
+
+	platformFee := PlatformFeeKopecks(in.Amount, uc.feeBPS)
+	net := CounterpartyNetKopecks(in.Amount, platformFee)
+
+	idempKey := fmt.Sprintf("payment:idempotency:%s", in.IdempotencyKey)
 	set, err := uc.rdb.SetNX(ctx, idempKey, "1", 24*time.Hour).Result()
 	if err == nil && !set {
-		existing, err := uc.repo.GetByIdempotencyKey(ctx, idempotencyKey)
+		existing, err := uc.repo.GetByIdempotencyKey(ctx, in.IdempotencyKey)
 		if err == nil {
 			return existing, nil
 		}
 	}
 
-	result, err := uc.yookassa.CreatePayment(amount, description, uc.returnURL, idempotencyKey)
+	var result *YooKassaPaymentResult
+	if uc.yookassa.mockMode && sellerID == "" {
+		result, err = uc.yookassa.CreatePaymentSimple(in.Amount, in.Description, uc.returnURL, in.IdempotencyKey)
+	} else {
+		meta := map[string]string{"booking_id": in.BookingID}
+		if strings.TrimSpace(in.CounterpartyID) != "" {
+			meta["counterparty_id"] = strings.TrimSpace(in.CounterpartyID)
+		}
+		result, err = uc.yookassa.CreatePaymentSplit(uc.returnURL, in.IdempotencyKey, in.Description, SplitTransferParams{
+			GrossKopecks:          in.Amount,
+			PlatformFeeKopecks:    platformFee,
+			SellerAccountID:       sellerID,
+			TransferDescription:   in.Description,
+			Metadata:              meta,
+		})
+	}
 	if err != nil {
 		return nil, fmt.Errorf("yookassa create payment: %w", err)
 	}
 
 	p := &domain.Payment{
-		BookingID:      bookingID,
-		Amount:         amount,
-		Status:         "pending",
-		ProviderID:     result.PaymentID,
-		PaymentURL:     result.ConfirmationURL,
-		IdempotencyKey: idempotencyKey,
+		BookingID:               in.BookingID,
+		Amount:                  in.Amount,
+		Status:                  "pending",
+		ProviderID:              result.PaymentID,
+		PaymentURL:              result.ConfirmationURL,
+		IdempotencyKey:          in.IdempotencyKey,
+		PlatformFeeKopecks:      platformFee,
+		CounterpartyNetKopecks:  net,
+		CounterpartyType:        strings.TrimSpace(in.CounterpartyType),
+		CounterpartyID:          strings.TrimSpace(in.CounterpartyID),
+		YooKassaSellerAccountID: sellerID,
 	}
 	if err := uc.repo.Create(ctx, p); err != nil {
 		return nil, fmt.Errorf("create payment: %w", err)
@@ -94,12 +142,26 @@ func (uc *PaymentUseCase) HandleWebhook(ctx context.Context, payload WebhookPayl
 		return status.Error(codes.InvalidArgument, "missing payment id in webhook")
 	}
 
+	statusStr := payload.Object.Status
+
+	if statusStr == "waiting_for_capture" {
+		p, err := uc.findByProviderID(ctx, providerID)
+		if err != nil {
+			return err
+		}
+		if p.UsesYooKassaSplitCapture() {
+			captureKey := p.ID + "-capture"
+			if err := uc.yookassa.CapturePayment(providerID, captureKey); err != nil {
+				return fmt.Errorf("yookassa capture: %w", err)
+			}
+		}
+		return nil
+	}
+
 	var p *domain.Payment
 	var err error
 
-	// Find payment by provider ID - scan by booking since we don't index provider_id directly
-	// In production, add an index on provider_id for efficiency
-	switch payload.Object.Status {
+	switch statusStr {
 	case "succeeded":
 		p, err = uc.findByProviderID(ctx, providerID)
 		if err != nil {

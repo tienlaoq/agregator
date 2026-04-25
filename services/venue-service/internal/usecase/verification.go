@@ -88,3 +88,20 @@ func ValidateVenueVerificationForUpdate(v *domain.Venue) error {
 	}
 	return validateVenueVerificationCore(v)
 }
+
+// NormalizeVenuePayoutProfile trims ЮKassa seller id and validates payout_legal_form (empty allowed).
+func NormalizeVenuePayoutProfile(v *domain.Venue) error {
+	v.YooKassaSellerAccountID = strings.TrimSpace(v.YooKassaSellerAccountID)
+	plf := strings.TrimSpace(strings.ToLower(v.PayoutLegalForm))
+	if plf == "" {
+		v.PayoutLegalForm = domain.PayoutLegalFormEmpty
+		return nil
+	}
+	switch plf {
+	case domain.PayoutLegalFormIP, domain.PayoutLegalFormOOO, domain.PayoutLegalFormSelfEmployed, domain.PayoutLegalFormGPH:
+		v.PayoutLegalForm = plf
+		return nil
+	default:
+		return pkgerr.InvalidArgument("payout_legal_form must be one of: ip, ooo, self_employed, gph")
+	}
+}

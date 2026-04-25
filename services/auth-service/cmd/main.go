@@ -4,17 +4,19 @@ import (
 	"context"
 	"net"
 	"os"
+	"strings"
 	"os/signal"
 	"syscall"
 
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 
 	authv1 "github.com/tienlao/agregator/gen/go/auth/v1"
 	userv1 "github.com/tienlao/agregator/gen/go/user/v1"
+	"github.com/tienlao/agregator/pkg/grpcutil"
 	"github.com/tienlao/agregator/pkg/logger"
 	"github.com/tienlao/agregator/pkg/postgres"
 	pkgredis "github.com/tienlao/agregator/pkg/redis"
+	pkgtelegram "github.com/tienlao/agregator/pkg/telegram"
 
 	"github.com/tienlao/agregator/services/auth-service/config"
 	delivery "github.com/tienlao/agregator/services/auth-service/internal/delivery/grpc"
@@ -26,6 +28,9 @@ func main() {
 	log := logger.New("auth-service")
 
 	cfg := config.Load()
+	if err := cfg.Postgres.Validate(); err != nil {
+		log.Fatal().Err(err).Msg("invalid postgres config")
+	}
 	if cfg.JWTSecret == "" {
 		log.Fatal().Msg("JWT_SECRET is required")
 	}
@@ -47,9 +52,7 @@ func main() {
 	defer rdb.Close()
 	log.Info().Msg("connected to redis")
 
-	userConn, err := grpc.NewClient(cfg.UserServiceAddr,
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
-	)
+	userConn, err := grpc.NewClient(cfg.UserServiceAddr, grpcutil.InsecureDialOptions()...)
 	if err != nil {
 		log.Fatal().Err(err).Msg("failed to dial user-service")
 	}
@@ -60,12 +63,21 @@ func main() {
 	credRepo := repository.NewCredentialRepo(pgPool)
 	tokenRepo := repository.NewRefreshTokenRepo(pgPool)
 
+	tgClient := pkgtelegram.NewClient(os.Getenv("TELEGRAM_BOT_TOKEN"), os.Getenv("TELEGRAM_CHAT_ID"))
+	frontendURL := strings.TrimSpace(os.Getenv("FRONTEND_URL"))
+	if !tgClient.Enabled() {
+		log.Warn().Msg("Telegram registration notify disabled: set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID (e.g. deploy/.env)")
+	} else {
+		log.Info().Msg("Telegram registration notify enabled for roles master, venue_owner")
+	}
+
 	uc := usecase.NewAuthUseCase(
 		credRepo, tokenRepo, userClient,
 		cfg.JWTSecret, cfg.JWTAccessTTL, cfg.JWTRefreshTTL,
+		tgClient, frontendURL, log,
 	)
 
-	grpcServer := grpc.NewServer()
+	grpcServer := grpc.NewServer(grpcutil.ServerOptions()...)
 	authv1.RegisterAuthServiceServer(grpcServer, delivery.NewServer(uc))
 
 	lis, err := net.Listen("tcp", ":"+cfg.GRPCPort)

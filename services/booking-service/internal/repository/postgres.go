@@ -157,6 +157,35 @@ func (r *BookingRepo) ListByVenue(ctx context.Context, venueID, status, date str
 	return bookings, total, rows.Err()
 }
 
+func (r *BookingRepo) ListBookingStaffNotes(ctx context.Context, bookingID string) ([]domain.BookingStaffNote, error) {
+	rows, err := r.pool.Query(ctx, `
+		SELECT id::text, booking_id::text, venue_id::text, author_user_id::text, body, created_at
+		FROM booking_staff_notes WHERE booking_id = $1::uuid
+		ORDER BY created_at ASC`, bookingID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []domain.BookingStaffNote
+	for rows.Next() {
+		var n domain.BookingStaffNote
+		if err := rows.Scan(&n.ID, &n.BookingID, &n.VenueID, &n.AuthorUserID, &n.Body, &n.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, n)
+	}
+	return out, rows.Err()
+}
+
+func (r *BookingRepo) AddBookingStaffNote(ctx context.Context, n *domain.BookingStaffNote) error {
+	return r.pool.QueryRow(ctx, `
+		INSERT INTO booking_staff_notes (booking_id, venue_id, author_user_id, body)
+		VALUES ($1::uuid, $2::uuid, $3::uuid, $4)
+		RETURNING id::text, created_at`,
+		n.BookingID, n.VenueID, n.AuthorUserID, n.Body,
+	).Scan(&n.ID, &n.CreatedAt)
+}
+
 func (r *BookingRepo) UpdateStatus(ctx context.Context, id, status string) error {
 	const q = `UPDATE bookings SET status = $2, updated_at = now() WHERE id = $1`
 	ct, err := r.pool.Exec(ctx, q, id, status)

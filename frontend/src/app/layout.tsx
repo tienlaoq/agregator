@@ -4,7 +4,11 @@ import { Providers } from "./providers";
 import { AppLayout } from "./app-layout";
 import "./globals.css";
 
-const geist = Geist({ subsets: ["latin"] });
+const geist = Geist({
+  subsets: ["latin"],
+  display: "swap",
+  adjustFontFallback: true,
+});
 
 export const metadata: Metadata = {
   title: "БаняГид — Найди идеальную баню или сауну",

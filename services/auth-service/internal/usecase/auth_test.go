@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
@@ -20,7 +21,7 @@ import (
 const testJWTSecret = "test-jwt-secret-key"
 
 func testAuthUC(creds *mockCredRepo, tokens *mockTokenRepo, users *mockUserClient) *AuthUseCase {
-	return NewAuthUseCase(creds, tokens, users, testJWTSecret, time.Hour, 24*time.Hour)
+	return NewAuthUseCase(creds, tokens, users, testJWTSecret, time.Hour, 24*time.Hour, nil, "", zerolog.Nop())
 }
 
 func TestRegister_Success(t *testing.T) {

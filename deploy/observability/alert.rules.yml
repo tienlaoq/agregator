@@ -1,0 +1,27 @@
+groups:
+  - name: api_gateway_slo
+    rules:
+      - alert: ApiGatewayHigh5xxRate
+        expr: |
+          sum(rate(api_gateway_http_requests_total{status_class="5xx"}[5m]))
+            /
+          sum(rate(api_gateway_http_requests_total[5m])) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "api-gateway 5xx rate above 5%"
+          description: "More than 5% of HTTP responses are 5xx over the last 5 minutes."
+
+      - alert: ApiGatewayHighLatencyP95
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le) (rate(api_gateway_http_request_duration_seconds_bucket[5m]))
+          ) > 2
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "api-gateway p95 latency above 2s"
+          description: "95th percentile HTTP latency exceeds 2 seconds."

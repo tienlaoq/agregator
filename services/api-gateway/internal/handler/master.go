@@ -11,6 +11,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	masterv1 "github.com/tienlao/agregator/gen/go/master/v1"
+	"github.com/tienlao/agregator/services/api-gateway/internal/apicatalog"
 	"github.com/tienlao/agregator/services/api-gateway/internal/middleware"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -127,14 +128,14 @@ func (h *MasterHandler) GetPublic(w http.ResponseWriter, r *http.Request) {
 func (h *MasterHandler) CreateMyProfile(w http.ResponseWriter, r *http.Request) {
 	uid := middleware.UserIDFromCtx(r.Context())
 	if uid == "" {
-		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		writeCatalog(w, apicatalog.GatewayAuthUnauthorized)
 		return
 	}
 	var body struct {
 		DisplayName string `json:"display_name"`
 	}
 	if err := readJSON(r, &body); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+		writeCatalog(w, apicatalog.GatewayRequestInvalidJson)
 		return
 	}
 	resp, err := h.client.CreateMyProfile(r.Context(), &masterv1.CreateMyProfileRequest{
@@ -153,7 +154,7 @@ func (h *MasterHandler) CreateMyProfile(w http.ResponseWriter, r *http.Request) 
 func (h *MasterHandler) GetMyProfile(w http.ResponseWriter, r *http.Request) {
 	uid := middleware.UserIDFromCtx(r.Context())
 	if uid == "" {
-		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		writeCatalog(w, apicatalog.GatewayAuthUnauthorized)
 		return
 	}
 	resp, err := h.client.GetMyProfile(r.Context(), &masterv1.GetMyProfileRequest{UserId: uid})
@@ -265,17 +266,17 @@ func (h *MasterHandler) updateReqFromRaw(uid string, raw map[string]json.RawMess
 func (h *MasterHandler) PatchMyProfile(w http.ResponseWriter, r *http.Request) {
 	uid := middleware.UserIDFromCtx(r.Context())
 	if uid == "" {
-		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		writeCatalog(w, apicatalog.GatewayAuthUnauthorized)
 		return
 	}
 	var raw map[string]json.RawMessage
 	if err := readJSON(r, &raw); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+		writeCatalog(w, apicatalog.GatewayRequestInvalidJson)
 		return
 	}
 	req, err := h.updateReqFromRaw(uid, raw)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		writeCatalog(w, apicatalog.GatewayMasterInvalidServices)
 		return
 	}
 
@@ -292,25 +293,25 @@ func (h *MasterHandler) PatchMyProfile(w http.ResponseWriter, r *http.Request) {
 func (h *MasterHandler) SubmitForReview(w http.ResponseWriter, r *http.Request) {
 	uid := middleware.UserIDFromCtx(r.Context())
 	if uid == "" {
-		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		writeCatalog(w, apicatalog.GatewayAuthUnauthorized)
 		return
 	}
 	bodyBytes, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<20))
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid body"})
+		writeCatalog(w, apicatalog.GatewayRequestInvalidBody)
 		return
 	}
 	trimmed := bytes.TrimSpace(bodyBytes)
 	if len(trimmed) > 0 {
 		var raw map[string]json.RawMessage
 		if err := json.Unmarshal(trimmed, &raw); err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+			writeCatalog(w, apicatalog.GatewayRequestInvalidJson)
 			return
 		}
 		if len(raw) > 0 {
 			upd, err := h.updateReqFromRaw(uid, raw)
 			if err != nil {
-				writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+				writeCatalog(w, apicatalog.GatewayMasterInvalidServices)
 				return
 			}
 			if _, err := h.client.UpdateMyProfile(r.Context(), upd); err != nil {
@@ -331,12 +332,12 @@ func (h *MasterHandler) SubmitForReview(w http.ResponseWriter, r *http.Request) 
 func (h *MasterHandler) ListMyBookings(w http.ResponseWriter, r *http.Request) {
 	uid := middleware.UserIDFromCtx(r.Context())
 	if uid == "" {
-		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		writeCatalog(w, apicatalog.GatewayAuthUnauthorized)
 		return
 	}
 	resp, err := h.client.ListMyMasterBookings(r.Context(), &masterv1.ListMyMasterBookingsRequest{
-		UserId:        uid,
-		StatusFilter:  r.URL.Query().Get("status"),
+		UserId:       uid,
+		StatusFilter: r.URL.Query().Get("status"),
 	})
 	if err != nil {
 		grpcErrorToHTTP(w, err)
@@ -364,7 +365,7 @@ func (h *MasterHandler) ListMyBookings(w http.ResponseWriter, r *http.Request) {
 func (h *MasterHandler) CreateBooking(w http.ResponseWriter, r *http.Request) {
 	uid := middleware.UserIDFromCtx(r.Context())
 	if uid == "" {
-		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		writeCatalog(w, apicatalog.GatewayAuthUnauthorized)
 		return
 	}
 	slug := chi.URLParam(r, "slug")
@@ -376,7 +377,7 @@ func (h *MasterHandler) CreateBooking(w http.ResponseWriter, r *http.Request) {
 		Comment         string `json:"comment"`
 	}
 	if err := readJSON(r, &body); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+		writeCatalog(w, apicatalog.GatewayRequestInvalidJson)
 		return
 	}
 	grpcReq := &masterv1.CreateMasterBookingRequest{
@@ -435,7 +436,7 @@ func (h *MasterHandler) ListForModeration(w http.ResponseWriter, r *http.Request
 func (h *MasterHandler) Moderate(w http.ResponseWriter, r *http.Request) {
 	modID := middleware.UserIDFromCtx(r.Context())
 	if modID == "" {
-		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		writeCatalog(w, apicatalog.GatewayAuthUnauthorized)
 		return
 	}
 	id := chi.URLParam(r, "id")
@@ -444,14 +445,14 @@ func (h *MasterHandler) Moderate(w http.ResponseWriter, r *http.Request) {
 		Comment string `json:"comment"`
 	}
 	if err := readJSON(r, &body); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+		writeCatalog(w, apicatalog.GatewayRequestInvalidJson)
 		return
 	}
 	resp, err := h.client.ModerateMaster(r.Context(), &masterv1.ModerateMasterRequest{
-		MasterId:     id,
-		ModeratorId:  modID,
-		Action:       body.Action,
-		Comment:      body.Comment,
+		MasterId:    id,
+		ModeratorId: modID,
+		Action:      body.Action,
+		Comment:     body.Comment,
 	})
 	if err != nil {
 		grpcErrorToHTTP(w, err)

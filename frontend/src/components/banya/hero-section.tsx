@@ -62,7 +62,8 @@ export function HeroSection() {
       <div
         className="absolute inset-0 bg-cover bg-center"
         style={{
-          backgroundImage: `url('https://images.unsplash.com/photo-1584622650111-993a426fbf0a?q=80&w=2070&auto=format&fit=crop')`,
+          // Keep payload small for local/dev LCP; full-width hero rarely needs >1280px source.
+          backgroundImage: `url('https://images.unsplash.com/photo-1584622650111-993a426fbf0a?q=75&w=1280&auto=format&fit=crop')`,
         }}
       >
         <div className="absolute inset-0 bg-gradient-to-b from-[#78350F]/70 via-[#92400E]/50 to-[#1C1917]/80" />

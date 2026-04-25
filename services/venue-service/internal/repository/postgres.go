@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 
@@ -18,6 +19,9 @@ import (
 
 // ErrSlotUnavailable is returned when the requested interval overlaps an existing reservation.
 var ErrSlotUnavailable = errors.New("slot unavailable")
+
+// ErrVenueStaffNotFound is returned when DELETE venue_staff affects no rows.
+var ErrVenueStaffNotFound = errors.New("venue staff not found")
 
 type venueRepo struct {
 	pool *pgxpool.Pool
@@ -55,15 +59,17 @@ func (r *venueRepo) Create(ctx context.Context, venue *domain.Venue) error {
 
 	err = tx.QueryRow(ctx, `
 		INSERT INTO venues (owner_id, slug, name, type, description, address, city, location, price_from, capacity, amenities, working_hours, phone, status,
-			legal_entity_name, inn, ogrn, public_listing_url, verification_note, social_links)
+			legal_entity_name, inn, ogrn, public_listing_url, verification_note, social_links,
+			payout_legal_form, yookassa_seller_account_id)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, ST_SetSRID(ST_MakePoint($8, $9), 4326)::geography, $10, $11, $12, $13, $14, $15,
-			$16, $17, $18, $19, $20, $21::jsonb)
+			$16, $17, $18, $19, $20, $21::jsonb, $22, $23)
 		RETURNING id, created_at, updated_at`,
 		venue.OwnerID, venue.Slug, venue.Name, venue.Type, venue.Description,
 		venue.Address, venue.City, venue.Longitude, venue.Latitude,
 		venue.PriceFrom, venue.Capacity, venue.Amenities, venue.WorkingHours, venue.Phone,
 		venue.Status,
 		venue.LegalEntityName, venue.INN, venue.OGRN, venue.PublicListingURL, venue.VerificationNote, venue.SocialLinks,
+		venue.PayoutLegalForm, venue.YooKassaSellerAccountID,
 	).Scan(&venue.ID, &venue.CreatedAt, &venue.UpdatedAt)
 	if err != nil {
 		return fmt.Errorf("insert venue: %w", err)
@@ -131,6 +137,7 @@ func (r *venueRepo) Update(ctx context.Context, venue *domain.Venue) error {
 			working_hours = $11, phone = $12,
 			legal_entity_name = $13, inn = $14, ogrn = $15,
 			public_listing_url = $16, social_links = $17::jsonb, verification_note = $18,
+			payout_legal_form = $19, yookassa_seller_account_id = $20,
 			updated_at = now()
 		WHERE id = $1`,
 		venue.ID, venue.Name, venue.Description, venue.Address, venue.City,
@@ -138,6 +145,7 @@ func (r *venueRepo) Update(ctx context.Context, venue *domain.Venue) error {
 		venue.PriceFrom, venue.Capacity, venue.Amenities,
 		venue.WorkingHours, venue.Phone,
 		venue.LegalEntityName, venue.INN, venue.OGRN, venue.PublicListingURL, venue.SocialLinks, venue.VerificationNote,
+		venue.PayoutLegalForm, venue.YooKassaSellerAccountID,
 	)
 	if err != nil {
 		return fmt.Errorf("update venue: %w", err)
@@ -163,6 +171,7 @@ func (r *venueRepo) getVenue(ctx context.Context, where string, arg any) (*domai
 			v.moderated_at, v.moderated_by,
 			v.legal_entity_name, v.inn, v.ogrn, v.public_listing_url, v.verification_note,
 			v.social_links::text,
+			COALESCE(v.payout_legal_form, ''), COALESCE(v.yookassa_seller_account_id, ''),
 			v.created_at, v.updated_at
 		FROM venues v `+where, arg,
 	).Scan(
@@ -173,6 +182,7 @@ func (r *venueRepo) getVenue(ctx context.Context, where string, arg any) (*domai
 		&v.ModeratedAt, &v.ModeratedBy,
 		&v.LegalEntityName, &v.INN, &v.OGRN, &v.PublicListingURL, &v.VerificationNote,
 		&v.SocialLinks,
+		&v.PayoutLegalForm, &v.YooKassaSellerAccountID,
 		&v.CreatedAt, &v.UpdatedAt,
 	)
 	if err == pgx.ErrNoRows {
@@ -264,6 +274,140 @@ func (r *venueRepo) attachVenueDetails(ctx context.Context, v *domain.Venue) err
 	return nil
 }
 
+func (r *venueRepo) getServicesByVenueIDs(ctx context.Context, venueIDs []uuid.UUID) (map[uuid.UUID][]domain.VenueService, error) {
+	if len(venueIDs) == 0 {
+		return map[uuid.UUID][]domain.VenueService{}, nil
+	}
+	rows, err := r.pool.Query(ctx, `
+		SELECT id, venue_id, name, duration_min, price, description, sort_order
+		FROM venue_services WHERE venue_id = ANY($1::uuid[])
+		ORDER BY venue_id, sort_order ASC, id ASC`, venueIDs)
+	if err != nil {
+		return nil, fmt.Errorf("get venue_services batch: %w", err)
+	}
+	defer rows.Close()
+
+	out := make(map[uuid.UUID][]domain.VenueService)
+	for rows.Next() {
+		var s domain.VenueService
+		if err := rows.Scan(&s.ID, &s.VenueID, &s.Name, &s.DurationMin, &s.Price, &s.Description, &s.SortOrder); err != nil {
+			return nil, fmt.Errorf("scan venue_service: %w", err)
+		}
+		out[s.VenueID] = append(out[s.VenueID], s)
+	}
+	return out, rows.Err()
+}
+
+// getHallsWithPhotosByVenueIDs loads halls and their photos for many venues (owner / CRM lists).
+func (r *venueRepo) getHallsWithPhotosByVenueIDs(ctx context.Context, venueIDs []uuid.UUID) (map[uuid.UUID][]domain.VenueHall, error) {
+	out := make(map[uuid.UUID][]domain.VenueHall)
+	if len(venueIDs) == 0 {
+		return out, nil
+	}
+	rows, err := r.pool.Query(ctx, `
+		SELECT id, venue_id, name, price_from, capacity, amenities, sort_order
+		FROM venue_halls WHERE venue_id = ANY($1::uuid[])
+		ORDER BY venue_id, sort_order ASC, id ASC`, venueIDs)
+	if err != nil {
+		return nil, fmt.Errorf("get venue_halls batch: %w", err)
+	}
+	defer rows.Close()
+
+	type hallRow struct {
+		h       domain.VenueHall
+		venueID uuid.UUID
+	}
+	var flat []hallRow
+	for rows.Next() {
+		var h domain.VenueHall
+		if err := rows.Scan(&h.ID, &h.VenueID, &h.Name, &h.PriceFrom, &h.Capacity, &h.Amenities, &h.SortOrder); err != nil {
+			return nil, fmt.Errorf("scan venue_hall: %w", err)
+		}
+		flat = append(flat, hallRow{h: h, venueID: h.VenueID})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(flat) == 0 {
+		return out, nil
+	}
+
+	hallIDs := make([]uuid.UUID, len(flat))
+	for i := range flat {
+		hallIDs[i] = flat[i].h.ID
+	}
+	prows, err := r.pool.Query(ctx, `
+		SELECT id, hall_id, url, sort_order, is_cover
+		FROM venue_hall_photos WHERE hall_id = ANY($1::uuid[])
+		ORDER BY hall_id, sort_order ASC, id ASC`, hallIDs)
+	if err != nil {
+		return nil, fmt.Errorf("get venue_hall_photos batch: %w", err)
+	}
+	defer prows.Close()
+
+	byHall := make(map[uuid.UUID][]domain.VenueHallPhoto)
+	for prows.Next() {
+		var p domain.VenueHallPhoto
+		if err := rows.Scan(&p.ID, &p.HallID, &p.URL, &p.SortOrder, &p.IsCover); err != nil {
+			return nil, fmt.Errorf("scan venue_hall_photo: %w", err)
+		}
+		byHall[p.HallID] = append(byHall[p.HallID], p)
+	}
+	if err := prows.Err(); err != nil {
+		return nil, err
+	}
+	for _, hr := range flat {
+		h := hr.h
+		h.Photos = byHall[h.ID]
+		if h.Photos == nil {
+			h.Photos = []domain.VenueHallPhoto{}
+		}
+		out[hr.venueID] = append(out[hr.venueID], h)
+	}
+	return out, nil
+}
+
+func (r *venueRepo) attachVenueDetailsBatch(ctx context.Context, venues []domain.Venue) error {
+	if len(venues) == 0 {
+		return nil
+	}
+	ids := make([]uuid.UUID, len(venues))
+	for i := range venues {
+		ids[i] = venues[i].ID
+	}
+	svcBy, err := r.getServicesByVenueIDs(ctx, ids)
+	if err != nil {
+		return err
+	}
+	photosBy, err := r.getPhotosByVenueIDs(ctx, ids)
+	if err != nil {
+		return err
+	}
+	hallsBy, err := r.getHallsWithPhotosByVenueIDs(ctx, ids)
+	if err != nil {
+		return err
+	}
+	for i := range venues {
+		v := &venues[i]
+		if s := svcBy[v.ID]; s != nil {
+			v.Services = s
+		} else {
+			v.Services = []domain.VenueService{}
+		}
+		if p := photosBy[v.ID]; p != nil {
+			v.Photos = p
+		} else {
+			v.Photos = []domain.VenuePhoto{}
+		}
+		if h := hallsBy[v.ID]; h != nil {
+			v.Halls = h
+		} else {
+			v.Halls = []domain.VenueHall{}
+		}
+	}
+	return nil
+}
+
 // getPhotosByVenueIDs одним запросом подгружает фото для списка заведений (каталог / поиск).
 func (r *venueRepo) getPhotosByVenueIDs(ctx context.Context, venueIDs []uuid.UUID) (map[uuid.UUID][]domain.VenuePhoto, error) {
 	if len(venueIDs) == 0 {
@@ -329,12 +473,6 @@ func (r *venueRepo) List(ctx context.Context, page, pageSize int32, venueType, s
 
 	where := "WHERE " + strings.Join(conditions, " AND ")
 
-	var total int32
-	err := r.pool.QueryRow(ctx, "SELECT COUNT(*) FROM venues "+where, args...).Scan(&total)
-	if err != nil {
-		return nil, fmt.Errorf("count venues: %w", err)
-	}
-
 	orderBy := "ORDER BY created_at DESC"
 	switch sortBy {
 	case "rating":
@@ -353,7 +491,9 @@ func (r *venueRepo) List(ctx context.Context, page, pageSize int32, venueType, s
 			moderated_at, moderated_by,
 			legal_entity_name, inn, ogrn, public_listing_url, verification_note,
 			social_links::text,
-			created_at, updated_at
+			COALESCE(payout_legal_form, ''), COALESCE(yookassa_seller_account_id, ''),
+			created_at, updated_at,
+			(COUNT(*) OVER())::bigint AS __total
 		FROM venues %s %s LIMIT $%d OFFSET $%d`, where, orderBy, argIdx, argIdx+1)
 
 	rows, err := r.pool.Query(ctx, query, args...)
@@ -362,7 +502,7 @@ func (r *venueRepo) List(ctx context.Context, page, pageSize int32, venueType, s
 	}
 	defer rows.Close()
 
-	venues, err := r.scanVenues(rows)
+	venues, total, err := r.scanVenuesWithTotal(rows)
 	if err != nil {
 		return nil, err
 	}
@@ -445,12 +585,6 @@ func (r *venueRepo) Search(ctx context.Context, params domain.SearchParams) (*do
 
 	where := "WHERE " + strings.Join(conditions, " AND ")
 
-	var total int32
-	err := r.pool.QueryRow(ctx, "SELECT COUNT(*) FROM venues "+where, args...).Scan(&total)
-	if err != nil {
-		return nil, fmt.Errorf("count search: %w", err)
-	}
-
 	offset := (params.Page - 1) * params.PageSize
 	args = append(args, params.PageSize, offset)
 	query := fmt.Sprintf(`
@@ -461,7 +595,9 @@ func (r *venueRepo) Search(ctx context.Context, params domain.SearchParams) (*do
 			moderated_at, moderated_by,
 			legal_entity_name, inn, ogrn, public_listing_url, verification_note,
 			social_links::text,
-			created_at, updated_at
+			COALESCE(payout_legal_form, ''), COALESCE(yookassa_seller_account_id, ''),
+			created_at, updated_at,
+			(COUNT(*) OVER())::bigint AS __total
 		FROM venues %s ORDER BY avg_rating DESC LIMIT $%d OFFSET $%d`, where, argIdx, argIdx+1)
 
 	rows, err := r.pool.Query(ctx, query, args...)
@@ -470,7 +606,7 @@ func (r *venueRepo) Search(ctx context.Context, params domain.SearchParams) (*do
 	}
 	defer rows.Close()
 
-	venues, err := r.scanVenues(rows)
+	venues, total, err := r.scanVenuesWithTotal(rows)
 	if err != nil {
 		return nil, err
 	}
@@ -490,6 +626,7 @@ func (r *venueRepo) ListByOwner(ctx context.Context, ownerID uuid.UUID) ([]domai
 			moderated_at, moderated_by,
 			legal_entity_name, inn, ogrn, public_listing_url, verification_note,
 			social_links::text,
+			COALESCE(payout_legal_form, ''), COALESCE(yookassa_seller_account_id, ''),
 			created_at, updated_at
 		FROM venues WHERE owner_id = $1 ORDER BY created_at DESC`, ownerID)
 	if err != nil {
@@ -500,15 +637,188 @@ func (r *venueRepo) ListByOwner(ctx context.Context, ownerID uuid.UUID) ([]domai
 	if err != nil {
 		return nil, err
 	}
-	for i := range venues {
-		if err := r.attachVenueDetails(ctx, &venues[i]); err != nil {
-			return nil, err
-		}
+	if err := r.attachVenueDetailsBatch(ctx, venues); err != nil {
+		return nil, err
 	}
 	return venues, nil
 }
 
-func (r *venueRepo) ListByStatus(ctx context.Context, status string, page, pageSize int32) (*domain.ListResult, error) {
+func (r *venueRepo) ListForManagingUser(ctx context.Context, userID uuid.UUID) ([]domain.Venue, error) {
+	rows, err := r.pool.Query(ctx, `
+		SELECT v.id, v.owner_id, v.slug, v.name, v.type, v.description, v.address, v.city,
+			ST_Y(v.location::geometry) AS latitude, ST_X(v.location::geometry) AS longitude,
+			v.price_from, v.capacity, v.amenities, v.working_hours, v.phone,
+			v.avg_rating, v.review_count, v.is_active, v.status, v.moderation_comment,
+			v.moderated_at, v.moderated_by,
+			v.legal_entity_name, v.inn, v.ogrn, v.public_listing_url, v.verification_note,
+			v.social_links::text,
+			COALESCE(v.payout_legal_form, ''), COALESCE(v.yookassa_seller_account_id, ''),
+			v.created_at, v.updated_at,
+			CASE WHEN v.owner_id = $1 THEN 'owner' ELSE vs.role END AS management_access
+		FROM venues v
+		INNER JOIN (
+			SELECT id AS vid FROM venues WHERE owner_id = $1
+			UNION
+			SELECT venue_id AS vid FROM venue_staff WHERE user_id = $1
+		) x ON x.vid = v.id
+		LEFT JOIN venue_staff vs ON vs.venue_id = v.id AND vs.user_id = $1
+		ORDER BY v.created_at DESC`, userID)
+	if err != nil {
+		return nil, fmt.Errorf("list for managing user: %w", err)
+	}
+	defer rows.Close()
+
+	var venues []domain.Venue
+	for rows.Next() {
+		var v domain.Venue
+		if err := rows.Scan(
+			&v.ID, &v.OwnerID, &v.Slug, &v.Name, &v.Type, &v.Description, &v.Address, &v.City,
+			&v.Latitude, &v.Longitude,
+			&v.PriceFrom, &v.Capacity, &v.Amenities, &v.WorkingHours, &v.Phone,
+			&v.AvgRating, &v.ReviewCount, &v.IsActive, &v.Status, &v.ModerationComment,
+			&v.ModeratedAt, &v.ModeratedBy,
+			&v.LegalEntityName, &v.INN, &v.OGRN, &v.PublicListingURL, &v.VerificationNote,
+			&v.SocialLinks,
+			&v.PayoutLegalForm, &v.YooKassaSellerAccountID,
+			&v.CreatedAt, &v.UpdatedAt,
+			&v.ManagementAccess,
+		); err != nil {
+			return nil, fmt.Errorf("scan venue (managing): %w", err)
+		}
+		venues = append(venues, v)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := r.attachVenueDetailsBatch(ctx, venues); err != nil {
+		return nil, err
+	}
+	return venues, nil
+}
+
+func (r *venueRepo) GetVenueManagementAccess(ctx context.Context, venueID, userID uuid.UUID) (string, error) {
+	var access string
+	err := r.pool.QueryRow(ctx, `
+		SELECT CASE WHEN v.owner_id = $2 THEN 'owner' ELSE vs.role END
+		FROM venues v
+		LEFT JOIN venue_staff vs ON vs.venue_id = v.id AND vs.user_id = $2
+		WHERE v.id = $1 AND (v.owner_id = $2 OR vs.user_id IS NOT NULL)`,
+		venueID, userID,
+	).Scan(&access)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("get venue management access: %w", err)
+	}
+	return access, nil
+}
+
+func (r *venueRepo) AddVenueStaff(ctx context.Context, venueID, userID uuid.UUID, role string, invitedBy uuid.UUID) error {
+	_, err := r.pool.Exec(ctx, `
+		INSERT INTO venue_staff (venue_id, user_id, role, invited_by)
+		VALUES ($1, $2, $3, $4)
+		ON CONFLICT (venue_id, user_id) DO UPDATE SET role = EXCLUDED.role, invited_by = EXCLUDED.invited_by`,
+		venueID, userID, role, invitedBy,
+	)
+	if err != nil {
+		return fmt.Errorf("add venue staff: %w", err)
+	}
+	return nil
+}
+
+func (r *venueRepo) RemoveVenueStaff(ctx context.Context, venueID, userID uuid.UUID) error {
+	tag, err := r.pool.Exec(ctx, `DELETE FROM venue_staff WHERE venue_id = $1 AND user_id = $2`, venueID, userID)
+	if err != nil {
+		return fmt.Errorf("remove venue staff: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrVenueStaffNotFound
+	}
+	return nil
+}
+
+func (r *venueRepo) ListVenueStaff(ctx context.Context, venueID uuid.UUID) ([]domain.VenueStaff, error) {
+	rows, err := r.pool.Query(ctx, `
+		SELECT user_id, role, invited_by, created_at
+		FROM venue_staff WHERE venue_id = $1 ORDER BY created_at ASC`, venueID)
+	if err != nil {
+		return nil, fmt.Errorf("list venue staff: %w", err)
+	}
+	defer rows.Close()
+	var out []domain.VenueStaff
+	for rows.Next() {
+		var s domain.VenueStaff
+		if err := rows.Scan(&s.UserID, &s.Role, &s.InvitedBy, &s.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, s)
+	}
+	return out, rows.Err()
+}
+
+func (r *venueRepo) CreateVenueCRMTask(ctx context.Context, t *domain.VenueCRMTask) error {
+	err := r.pool.QueryRow(ctx, `
+		INSERT INTO venue_crm_tasks (venue_id, booking_id, title, body, status, assignee_user_id, created_by)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		RETURNING id, created_at, updated_at`,
+		t.VenueID, t.BookingID, t.Title, t.Body, t.Status, t.AssigneeUserID, t.CreatedBy,
+	).Scan(&t.ID, &t.CreatedAt, &t.UpdatedAt)
+	if err != nil {
+		return fmt.Errorf("create crm task: %w", err)
+	}
+	return nil
+}
+
+func (r *venueRepo) ListVenueCRMTasks(ctx context.Context, venueID uuid.UUID, status string) ([]domain.VenueCRMTask, error) {
+	q := `
+		SELECT id, venue_id, booking_id, title, body, status, assignee_user_id, created_by, created_at, updated_at
+		FROM venue_crm_tasks WHERE venue_id = $1`
+	args := []any{venueID}
+	if status != "" {
+		q += ` AND status = $2`
+		args = append(args, status)
+	}
+	q += ` ORDER BY created_at DESC`
+	rows, err := r.pool.Query(ctx, q, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list crm tasks: %w", err)
+	}
+	defer rows.Close()
+	var out []domain.VenueCRMTask
+	for rows.Next() {
+		var t domain.VenueCRMTask
+		if err := rows.Scan(&t.ID, &t.VenueID, &t.BookingID, &t.Title, &t.Body, &t.Status, &t.AssigneeUserID, &t.CreatedBy, &t.CreatedAt, &t.UpdatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
+// adminNameILikePattern builds a LIKE pattern with ILIKE ESCAPE '\' (wildcards in user input neutralized).
+func adminNameILikePattern(q string) (pattern string, ok bool) {
+	q = strings.TrimSpace(q)
+	if q == "" {
+		return "", false
+	}
+	q = strings.ReplaceAll(q, `\`, `\\`)
+	q = strings.ReplaceAll(q, `%`, `\%`)
+	q = strings.ReplaceAll(q, `_`, `\_`)
+	return "%" + q + "%", true
+}
+
+func (r *venueRepo) CompleteVenueCRMTask(ctx context.Context, venueID, taskID uuid.UUID) (bool, error) {
+	tag, err := r.pool.Exec(ctx, `
+		UPDATE venue_crm_tasks SET status = 'done', updated_at = now()
+		WHERE id = $1 AND venue_id = $2 AND status = 'open'`, taskID, venueID)
+	if err != nil {
+		return false, fmt.Errorf("complete crm task: %w", err)
+	}
+	return tag.RowsAffected() > 0, nil
+}
+
+func (r *venueRepo) ListByStatus(ctx context.Context, status string, page, pageSize int32, nameQuery string) (*domain.ListResult, error) {
 	if page < 1 {
 		page = 1
 	}
@@ -519,14 +829,9 @@ func (r *venueRepo) ListByStatus(ctx context.Context, status string, page, pageS
 		status = domain.StatusPendingReview
 	}
 
-	var total int32
-	err := r.pool.QueryRow(ctx, "SELECT COUNT(*) FROM venues WHERE status = $1", status).Scan(&total)
-	if err != nil {
-		return nil, fmt.Errorf("count by status: %w", err)
-	}
+	pat, filterName := adminNameILikePattern(nameQuery)
 
-	offset := (page - 1) * pageSize
-	rows, err := r.pool.Query(ctx, `
+	const venueAdminSelect = `
 		SELECT id, owner_id, slug, name, type, description, address, city,
 			ST_Y(location::geometry) AS latitude, ST_X(location::geometry) AS longitude,
 			price_from, capacity, amenities, working_hours, phone,
@@ -534,8 +839,35 @@ func (r *venueRepo) ListByStatus(ctx context.Context, status string, page, pageS
 			moderated_at, moderated_by,
 			legal_entity_name, inn, ogrn, public_listing_url, verification_note,
 			social_links::text,
+			COALESCE(payout_legal_form, ''), COALESCE(yookassa_seller_account_id, ''),
 			created_at, updated_at
-		FROM venues WHERE status = $1 ORDER BY created_at ASC LIMIT $2 OFFSET $3`, status, pageSize, offset)
+		FROM venues`
+
+	var total int32
+	var rows pgx.Rows
+	var err error
+	offset := (page - 1) * pageSize
+
+	if filterName {
+		err = r.pool.QueryRow(ctx,
+			`SELECT COUNT(*) FROM venues WHERE status = $1 AND name ILIKE $2 ESCAPE '\'`,
+			status, pat,
+		).Scan(&total)
+		if err != nil {
+			return nil, fmt.Errorf("count by status: %w", err)
+		}
+		rows, err = r.pool.Query(ctx, venueAdminSelect+`
+		WHERE status = $1 AND name ILIKE $2 ESCAPE '\'
+		ORDER BY created_at ASC LIMIT $3 OFFSET $4`, status, pat, pageSize, offset)
+	} else {
+		err = r.pool.QueryRow(ctx, `SELECT COUNT(*) FROM venues WHERE status = $1`, status).Scan(&total)
+		if err != nil {
+			return nil, fmt.Errorf("count by status: %w", err)
+		}
+		rows, err = r.pool.Query(ctx, venueAdminSelect+`
+		WHERE status = $1
+		ORDER BY created_at ASC LIMIT $2 OFFSET $3`, status, pageSize, offset)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("list by status: %w", err)
 	}
@@ -1145,6 +1477,43 @@ func (r *venueRepo) ListManualSlotBlocks(ctx context.Context, venueID uuid.UUID,
 	return out, rows.Err()
 }
 
+func (r *venueRepo) scanVenuesWithTotal(rows pgx.Rows) ([]domain.Venue, int32, error) {
+	var venues []domain.Venue
+	var total int32
+	first := true
+	for rows.Next() {
+		var v domain.Venue
+		var totalRaw int64
+		if err := rows.Scan(
+			&v.ID, &v.OwnerID, &v.Slug, &v.Name, &v.Type, &v.Description, &v.Address, &v.City,
+			&v.Latitude, &v.Longitude,
+			&v.PriceFrom, &v.Capacity, &v.Amenities, &v.WorkingHours, &v.Phone,
+			&v.AvgRating, &v.ReviewCount, &v.IsActive, &v.Status, &v.ModerationComment,
+			&v.ModeratedAt, &v.ModeratedBy,
+			&v.LegalEntityName, &v.INN, &v.OGRN, &v.PublicListingURL, &v.VerificationNote,
+			&v.SocialLinks,
+			&v.PayoutLegalForm, &v.YooKassaSellerAccountID,
+			&v.CreatedAt, &v.UpdatedAt,
+			&totalRaw,
+		); err != nil {
+			return nil, 0, fmt.Errorf("scan venue: %w", err)
+		}
+		if first {
+			if totalRaw > math.MaxInt32 {
+				total = math.MaxInt32
+			} else {
+				total = int32(totalRaw)
+			}
+			first = false
+		}
+		venues = append(venues, v)
+	}
+	if first {
+		total = 0
+	}
+	return venues, total, rows.Err()
+}
+
 func (r *venueRepo) scanVenues(rows pgx.Rows) ([]domain.Venue, error) {
 	var venues []domain.Venue
 	for rows.Next() {
@@ -1157,6 +1526,7 @@ func (r *venueRepo) scanVenues(rows pgx.Rows) ([]domain.Venue, error) {
 			&v.ModeratedAt, &v.ModeratedBy,
 			&v.LegalEntityName, &v.INN, &v.OGRN, &v.PublicListingURL, &v.VerificationNote,
 			&v.SocialLinks,
+			&v.PayoutLegalForm, &v.YooKassaSellerAccountID,
 			&v.CreatedAt, &v.UpdatedAt,
 		); err != nil {
 			return nil, fmt.Errorf("scan venue: %w", err)

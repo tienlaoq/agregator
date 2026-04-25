@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	paymentv1 "github.com/tienlao/agregator/gen/go/payment/v1"
+	"github.com/tienlao/agregator/services/api-gateway/internal/apicatalog"
 )
 
 type PaymentHandler struct {
@@ -20,7 +21,7 @@ func (h *PaymentHandler) Webhook(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(r.Body)
 	defer r.Body.Close()
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "failed to read body"})
+		writeCatalog(w, apicatalog.GatewayRequestBodyReadFailed)
 		return
 	}
 

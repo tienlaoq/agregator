@@ -1,5 +1,6 @@
 "use client"
 
+import dynamic from "next/dynamic"
 import { useState } from "react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
@@ -13,8 +14,26 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
-import { Flame, Menu, User, CalendarDays, LogOut, Shield, Building2, Users } from "lucide-react"
+import {
+  Flame,
+  Menu,
+  User,
+  CalendarDays,
+  LogOut,
+  Shield,
+  Building2,
+  Users,
+  Anchor,
+} from "lucide-react"
 import { useAuthStore } from "@/store/auth"
+
+const NotificationBell = dynamic(
+  () =>
+    import("@/components/banya/notification-bell").then((m) => ({
+      default: m.NotificationBell,
+    })),
+  { ssr: false, loading: () => null },
+)
 
 interface HeaderProps {
   isLoggedIn?: boolean
@@ -56,7 +75,8 @@ export function Header({ isLoggedIn = false, userName = "Иван", userAvatar, 
           </Link>
         </nav>
 
-        <div className="hidden items-center gap-3 md:flex">
+        <div className="hidden items-center gap-2 md:flex">
+          <NotificationBell />
           {isLoggedIn ? (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
@@ -99,6 +119,13 @@ export function Header({ isLoggedIn = false, userName = "Иван", userAvatar, 
                       Мои заведения
                     </Link>
                   </DropdownMenuItem>
+                ) : userRole === "user" ? (
+                  <DropdownMenuItem asChild>
+                    <Link href="/owner/venues" className="flex items-center gap-2">
+                      <Anchor className="h-4 w-4" />
+                      Командный мостик
+                    </Link>
+                  </DropdownMenuItem>
                 ) : null}
                 <DropdownMenuItem asChild>
                   <Link href="/my/bookings" className="flex items-center gap-2">
@@ -131,13 +158,15 @@ export function Header({ isLoggedIn = false, userName = "Иван", userAvatar, 
           )}
         </div>
 
-        <Sheet open={mobileMenuOpen} onOpenChange={setMobileMenuOpen}>
-          <SheetTrigger asChild className="md:hidden">
-            <Button variant="ghost" size="icon">
-              <Menu className="h-5 w-5" />
-              <span className="sr-only">Открыть меню</span>
-            </Button>
-          </SheetTrigger>
+        <div className="flex items-center gap-1 md:hidden">
+          <NotificationBell />
+          <Sheet open={mobileMenuOpen} onOpenChange={setMobileMenuOpen}>
+            <SheetTrigger asChild>
+              <Button variant="ghost" size="icon">
+                <Menu className="h-5 w-5" />
+                <span className="sr-only">Открыть меню</span>
+              </Button>
+            </SheetTrigger>
           <SheetContent side="right" className="w-[300px]">
             <div className="flex flex-col gap-6 pt-6">
               <Link
@@ -210,6 +239,15 @@ export function Header({ isLoggedIn = false, userName = "Иван", userAvatar, 
                         <Building2 className="h-4 w-4 shrink-0" />
                         Мои заведения
                       </Link>
+                    ) : userRole === "user" ? (
+                      <Link
+                        href="/owner/venues"
+                        className="flex items-center gap-2 text-muted-foreground"
+                        onClick={() => setMobileMenuOpen(false)}
+                      >
+                        <Anchor className="h-4 w-4 shrink-0" />
+                        Командный мостик
+                      </Link>
                     ) : null}
                     <Link href="/my/bookings" className="text-muted-foreground" onClick={() => setMobileMenuOpen(false)}>
                       Мои бронирования
@@ -235,7 +273,8 @@ export function Header({ isLoggedIn = false, userName = "Иван", userAvatar, 
               </div>
             </div>
           </SheetContent>
-        </Sheet>
+          </Sheet>
+        </div>
       </div>
     </header>
   )

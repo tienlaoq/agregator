@@ -266,6 +266,8 @@ export interface Venue {
   latitude?: number;
   longitude?: number;
   working_hours?: string;
+  /** Владелец / manager / staff — из GET /owner/venues (CRM). */
+  management_access?: string;
   /** Только в кабинете владельца и админке (не в публичном каталоге) */
   legal_entity_name?: string;
   inn?: string;
@@ -285,6 +287,38 @@ export interface ManualSlotBlock {
   time_from: string;
   time_to: string;
   note: string;
+}
+
+/** Участник CRM по залу (ответ /owner/venues/.../staff). */
+export interface VenueStaffRow {
+  user_id: string;
+  role: string;
+  invited_by: string;
+  created_at: string;
+}
+
+/** Задача CRM по заведению. */
+export interface VenueCrmTask {
+  id: string;
+  venue_id: string;
+  title: string;
+  body: string;
+  status: string;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+  booking_id?: string;
+  assignee_user_id?: string;
+}
+
+/** Внутренняя заметка по брони (не для гостя). */
+export interface BookingStaffNote {
+  id: string;
+  booking_id: string;
+  venue_id: string;
+  author_user_id: string;
+  body: string;
+  created_at: string;
 }
 
 export interface Booking {
@@ -479,10 +513,11 @@ export interface MasterPhoto {
   is_cover: boolean;
 }
 
-/** Как мастер принимает выплаты с платформы (ИП / ГПХ / самозанятость). */
+/** Как мастер принимает выплаты с платформы (ИП / ООО / физлицо / самозанятость). */
 export const PAYOUT_LEGAL_FORM_LABELS: Record<string, string> = {
   ip: "Индивидуальный предприниматель (ИП)",
-  gph: "Договор ГПХ",
+  ooo: "Общество с ограниченной ответственностью (ООО)",
+  individual: "Физическое лицо",
   self_employed: "Самозанятость",
 };
 
@@ -494,7 +529,7 @@ export interface MasterProfile {
   bio: string;
   phone: string;
   city: string;
-  /** ip | gph | self_employed — не отдаётся в публичном API каталога */
+  /** ip | ooo | individual | self_employed — не отдаётся в публичном API каталога */
   payout_legal_form?: string;
   work_format: string;
   travel_radius_km: number;

@@ -1,0 +1,152 @@
+# HTTP API error catalog for api-gateway (machine codes + default messages).
+# Regenerate: from services/api-gateway: go generate ./internal/apicatalog/...
+version: 1
+errors:
+  - http_status: 401
+    code: GATEWAY.AUTH.UNAUTHORIZED
+    message: "Требуется авторизация"
+
+  - http_status: 400
+    code: GATEWAY.REQUEST.INVALID_BODY
+    message: "Некорректное тело запроса"
+
+  - http_status: 400
+    code: GATEWAY.REQUEST.INVALID_JSON
+    message: "Некорректный JSON"
+
+  - http_status: 400
+    code: GATEWAY.REQUEST.INVALID_QUERY
+    message: "Некорректные параметры запроса"
+
+  - http_status: 400
+    code: GATEWAY.REQUEST.MISSING_DATE
+    message: "Укажите дату в формате YYYY-MM-DD"
+
+  - http_status: 400
+    code: GATEWAY.REQUEST.MISSING_DATE_RANGE
+    message: "Укажите date_from и date_to в формате YYYY-MM-DD"
+
+  - http_status: 400
+    code: GATEWAY.REQUEST.EMAIL_REQUIRED
+    message: "Укажите email"
+
+  - http_status: 404
+    code: GATEWAY.VENUE.NOT_FOUND
+    message: "Заведение не найдено"
+
+  - http_status: 503
+    code: GATEWAY.DEPENDENCY.USER_SERVICE_UNAVAILABLE
+    message: "Сервис пользователей недоступен"
+
+  - http_status: 400
+    code: GATEWAY.REQUEST.INVALID_VENUE_ID
+    message: "Некорректный идентификатор заведения"
+
+  - http_status: 400
+    code: GATEWAY.REQUEST.INVALID_HALL_ID
+    message: "Некорректный идентификатор зала"
+
+  - http_status: 400
+    code: GATEWAY.REQUEST.INVALID_PHOTO_ID
+    message: "Некорректный идентификатор фото"
+
+  - http_status: 400
+    code: GATEWAY.REQUEST.INVALID_MULTIPART
+    message: "Некорректная multipart-форма или файл слишком большой"
+
+  - http_status: 400
+    code: GATEWAY.REQUEST.PHOTO_FIELD_REQUIRED
+    message: "Поле photo обязательно"
+
+  - http_status: 400
+    code: GATEWAY.REQUEST.INVALID_FILE_READ
+    message: "Не удалось прочитать файл"
+
+  - http_status: 400
+    code: GATEWAY.REQUEST.EMPTY_FILE
+    message: "Пустой файл"
+
+  - http_status: 400
+    code: GATEWAY.REQUEST.INVALID_IMAGE_TYPE
+    message: "Допустимы только JPEG, PNG и WebP"
+
+  - http_status: 400
+    code: GATEWAY.MASTER.NOT_CREATED
+    message: "Сначала создайте профиль мастера"
+
+  - http_status: 500
+    code: GATEWAY.INTERNAL.INVALID_MASTER_ID
+    message: "Некорректный идентификатор мастера"
+
+  - http_status: 500
+    code: GATEWAY.STORAGE.FAILED
+    message: "Не удалось сохранить файл"
+
+  - http_status: 400
+    code: GATEWAY.BOOKING.TIME_FROM_REQUIRED
+    message: "Поле time_from обязательно"
+
+  - http_status: 400
+    code: GATEWAY.REVIEW.VENUE_ID_REQUIRED
+    message: "Параметр venue_id обязателен"
+
+  - http_status: 400
+    code: GATEWAY.REQUEST.BODY_READ_FAILED
+    message: "Не удалось прочитать тело запроса"
+
+  - http_status: 405
+    code: GATEWAY.REQUEST.METHOD_NOT_ALLOWED
+    message: "Метод не разрешён"
+
+  - http_status: 400
+    code: GATEWAY.ANALYTICS.INVALID_EVENT_NAME
+    message: "Недопустимое имя события"
+
+  - http_status: 400
+    code: GATEWAY.ANALYTICS.PROPS_INVALID_OR_TOO_LARGE
+    message: "Слишком большой или некорректный объект props"
+
+  - http_status: 503
+    code: GATEWAY.OAUTH.GOOGLE_NOT_CONFIGURED
+    message: "Вход через Google не настроен"
+
+  - http_status: 503
+    code: GATEWAY.OAUTH.VK_NOT_CONFIGURED
+    message: "Вход через VK не настроен"
+
+  - http_status: 422
+    code: GATEWAY.CRM.STAFF_EMAIL_NOT_REGISTERED
+    message: "No registered account for this email; the person must sign up first"
+
+  - http_status: 400
+    code: GATEWAY.MASTER.INVALID_SERVICES
+    message: "Некорректный список услуг"
+
+  # gRPC status → default HTTP + code (message replaced by handler with gRPC text)
+  - http_status: 400
+    code: GATEWAY.UPSTREAM.INVALID_ARGUMENT
+    message: "Некорректный запрос"
+  - http_status: 404
+    code: GATEWAY.UPSTREAM.NOT_FOUND
+    message: "Не найдено"
+  - http_status: 409
+    code: GATEWAY.UPSTREAM.ALREADY_EXISTS
+    message: "Конфликт"
+  - http_status: 401
+    code: GATEWAY.UPSTREAM.UNAUTHENTICATED
+    message: "Требуется авторизация"
+  - http_status: 403
+    code: GATEWAY.UPSTREAM.PERMISSION_DENIED
+    message: "Доступ запрещён"
+  - http_status: 503
+    code: GATEWAY.UPSTREAM.UNAVAILABLE
+    message: "Сервис временно недоступен"
+  - http_status: 409
+    code: GATEWAY.UPSTREAM.FAILED_PRECONDITION
+    message: "Условие не выполнено"
+  - http_status: 500
+    code: GATEWAY.UPSTREAM.INTERNAL
+    message: "Внутренняя ошибка сервиса"
+  - http_status: 500
+    code: GATEWAY.UPSTREAM.UNKNOWN
+    message: "Ошибка сервиса"

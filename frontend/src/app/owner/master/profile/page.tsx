@@ -152,8 +152,8 @@ function masterSubmitValidationMessage(body: Record<string, unknown>): string | 
     return "Добавьте хотя бы одну услугу и укажите её название";
   }
   const plf = String(body.payout_legal_form ?? "").trim().toLowerCase();
-  if (!["ip", "gph", "self_employed"].includes(plf)) {
-    return "Укажите форму получения выплат: ИП, договор ГПХ или самозанятость";
+  if (!["ip", "ooo", "individual", "self_employed"].includes(plf)) {
+    return "Укажите форму получения выплат: ИП, ООО, физическое лицо или самозанятость";
   }
   return null;
 }
@@ -570,7 +570,7 @@ export default function MasterProfilePage() {
                 <Label>Форма получения выплат</Label>
                 <p className="text-xs text-muted-foreground">
                   Оплата услуг проходит через платформу; выплаты вам переводятся с учётом вашего
-                  официального статуса: ИП, договор ГПХ или самозанятость.
+                  официального статуса: ИП, ООО, физическое лицо или самозанятость.
                 </p>
                 <Select
                   value={payoutLegalForm || "__none"}
@@ -582,7 +582,8 @@ export default function MasterProfilePage() {
                   <SelectContent>
                     <SelectItem value="__none">Не выбрано</SelectItem>
                     <SelectItem value="ip">Индивидуальный предприниматель (ИП)</SelectItem>
-                    <SelectItem value="gph">Договор ГПХ</SelectItem>
+                    <SelectItem value="ooo">Общество с ограниченной ответственностью (ООО)</SelectItem>
+                    <SelectItem value="individual">Физическое лицо</SelectItem>
                     <SelectItem value="self_employed">Самозанятость</SelectItem>
                   </SelectContent>
                 </Select>
@@ -628,6 +629,10 @@ export default function MasterProfilePage() {
               </div>
               <div className="space-y-2">
                 <Label>Базовая ставка (₽/час)</Label>
+                <p className="text-xs text-muted-foreground">
+                  В каталоге в строке «от … ₽ / час» показывается минимальная цена среди ваших услуг; если
+                  услуг с ценой нет — используется эта ставка.
+                </p>
                 <Input
                   type="number"
                   min={0}

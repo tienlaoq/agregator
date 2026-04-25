@@ -4,6 +4,7 @@ import (
 	"net/http"
 
 	authv1 "github.com/tienlao/agregator/gen/go/auth/v1"
+	"github.com/tienlao/agregator/services/api-gateway/internal/apicatalog"
 )
 
 type AuthHandler struct {
@@ -23,7 +24,7 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 		Role     string `json:"role"`
 	}
 	if err := readJSON(r, &req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		writeCatalog(w, apicatalog.GatewayRequestInvalidBody)
 		return
 	}
 
@@ -52,7 +53,7 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		Password string `json:"password"`
 	}
 	if err := readJSON(r, &req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		writeCatalog(w, apicatalog.GatewayRequestInvalidBody)
 		return
 	}
 
@@ -77,7 +78,7 @@ func (h *AuthHandler) RefreshToken(w http.ResponseWriter, r *http.Request) {
 		RefreshToken string `json:"refresh_token"`
 	}
 	if err := readJSON(r, &req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		writeCatalog(w, apicatalog.GatewayRequestInvalidBody)
 		return
 	}
 
@@ -100,7 +101,7 @@ func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
 		RefreshToken string `json:"refresh_token"`
 	}
 	if err := readJSON(r, &req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		writeCatalog(w, apicatalog.GatewayRequestInvalidBody)
 		return
 	}
 

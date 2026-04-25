@@ -20,3 +20,13 @@ type Booking struct {
 	CreatedAt  time.Time
 	UpdatedAt  time.Time
 }
+
+// BookingStaffNote is an internal venue note on a booking (CRM, not guest-visible).
+type BookingStaffNote struct {
+	ID           string
+	BookingID    string
+	VenueID      string
+	AuthorUserID string
+	Body         string
+	CreatedAt    time.Time
+}

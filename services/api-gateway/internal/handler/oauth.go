@@ -12,6 +12,7 @@ import (
 	"time"
 
 	authv1 "github.com/tienlao/agregator/gen/go/auth/v1"
+	"github.com/tienlao/agregator/services/api-gateway/internal/apicatalog"
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
 )
@@ -74,7 +75,7 @@ func generateState() string {
 
 func (h *OAuthHandler) GoogleRedirect(w http.ResponseWriter, r *http.Request) {
 	if h.google == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "Google OAuth not configured"})
+		writeCatalog(w, apicatalog.GatewayOauthGoogleNotConfigured)
 		return
 	}
 	state := generateState()
@@ -91,7 +92,7 @@ func (h *OAuthHandler) GoogleRedirect(w http.ResponseWriter, r *http.Request) {
 
 func (h *OAuthHandler) GoogleCallback(w http.ResponseWriter, r *http.Request) {
 	if h.google == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "Google OAuth not configured"})
+		writeCatalog(w, apicatalog.GatewayOauthGoogleNotConfigured)
 		return
 	}
 
@@ -151,7 +152,7 @@ func fetchGoogleUserInfo(ctx context.Context, cfg *oauth2.Config, token *oauth2.
 
 func (h *OAuthHandler) VKRedirect(w http.ResponseWriter, r *http.Request) {
 	if h.vk == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "VK OAuth not configured"})
+		writeCatalog(w, apicatalog.GatewayOauthVkNotConfigured)
 		return
 	}
 	state := generateState()
@@ -176,7 +177,7 @@ func (h *OAuthHandler) VKRedirect(w http.ResponseWriter, r *http.Request) {
 
 func (h *OAuthHandler) VKCallback(w http.ResponseWriter, r *http.Request) {
 	if h.vk == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "VK OAuth not configured"})
+		writeCatalog(w, apicatalog.GatewayOauthVkNotConfigured)
 		return
 	}
 

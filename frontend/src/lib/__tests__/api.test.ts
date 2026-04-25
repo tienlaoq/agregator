@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi, type Mock } from "vitest";
-import { login, register, getVenues, ApiError } from "@/lib/api";
+import { login, register, getVenues, ApiError, formatApiErrorMessage } from "@/lib/api";
 
 const API_URL = "http://localhost:8080";
 
@@ -44,6 +44,26 @@ describe("login", () => {
     await expect(login({ email: "a@b.com", password: "bad" })).rejects.toThrow(
       ApiError,
     );
+  });
+
+  it("parses gateway code from JSON error body", async () => {
+    fetchMock.mockResolvedValueOnce(
+      mockResponse(401, {
+        code: "GATEWAY.UPSTREAM.UNAUTHENTICATED",
+        error: "rpc error: code = Unauthenticated desc = INTERNAL LEAK",
+      }),
+    );
+
+    try {
+      await login({ email: "a@b.com", password: "bad" });
+      expect.fail("expected throw");
+    } catch (e) {
+      expect(e).toBeInstanceOf(ApiError);
+      const err = e as ApiError;
+      expect(err.code).toBe("GATEWAY.UPSTREAM.UNAUTHENTICATED");
+      expect(formatApiErrorMessage(err, "fallback")).not.toContain("rpc");
+      expect(formatApiErrorMessage(err, "fallback")).not.toContain("INTERNAL");
+    }
   });
 });
 
@@ -130,5 +150,22 @@ describe("fetchAPI auto-refresh on 401", () => {
       .mockResolvedValueOnce(mockResponse(401, "refresh failed"));
 
     await expect(getVenues({ page: 1 })).rejects.toThrow();
+  });
+});
+
+describe("formatApiErrorMessage", () => {
+  it("maps unknown gateway code by HTTP status", () => {
+    const err = new ApiError(
+      418,
+      JSON.stringify({ code: "GATEWAY.FUTURE.UNKNOWN", error: "tea pot" }),
+      "GATEWAY.FUTURE.UNKNOWN",
+    );
+    expect(formatApiErrorMessage(err, "Свой текст")).toBe("Свой текст");
+  });
+
+  it("detects network-style client errors", () => {
+    expect(
+      formatApiErrorMessage(new TypeError("Failed to fetch"), "другое"),
+    ).toMatch(/соединени/i);
   });
 });

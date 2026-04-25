@@ -7,10 +7,12 @@ import (
 	"crypto/subtle"
 	"encoding/base64"
 	"fmt"
+	"html"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/rs/zerolog"
 	"golang.org/x/crypto/argon2"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -18,6 +20,7 @@ import (
 	userv1 "github.com/tienlao/agregator/gen/go/user/v1"
 	"github.com/tienlao/agregator/pkg/auth"
 	pkgerr "github.com/tienlao/agregator/pkg/errors"
+	pkgtelegram "github.com/tienlao/agregator/pkg/telegram"
 	"github.com/tienlao/agregator/services/auth-service/internal/domain"
 )
 
@@ -38,12 +41,15 @@ var defaultParams = argon2Params{
 }
 
 type AuthUseCase struct {
-	creds      domain.CredentialRepository
-	tokens     domain.RefreshTokenRepository
-	userClient userv1.UserServiceClient
-	jwtSecret  string
-	accessTTL  time.Duration
-	refreshTTL time.Duration
+	creds       domain.CredentialRepository
+	tokens      domain.RefreshTokenRepository
+	userClient  userv1.UserServiceClient
+	jwtSecret   string
+	accessTTL   time.Duration
+	refreshTTL  time.Duration
+	tg          *pkgtelegram.Client
+	frontendURL string
+	appLog      zerolog.Logger
 }
 
 func NewAuthUseCase(
@@ -52,14 +58,20 @@ func NewAuthUseCase(
 	userClient userv1.UserServiceClient,
 	jwtSecret string,
 	accessTTL, refreshTTL time.Duration,
+	tg *pkgtelegram.Client,
+	frontendURL string,
+	appLog zerolog.Logger,
 ) *AuthUseCase {
 	return &AuthUseCase{
-		creds:      creds,
-		tokens:     tokens,
-		userClient: userClient,
-		jwtSecret:  jwtSecret,
-		accessTTL:  accessTTL,
-		refreshTTL: refreshTTL,
+		creds:       creds,
+		tokens:      tokens,
+		userClient:  userClient,
+		jwtSecret:   jwtSecret,
+		accessTTL:   accessTTL,
+		refreshTTL:  refreshTTL,
+		tg:          tg,
+		frontendURL: frontendURL,
+		appLog:      appLog,
 	}
 }
 
@@ -119,7 +131,59 @@ func (uc *AuthUseCase) Register(ctx context.Context, in RegisterInput) (*Registe
 		return nil, err
 	}
 
+	roleKey := strings.TrimSpace(strings.ToLower(in.Role))
+	if roleKey == "master" || roleKey == "venue_owner" {
+		uid := userResp.Id
+		email := in.Email
+		phone := in.Phone
+		name := in.Name
+		go uc.notifyPartnerRegistered(roleKey, uid, email, phone, name)
+	}
+
 	return &RegisterResult{UserID: userResp.Id, Tokens: *tokens}, nil
+}
+
+func (uc *AuthUseCase) notifyPartnerRegistered(role, userID, email, phone, name string) {
+	if uc.tg == nil || !uc.tg.Enabled() {
+		return
+	}
+	var roleRu, adminPath, emoji string
+	switch role {
+	case "master":
+		roleRu, adminPath, emoji = "Пар-мастер", "/admin/masters", "🧖"
+	case "venue_owner":
+		roleRu, adminPath, emoji = "Партнёр бани", "/admin/venues", "🏛"
+	default:
+		return
+	}
+	base := strings.TrimSuffix(strings.TrimSpace(uc.frontendURL), "/")
+	if base == "" {
+		base = "http://localhost:3000"
+	}
+	link := base + adminPath
+	phoneDisp := strings.TrimSpace(phone)
+	if phoneDisp == "" {
+		phoneDisp = "—"
+	}
+	text := fmt.Sprintf(
+		"%s <b>Новая регистрация</b>\n\n"+
+			"Тип аккаунта: <b>%s</b>\n"+
+			"Имя: %s\n"+
+			"Email: <code>%s</code>\n"+
+			"Телефон: %s\n"+
+			"User ID: <code>%s</code>\n\n"+
+			`<a href="%s">Открыть в админке</a>`,
+		emoji,
+		html.EscapeString(roleRu),
+		html.EscapeString(strings.TrimSpace(name)),
+		html.EscapeString(strings.TrimSpace(email)),
+		html.EscapeString(phoneDisp),
+		html.EscapeString(userID),
+		html.EscapeString(link),
+	)
+	if err := uc.tg.SendHTML(text); err != nil {
+		uc.appLog.Warn().Err(err).Str("role", role).Str("user_id", userID).Msg("telegram partner registration failed")
+	}
 }
 
 type OAuthInput struct {

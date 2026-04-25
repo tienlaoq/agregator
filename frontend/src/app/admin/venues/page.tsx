@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Textarea } from "@/components/ui/textarea"
+import { Input } from "@/components/ui/input"
 import {
   Select,
   SelectContent,
@@ -23,13 +24,19 @@ import {
   CheckCircle2,
   XCircle,
   Pause,
+  RotateCw,
   Building2,
   MapPin,
   Phone,
   Clock,
   ExternalLink,
   Shield,
+  Search,
+  ChevronLeft,
+  ChevronRight,
 } from "lucide-react"
+
+const ADMIN_VENUE_PAGE_SIZE = 50
 
 const STATUS_LABELS: Record<string, string> = {
   draft: "Черновик",
@@ -52,7 +59,14 @@ export default function AdminVenuesPage() {
   const { token, user, hydrated } = useAuthStore()
   const queryClient = useQueryClient()
   const [filterStatus, setFilterStatus] = useState("pending_review")
-  const [moderatingId, setModeratingId] = useState<string | null>(null)
+  const [nameSearch, setNameSearch] = useState("")
+  const [debouncedSearch, setDebouncedSearch] = useState("")
+  const [page, setPage] = useState(1)
+  /** Карточка, где ждём комментарий для «Отклонить» или «Приостановить». */
+  const [moderationFlow, setModerationFlow] = useState<{
+    venueId: string
+    action: "reject" | "suspend"
+  } | null>(null)
   const [comment, setComment] = useState("")
 
   useEffect(() => {
@@ -61,11 +75,34 @@ export default function AdminVenuesPage() {
     }
   }, [hydrated, token, user, router])
 
+  useEffect(() => {
+    const t = window.setTimeout(() => {
+      setDebouncedSearch(nameSearch.trim())
+    }, 400)
+    return () => window.clearTimeout(t)
+  }, [nameSearch])
+
+  useEffect(() => {
+    setPage(1)
+  }, [filterStatus, debouncedSearch])
+
   const { data, isLoading } = useQuery({
-    queryKey: ["admin-venues", filterStatus],
-    queryFn: () => getAdminVenues({ status: filterStatus }),
+    queryKey: ["admin-venues", filterStatus, debouncedSearch, page],
+    queryFn: () =>
+      getAdminVenues({
+        status: filterStatus,
+        page,
+        page_size: ADMIN_VENUE_PAGE_SIZE,
+        ...(debouncedSearch ? { q: debouncedSearch } : {}),
+      }),
     enabled: !!token && user?.role === "admin",
   })
+
+  const venues: Venue[] = data?.venues ?? []
+  const total = data?.total ?? 0
+  const pageSize = data?.page_size ?? ADMIN_VENUE_PAGE_SIZE
+  const canPrev = page > 1
+  const canNext = page * pageSize < total
 
   const mutation = useMutation({
     mutationFn: ({
@@ -74,19 +111,23 @@ export default function AdminVenuesPage() {
       comment,
     }: {
       venueId: string
-      action: "approve" | "reject" | "suspend"
+      action: "approve" | "reject" | "suspend" | "resume"
       comment: string
     }) => moderateVenue(venueId, action, comment),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["admin-venues"] })
-      setModeratingId(null)
+      setModerationFlow(null)
       setComment("")
     },
   })
 
-  const handleAction = (venueId: string, action: "approve" | "reject" | "suspend") => {
-    if (action === "reject" && !comment.trim()) {
-      setModeratingId(venueId)
+  const handleAction = (venueId: string, action: "approve" | "reject" | "suspend" | "resume") => {
+    if (action === "resume") {
+      mutation.mutate({ venueId, action: "resume", comment: "" })
+      return
+    }
+    if ((action === "reject" || action === "suspend") && !comment.trim()) {
+      setModerationFlow({ venueId, action })
       return
     }
     mutation.mutate({ venueId, action, comment })
@@ -94,24 +135,37 @@ export default function AdminVenuesPage() {
 
   if (!hydrated || !token) return null
 
-  const venues: Venue[] = data?.venues ?? []
-
   return (
     <div className="mx-auto max-w-4xl px-4 py-8">
-      <div className="mb-6 flex items-center justify-between">
+      <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
         <h1 className="text-2xl font-bold">Модерация заведений</h1>
-        <Select value={filterStatus} onValueChange={setFilterStatus}>
-          <SelectTrigger className="w-[200px]">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="draft">Черновики</SelectItem>
-            <SelectItem value="pending_review">На проверке</SelectItem>
-            <SelectItem value="active">Активные</SelectItem>
-            <SelectItem value="rejected">Отклонённые</SelectItem>
-            <SelectItem value="suspended">Приостановленные</SelectItem>
-          </SelectContent>
-        </Select>
+        <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:items-center sm:gap-2">
+          <Select value={filterStatus} onValueChange={setFilterStatus}>
+            <SelectTrigger className="w-full sm:w-[200px]">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="draft">Черновики</SelectItem>
+              <SelectItem value="pending_review">На проверке</SelectItem>
+              <SelectItem value="active">Активные</SelectItem>
+              <SelectItem value="rejected">Отклонённые</SelectItem>
+              <SelectItem value="suspended">Приостановленные</SelectItem>
+            </SelectContent>
+          </Select>
+          <div className="relative min-w-0 flex-1 sm:max-w-xs">
+            <Search
+              className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground"
+              aria-hidden
+            />
+            <Input
+              className="pl-8"
+              placeholder="Поиск по названию…"
+              value={nameSearch}
+              onChange={(e) => setNameSearch(e.target.value)}
+              aria-label="Поиск по названию заведения"
+            />
+          </div>
+        </div>
       </div>
 
       {isLoading && <p className="text-muted-foreground">Загрузка...</p>}
@@ -121,11 +175,13 @@ export default function AdminVenuesPage() {
           <CardContent className="py-12 text-center">
             <Building2 className="mx-auto mb-4 h-12 w-12 text-muted-foreground/50" />
             <p className="text-muted-foreground">
-              {filterStatus === "pending_review"
-                ? "Нет заявок на модерацию"
-                : filterStatus === "draft"
-                  ? "Нет черновиков"
-                  : `Нет заведений со статусом «${STATUS_LABELS[filterStatus] ?? filterStatus}»`}
+              {debouncedSearch
+                ? `Ничего не найдено по запросу «${debouncedSearch}»`
+                : filterStatus === "pending_review"
+                  ? "Нет заявок на модерацию"
+                  : filterStatus === "draft"
+                    ? "Нет черновиков"
+                    : `Нет заведений со статусом «${STATUS_LABELS[filterStatus] ?? filterStatus}»`}
             </p>
           </CardContent>
         </Card>
@@ -216,10 +272,14 @@ export default function AdminVenuesPage() {
                 </div>
               )}
 
-              {moderatingId === venue.id && (
+              {moderationFlow?.venueId === venue.id && (
                 <div className="space-y-2">
                   <Textarea
-                    placeholder="Укажите причину отклонения..."
+                    placeholder={
+                      moderationFlow.action === "suspend"
+                        ? "Укажите причину приостановки (обязательно)…"
+                        : "Укажите причину отклонения…"
+                    }
                     value={comment}
                     onChange={(e) => setComment(e.target.value)}
                     rows={2}
@@ -227,17 +287,25 @@ export default function AdminVenuesPage() {
                   <div className="flex gap-2">
                     <Button
                       size="sm"
-                      variant="destructive"
+                      variant={moderationFlow.action === "suspend" ? "default" : "destructive"}
                       disabled={!comment.trim() || mutation.isPending}
-                      onClick={() => mutation.mutate({ venueId: venue.id, action: "reject", comment })}
+                      onClick={() =>
+                        mutation.mutate({
+                          venueId: venue.id,
+                          action: moderationFlow.action,
+                          comment,
+                        })
+                      }
                     >
-                      Подтвердить отклонение
+                      {moderationFlow.action === "suspend"
+                        ? "Подтвердить приостановку"
+                        : "Подтвердить отклонение"}
                     </Button>
                     <Button
                       size="sm"
                       variant="outline"
                       onClick={() => {
-                        setModeratingId(null)
+                        setModerationFlow(null)
                         setComment("")
                       }}
                     >
@@ -254,7 +322,7 @@ export default function AdminVenuesPage() {
                 </p>
               )}
 
-              {moderatingId !== venue.id && (
+              {moderationFlow?.venueId !== venue.id && (
                 <div className="flex flex-wrap gap-2">
                   {venue.slug ? (
                     <Button size="sm" variant="outline" className="gap-1.5" asChild>
@@ -281,7 +349,7 @@ export default function AdminVenuesPage() {
                           Одобрить
                         </Button>
                       )}
-                      {venue.status !== "rejected" && (
+                      {venue.status === "pending_review" && (
                         <Button
                           size="sm"
                           variant="destructive"
@@ -305,6 +373,17 @@ export default function AdminVenuesPage() {
                           Приостановить
                         </Button>
                       )}
+                      {venue.status === "suspended" && (
+                        <Button
+                          size="sm"
+                          className="gap-1.5 bg-green-600 hover:bg-green-700"
+                          disabled={mutation.isPending}
+                          onClick={() => handleAction(venue.id, "resume")}
+                        >
+                          <RotateCw className="h-4 w-4" />
+                          Возобновить в агрегаторе
+                        </Button>
+                      )}
                     </>
                   )}
                 </div>
@@ -314,11 +393,43 @@ export default function AdminVenuesPage() {
         ))}
       </div>
 
-      {data && data.total > (data.page_size || 20) && (
-        <p className="mt-6 text-center text-sm text-muted-foreground">
-          Показано {venues.length} из {data.total}
-        </p>
-      )}
+      {data && total > 0 ? (
+        <div className="mt-6 flex flex-col items-center gap-3 sm:flex-row sm:justify-center sm:gap-6">
+          <p className="text-center text-sm text-muted-foreground">
+            Всего: {total}
+            {debouncedSearch ? ` · поиск «${debouncedSearch}»` : ""}
+            {total > pageSize
+              ? ` · страница ${page} из ${Math.max(1, Math.ceil(total / pageSize))}`
+              : ""}
+          </p>
+          {total > pageSize ? (
+            <div className="flex items-center gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="gap-1"
+                disabled={!canPrev || isLoading}
+                onClick={() => setPage((p) => Math.max(1, p - 1))}
+              >
+                <ChevronLeft className="h-4 w-4" />
+                Назад
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="gap-1"
+                disabled={!canNext || isLoading}
+                onClick={() => setPage((p) => p + 1)}
+              >
+                Вперёд
+                <ChevronRight className="h-4 w-4" />
+              </Button>
+            </div>
+          ) : null}
+        </div>
+      ) : null}
     </div>
   )
 }

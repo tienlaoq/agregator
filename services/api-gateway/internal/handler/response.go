@@ -3,8 +3,9 @@ package handler
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 
-	"google.golang.org/grpc/codes"
+	"github.com/tienlao/agregator/services/api-gateway/internal/apicatalog"
 	"google.golang.org/grpc/status"
 )
 
@@ -19,28 +20,27 @@ func readJSON(r *http.Request, v any) error {
 	return json.NewDecoder(r.Body).Decode(v)
 }
 
+func writeCatalog(w http.ResponseWriter, e apicatalog.Entry) {
+	e.Write(w)
+}
+
 func grpcErrorToHTTP(w http.ResponseWriter, err error) {
-	st, ok := status.FromError(err)
-	if !ok {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+	if err == nil {
+		writeCatalog(w, apicatalog.GatewayUpstreamUnknown.WithMessage("unknown error"))
 		return
 	}
-	code := http.StatusInternalServerError
-	switch st.Code() {
-	case codes.InvalidArgument:
-		code = http.StatusBadRequest
-	case codes.NotFound:
-		code = http.StatusNotFound
-	case codes.AlreadyExists:
-		code = http.StatusConflict
-	case codes.Unauthenticated:
-		code = http.StatusUnauthorized
-	case codes.PermissionDenied:
-		code = http.StatusForbidden
-	case codes.Unavailable:
-		code = http.StatusServiceUnavailable
-	case codes.Internal:
-		code = http.StatusInternalServerError
+	st := status.Convert(err)
+	if ent, ok := apicatalog.FromGRPC(st.Code()); ok {
+		msg := strings.TrimSpace(st.Message())
+		if msg == "" {
+			msg = strings.TrimSpace(err.Error())
+		}
+		writeCatalog(w, ent.WithMessage(msg))
+		return
 	}
-	writeJSON(w, code, map[string]string{"error": st.Message()})
+	msg := strings.TrimSpace(st.Message())
+	if msg == "" {
+		msg = strings.TrimSpace(err.Error())
+	}
+	writeCatalog(w, apicatalog.GatewayUpstreamUnknown.WithMessage(msg))
 }

@@ -49,11 +49,14 @@ export default function CreateVenuePage() {
   });
 
   const [newAmenity, setNewAmenity] = useState("");
+  const canCreateVenue =
+    user?.role === "venue_owner" || user?.role === "master";
+
   useEffect(() => {
-    if (hydrated && (!token || user?.role !== "venue_owner")) {
+    if (hydrated && (!token || !canCreateVenue)) {
       router.push("/auth/login");
     }
-  }, [hydrated, token, user, router]);
+  }, [hydrated, token, user, router, canCreateVenue]);
 
   const updateField = <K extends keyof CreateVenueFormState>(
     key: K,

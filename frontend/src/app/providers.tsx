@@ -1,15 +1,14 @@
 "use client";
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { useAuthStore } from "@/store/auth";
+import { AnalyticsPageView } from "./analytics-pageview";
 
 function AuthHydrator({ children }: { children: React.ReactNode }) {
-  const hydrate = useAuthStore((s) => s.hydrate);
-
   useEffect(() => {
-    hydrate();
-  }, [hydrate]);
+    useAuthStore.getState().hydrate();
+  }, []);
 
   return children;
 }
@@ -29,6 +28,9 @@ export function Providers({ children }: { children: React.ReactNode }) {
 
   return (
     <QueryClientProvider client={queryClient}>
+      <Suspense fallback={null}>
+        <AnalyticsPageView />
+      </Suspense>
       <AuthHydrator>{children}</AuthHydrator>
     </QueryClientProvider>
   );

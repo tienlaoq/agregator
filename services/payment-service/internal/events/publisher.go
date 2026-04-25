@@ -19,10 +19,12 @@ func NewPublisher(js nats.JetStreamContext) *Publisher {
 }
 
 type paymentEvent struct {
-	PaymentID string `json:"payment_id"`
-	BookingID string `json:"booking_id"`
-	Amount    int64  `json:"amount"`
-	Status    string `json:"status"`
+	PaymentID              string `json:"payment_id"`
+	BookingID              string `json:"booking_id"`
+	Amount                 int64  `json:"amount"`
+	Status                 string `json:"status"`
+	PlatformFeeKopecks     int64  `json:"platform_fee_kopecks,omitempty"`
+	CounterpartyNetKopecks int64  `json:"counterparty_net_kopecks,omitempty"`
 }
 
 func (p *Publisher) PublishPaymentCompleted(ctx context.Context, payment *domain.Payment) error {
@@ -35,10 +37,12 @@ func (p *Publisher) PublishPaymentFailed(ctx context.Context, payment *domain.Pa
 
 func (p *Publisher) publish(subject string, payment *domain.Payment) error {
 	data, err := json.Marshal(paymentEvent{
-		PaymentID: payment.ID,
-		BookingID: payment.BookingID,
-		Amount:    payment.Amount,
-		Status:    payment.Status,
+		PaymentID:              payment.ID,
+		BookingID:              payment.BookingID,
+		Amount:                 payment.Amount,
+		Status:                 payment.Status,
+		PlatformFeeKopecks:     payment.PlatformFeeKopecks,
+		CounterpartyNetKopecks: payment.CounterpartyNetKopecks,
 	})
 	if err != nil {
 		return fmt.Errorf("marshal event: %w", err)

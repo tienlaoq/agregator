@@ -8,9 +8,15 @@ gen/
 .env.*
 !.env.example
 !deploy/.env.example
+deploy/.env
+*.pem
+*.p12
+*credentials*.json
 node_modules/
 .next/
 vendor/
 tmp/
 *.log
 .DS_Store
+*.cache
+*.cursor

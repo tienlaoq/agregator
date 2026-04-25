@@ -1,6 +1,14 @@
 import { create } from "zustand";
 import type { User } from "@/lib/types";
 
+/** Есть ли полноценная сессия для UI (шапка, колокольчик и т.д.). */
+export function hasAuthSession(user: User | null, token: string | null): boolean {
+  const t = token?.trim();
+  if (!t) return false;
+  const id = user?.id?.trim();
+  return Boolean(id);
+}
+
 interface AuthState {
   user: User | null;
   token: string | null;
@@ -23,7 +31,22 @@ export const useAuthStore = create<AuthState>((set) => ({
     const token = localStorage.getItem("token");
     const refreshToken = localStorage.getItem("refresh_token");
     const userStr = localStorage.getItem("user");
-    const user = userStr ? (JSON.parse(userStr) as User) : null;
+    let user: User | null = null;
+    if (userStr) {
+      try {
+        user = JSON.parse(userStr) as User;
+      } catch {
+        user = null;
+      }
+    }
+    if (user && !user.id?.trim()) {
+      user = null;
+      localStorage.removeItem("user");
+    }
+    if (!token?.trim() && user) {
+      localStorage.removeItem("user");
+      user = null;
+    }
     set({ token, refreshToken, user, hydrated: true });
   },
   login: (token, refreshToken, user) => {

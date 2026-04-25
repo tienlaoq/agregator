@@ -74,7 +74,7 @@ message Master {
   google.protobuf.Timestamp created_at = 19;
   google.protobuf.Timestamp updated_at = 20;
   repeated MasterPhoto photos = 21;
-  // ip | gph | self_employed — куда перечисляется оплата; в публичном API не отдаётся.
+  // ip | ooo | individual | self_employed — куда перечисляется оплата; в публичном API не отдаётся.
   string payout_legal_form = 22;
 }
 

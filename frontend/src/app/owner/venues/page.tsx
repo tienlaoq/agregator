@@ -9,23 +9,27 @@ import {
   computeOwnerDashboardStats,
   mergeOwnerVenueBookings,
 } from "@/components/banya/owner-dashboard-section";
+import { redirectToLogin } from "@/lib/auth-redirect";
 import { getOwnerVenueBookings, getOwnerVenues } from "@/lib/api";
 import { useAuthStore } from "@/store/auth";
 export default function OwnerVenuesPage() {
   const router = useRouter();
   const { token, user, hydrated } = useAuthStore();
-  const isVenueOwner = user?.role === "venue_owner";
+  const canOwnerCabinet =
+    user?.role === "venue_owner" ||
+    user?.role === "master" ||
+    user?.role === "user";
 
   useEffect(() => {
-    if (hydrated && (!token || !isVenueOwner)) {
-      router.push("/auth/login");
+    if (hydrated && (!token || !canOwnerCabinet)) {
+      redirectToLogin();
     }
-  }, [hydrated, token, user, router, isVenueOwner]);
+  }, [hydrated, token, canOwnerCabinet]);
 
   const { data: venues, isLoading: isLoadingVenues } = useQuery({
     queryKey: ["owner-venues"],
     queryFn: getOwnerVenues,
-    enabled: !!token && isVenueOwner,
+    enabled: !!token && canOwnerCabinet,
   });
 
   const venueIds = useMemo(() => venues?.map((v) => v.id) ?? [], [venues]);
@@ -34,7 +38,7 @@ export default function OwnerVenuesPage() {
     queries: venueIds.map((id) => ({
       queryKey: ["owner-venue-bookings", id],
       queryFn: () => getOwnerVenueBookings(id, { page_size: 50 }),
-      enabled: !!token && isVenueOwner && venueIds.length > 0,
+      enabled: !!token && canOwnerCabinet && venueIds.length > 0,
     })),
   });
 
@@ -48,6 +52,10 @@ export default function OwnerVenuesPage() {
 
   if (!hydrated || !token) return null;
 
+  const canCreateVenue =
+    user?.role === "venue_owner" || user?.role === "master";
+  const canEditVenueCard = canCreateVenue;
+
   return (
     <OwnerDashboardSection
       venues={venues}
@@ -57,6 +65,8 @@ export default function OwnerVenuesPage() {
       todayBookingsByVenueId={todayBookingsByVenueId}
       recentBookings={recentBookings}
       onAddVenue={() => router.push("/owner/venues/new")}
+      canCreateVenue={canCreateVenue}
+      canEditVenueCard={canEditVenueCard}
     />
   );
 }

@@ -6,9 +6,17 @@ import { getProfile } from "@/lib/api"
 import { useAuthStore } from "@/store/auth"
 import { Flame } from "lucide-react"
 
+function CallbackSuspenseFallback() {
+  return (
+    <div className="flex min-h-[60vh] flex-col items-center justify-center gap-4 text-sm text-muted-foreground">
+      Загрузка…
+    </div>
+  )
+}
+
 export default function OAuthCallbackPage() {
   return (
-    <Suspense>
+    <Suspense fallback={<CallbackSuspenseFallback />}>
       <CallbackHandler />
     </Suspense>
   )

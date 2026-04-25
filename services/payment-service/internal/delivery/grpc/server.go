@@ -22,7 +22,15 @@ func NewServer(uc *usecase.PaymentUseCase) *Server {
 }
 
 func (s *Server) CreatePayment(ctx context.Context, req *paymentv1.CreatePaymentRequest) (*paymentv1.PaymentResponse, error) {
-	p, err := s.uc.CreatePayment(ctx, req.BookingId, req.Amount, req.Description, req.IdempotencyKey)
+	p, err := s.uc.CreatePayment(ctx, usecase.CreatePaymentInput{
+		BookingID:               req.GetBookingId(),
+		Amount:                  req.GetAmount(),
+		Description:             req.GetDescription(),
+		IdempotencyKey:          req.GetIdempotencyKey(),
+		CounterpartyType:        req.GetCounterpartyType(),
+		CounterpartyID:          req.GetCounterpartyId(),
+		YooKassaSellerAccountID: req.GetYookassaSellerAccountId(),
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -68,12 +76,14 @@ func (s *Server) HandleWebhook(ctx context.Context, req *paymentv1.WebhookReques
 
 func toProto(p *domain.Payment) *paymentv1.PaymentResponse {
 	return &paymentv1.PaymentResponse{
-		Id:         p.ID,
-		BookingId:  p.BookingID,
-		Amount:     p.Amount,
-		Status:     p.Status,
-		PaymentUrl: p.PaymentURL,
-		ProviderId: p.ProviderID,
-		CreatedAt:  timestamppb.New(p.CreatedAt),
+		Id:                     p.ID,
+		BookingId:              p.BookingID,
+		Amount:                 p.Amount,
+		Status:                 p.Status,
+		PaymentUrl:             p.PaymentURL,
+		ProviderId:             p.ProviderID,
+		CreatedAt:              timestamppb.New(p.CreatedAt),
+		PlatformFeeKopecks:     p.PlatformFeeKopecks,
+		CounterpartyNetKopecks: p.CounterpartyNetKopecks,
 	}
 }

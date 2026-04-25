@@ -4,6 +4,7 @@ import (
 	"net/http"
 
 	userv1 "github.com/tienlao/agregator/gen/go/user/v1"
+	"github.com/tienlao/agregator/services/api-gateway/internal/apicatalog"
 	"github.com/tienlao/agregator/services/api-gateway/internal/middleware"
 )
 
@@ -18,7 +19,7 @@ func NewUserHandler(client userv1.UserServiceClient) *UserHandler {
 func (h *UserHandler) GetMe(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.UserIDFromCtx(r.Context())
 	if userID == "" {
-		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		writeCatalog(w, apicatalog.GatewayAuthUnauthorized)
 		return
 	}
 
@@ -43,7 +44,7 @@ func (h *UserHandler) GetMe(w http.ResponseWriter, r *http.Request) {
 func (h *UserHandler) UpdateMe(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.UserIDFromCtx(r.Context())
 	if userID == "" {
-		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		writeCatalog(w, apicatalog.GatewayAuthUnauthorized)
 		return
 	}
 
@@ -54,7 +55,7 @@ func (h *UserHandler) UpdateMe(w http.ResponseWriter, r *http.Request) {
 		Bio       *string `json:"bio"`
 	}
 	if err := readJSON(r, &req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		writeCatalog(w, apicatalog.GatewayRequestInvalidBody)
 		return
 	}
 

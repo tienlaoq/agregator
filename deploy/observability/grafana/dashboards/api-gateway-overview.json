@@ -1,0 +1,168 @@
+{
+  "title": "API Gateway — tier 1 (Prometheus + Loki)",
+  "uid": "api-gateway-tier1",
+  "schemaVersion": 39,
+  "version": 2,
+  "refresh": "30s",
+  "time": { "from": "now-1h", "to": "now" },
+  "templating": { "list": [] },
+  "panels": [
+    {
+      "type": "row",
+      "title": "Prometheus (/metrics)",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 },
+      "id": 100,
+      "collapsed": false
+    },
+    {
+      "type": "timeseries",
+      "title": "RPS by route (chi pattern)",
+      "id": 1,
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (route) (rate(api_gateway_http_requests_total[1m]))",
+          "legendFormat": "{{route}}"
+        }
+      ],
+      "fieldConfig": { "defaults": {}, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+    {
+      "type": "timeseries",
+      "title": "RPS: /api/v1 vs other (Prometheus)",
+      "id": 2,
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 1 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(api_gateway_http_requests_total{route=~\"/api/v1.*\"}[1m]))",
+          "legendFormat": "api_v1"
+        },
+        {
+          "refId": "B",
+          "expr": "sum(rate(api_gateway_http_requests_total{route!~\"/api/v1.*\"}[1m]))",
+          "legendFormat": "non_api_v1"
+        }
+      ],
+      "fieldConfig": { "defaults": {}, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+    {
+      "type": "timeseries",
+      "title": "5xx share (5m, Prometheus)",
+      "id": 3,
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 9 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(rate(api_gateway_http_requests_total{status_class=\"5xx\"}[5m])) / sum(rate(api_gateway_http_requests_total[5m]))",
+          "legendFormat": "5xx ratio"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "percentunit" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+    {
+      "type": "timeseries",
+      "title": "p95 latency (s, Prometheus)",
+      "id": 4,
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 9 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(api_gateway_http_request_duration_seconds_bucket[5m])))",
+          "legendFormat": "p95"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+    {
+      "type": "row",
+      "title": "Loki (gateway JSON logs)",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 17 },
+      "id": 200,
+      "collapsed": false
+    },
+    {
+      "type": "timeseries",
+      "title": "RPS by path (logs)",
+      "id": 10,
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 18 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (path) (count_over_time({container=\"banya-gateway\"} | json | path != \"\" | __error__=\"\" [1m]))",
+          "queryType": "range",
+          "legendFormat": "{{path}}"
+        }
+      ],
+      "fieldConfig": { "defaults": {}, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+    {
+      "type": "timeseries",
+      "title": "RPS: /api/v1 vs other (logs, all methods)",
+      "id": 11,
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 18 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(count_over_time({container=\"banya-gateway\"} | json | path =~ \"^/api/v1\" | __error__=\"\" [1m]))",
+          "queryType": "range",
+          "legendFormat": "/api/v1"
+        },
+        {
+          "refId": "B",
+          "expr": "sum(count_over_time({container=\"banya-gateway\"} | json | path != \"\" | path !~ \"^/api/v1\" | __error__=\"\" [1m]))",
+          "queryType": "range",
+          "legendFormat": "other"
+        }
+      ],
+      "fieldConfig": { "defaults": {}, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+    {
+      "type": "timeseries",
+      "title": "5xx share (logs, 5m)",
+      "id": 12,
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 26 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(count_over_time({container=\"banya-gateway\"} | json | status >= 500 | __error__=\"\" [5m])) / sum(count_over_time({container=\"banya-gateway\"} | json | __error__=\"\" [5m]))",
+          "queryType": "range",
+          "legendFormat": "5xx_ratio"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "percentunit" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    },
+    {
+      "type": "timeseries",
+      "title": "p95 duration from logs (ns→s)",
+      "id": 13,
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 26 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "quantile_over_time(0.95, {container=\"banya-gateway\"} | json | __error__=\"\" | unwrap duration [5m]) / 1e9",
+          "queryType": "range",
+          "legendFormat": "p95_s"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "options": { "legend": { "displayMode": "list", "placement": "bottom" } }
+    }
+  ]
+}

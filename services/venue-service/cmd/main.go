@@ -5,11 +5,13 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 
 	"google.golang.org/grpc"
 
 	venuev1 "github.com/tienlao/agregator/gen/go/venue/v1"
+	"github.com/tienlao/agregator/pkg/grpcutil"
 	"github.com/tienlao/agregator/pkg/logger"
 	"github.com/tienlao/agregator/pkg/natsutil"
 	"github.com/tienlao/agregator/pkg/postgres"
@@ -17,6 +19,7 @@ import (
 
 	"github.com/tienlao/agregator/services/venue-service/config"
 	delivery "github.com/tienlao/agregator/services/venue-service/internal/delivery/grpc"
+	"github.com/tienlao/agregator/services/venue-service/internal/dbmigrate"
 	"github.com/tienlao/agregator/services/venue-service/internal/events"
 	"github.com/tienlao/agregator/services/venue-service/internal/repository"
 	"github.com/tienlao/agregator/services/venue-service/internal/telegram"
@@ -27,6 +30,9 @@ func main() {
 	log := logger.New("venue-service")
 
 	cfg := config.Load()
+	if err := cfg.Postgres.Validate(); err != nil {
+		log.Fatal().Err(err).Msg("invalid postgres config")
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -37,6 +43,11 @@ func main() {
 	}
 	defer pgPool.Close()
 	log.Info().Msg("connected to postgres")
+
+	migDir := resolveMigrationsDir()
+	if err := dbmigrate.Up(ctx, cfg.Postgres.DSN(), migDir, log); err != nil {
+		log.Fatal().Err(err).Str("dir", migDir).Msg("postgres migrations failed")
+	}
 
 	rdb, err := pkgredis.NewClient(ctx, cfg.Redis)
 	if err != nil {
@@ -68,7 +79,7 @@ func main() {
 		log.Warn().Msg("Telegram notifications disabled: set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID (e.g. in deploy/.env)")
 	}
 
-	grpcServer := grpc.NewServer()
+	grpcServer := grpc.NewServer(grpcutil.ServerOptions()...)
 	venuev1.RegisterVenueServiceServer(grpcServer, delivery.NewServer(uc, publisher, tgNotifier, log))
 
 	lis, err := net.Listen("tcp", ":"+cfg.GRPCPort)
@@ -91,4 +102,22 @@ func main() {
 	grpcServer.GracefulStop()
 	cancel()
 	log.Info().Msg("venue-service stopped")
+}
+
+func resolveMigrationsDir() string {
+	if d := os.Getenv("VENUE_MIGRATIONS_DIR"); d != "" {
+		return d
+	}
+	for _, d := range []string{"/migrations", "migrations"} {
+		if fi, err := os.Stat(d); err == nil && fi.IsDir() {
+			return d
+		}
+	}
+	if wd, err := os.Getwd(); err == nil {
+		p := filepath.Join(wd, "migrations")
+		if fi, err := os.Stat(p); err == nil && fi.IsDir() {
+			return p
+		}
+	}
+	return "migrations"
 }

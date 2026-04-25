@@ -1,0 +1,82 @@
+# Observability stack (tier 1+: logs/metrics in Grafana; optional traces to Jaeger).
+# From deploy/: docker compose -f docker-compose.yml -f docker-compose.observability.yml up -d
+# Grafana: http://localhost:3001 (admin / admin). Jaeger UI: http://localhost:16686
+# Tier 1: api-gateway uses JSON logs so Promtail can parse path/status/duration for Loki panels.
+
+services:
+  api-gateway:
+    environment:
+      LOG_FORMAT: json
+      OTEL_EXPORTER_OTLP_ENDPOINT: jaeger:4318
+      OTEL_EXPORTER_OTLP_INSECURE: "true"
+
+  prometheus:
+    image: prom/prometheus:v2.53.0
+    container_name: banya-prometheus
+    volumes:
+      - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./observability/alert.rules.yml:/etc/prometheus/alert.rules.yml:ro
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --web.enable-lifecycle
+    ports:
+      - "9090:9090"
+
+  loki:
+    image: grafana/loki:2.9.4
+    container_name: banya-loki
+    command: -config.file=/etc/loki/local-config.yaml
+    ports:
+      - "3100:3100"
+
+  promtail:
+    image: grafana/promtail:2.9.4
+    container_name: banya-promtail
+    volumes:
+      - ./observability/promtail.yml:/etc/promtail/config.yml:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    command: -config.file=/etc/promtail/config.yml
+    depends_on:
+      - loki
+
+  jaeger:
+    image: jaegertracing/all-in-one:1.62
+    container_name: banya-jaeger
+    environment:
+      COLLECTOR_OTLP_ENABLED: "true"
+    ports:
+      - "16686:16686"
+      - "4317:4317"
+      - "4318:4318"
+
+  grafana:
+    image: grafana/grafana:11.2.0
+    container_name: banya-grafana
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?Set GRAFANA_ADMIN_PASSWORD in deploy/.env for Grafana}
+      GF_USERS_DEFAULT_THEME: dark
+    ports:
+      - "3001:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    depends_on:
+      - prometheus
+      - loki
+      - jaeger
+
+  analytics-nats-sub:
+    image: natsio/nats-box:0.14.5
+    container_name: banya-analytics-nats-sub
+    command:
+      - sh
+      - -c
+      - "nats sub analytics.web --server=nats://nats:4222"
+    depends_on:
+      nats:
+        condition: service_started
+
+volumes:
+  grafana_data:

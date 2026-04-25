@@ -24,6 +24,7 @@ import {
   createMasterBooking,
   formatApiErrorMessage,
   masterCardImageSrc,
+  masterCardPriceLabel,
   venueMediaUrl,
 } from "@/lib/api";
 import type { MasterPhoto } from "@/lib/types";
@@ -109,6 +110,7 @@ export default function MasterPublicPage({
 
   const gallery = sortMasterPhotosPublic(master.photos);
   const coverSrc = masterCardImageSrc(master);
+  const priceLine = masterCardPriceLabel(master);
 
   return (
     <div className="container mx-auto max-w-3xl px-4 py-10">
@@ -168,11 +170,7 @@ export default function MasterPublicPage({
                 : "Выезд и у заведения"}
           </Badge>
         </div>
-        {master.hourly_rate > 0 && (
-          <p className="mt-2 text-lg">
-            от {kopecksToRub(master.hourly_rate)} ₽ / час
-          </p>
-        )}
+        {priceLine ? <p className="mt-2 text-lg">{priceLine}</p> : null}
       </div>
 
       <Card className="mb-8">

@@ -16,8 +16,18 @@ import (
 	"github.com/tienlao/agregator/services/booking-service/internal/domain"
 )
 
+// visitDateNotInPast returns YYYY-MM-DD in Europe/Moscow strictly after "today"
+// so CreateBooking date validation does not depend on the calendar when tests run.
+func visitDateNotInPast(t *testing.T) string {
+	t.Helper()
+	loc, err := time.LoadLocation("Europe/Moscow")
+	require.NoError(t, err)
+	return time.Now().In(loc).AddDate(0, 0, 7).Format("2006-01-02")
+}
+
 func TestCreateBooking_Success(t *testing.T) {
 	ctx := context.Background()
+	testDate := visitDateNotInPast(t)
 	const bookingID = "b1"
 	const paymentID = "pay-1"
 
@@ -55,7 +65,7 @@ func TestCreateBooking_Success(t *testing.T) {
 		},
 		CheckSlotAvailabilityFunc: func(_ context.Context, in *venuev1.CheckSlotRequest, _ ...grpc.CallOption) (*venuev1.CheckSlotResponse, error) {
 			require.Equal(t, "venue-1", in.VenueId)
-			require.Equal(t, "2026-04-10", in.Date)
+			require.Equal(t, testDate, in.Date)
 			require.Equal(t, "10:00", in.TimeFrom)
 			require.Equal(t, "12:00", in.TimeTo)
 			return &venuev1.CheckSlotResponse{Available: true}, nil
@@ -64,7 +74,7 @@ func TestCreateBooking_Success(t *testing.T) {
 			reserveCalled = true
 			require.Equal(t, "venue-1", in.VenueId)
 			require.Equal(t, bookingID, in.BookingId)
-			require.Equal(t, "2026-04-10", in.Date)
+			require.Equal(t, testDate, in.Date)
 			return &venuev1.ReserveSlotResponse{}, nil
 		},
 	}
@@ -94,7 +104,7 @@ func TestCreateBooking_Success(t *testing.T) {
 		VenueID:   "venue-1",
 		VenueName: "Sauna",
 		ServiceID: "svc-1",
-		Date:      "2026-04-10",
+		Date:      testDate,
 		TimeFrom:  "10:00",
 		TimeTo:    "12:00",
 		Guests:    2,
@@ -111,6 +121,7 @@ func TestCreateBooking_Success(t *testing.T) {
 
 func TestCreateBooking_SlotNotAvailable(t *testing.T) {
 	ctx := context.Background()
+	testDate := visitDateNotInPast(t)
 	venue := &mockVenueClient{
 		CheckSlotAvailabilityFunc: func(_ context.Context, _ *venuev1.CheckSlotRequest, _ ...grpc.CallOption) (*venuev1.CheckSlotResponse, error) {
 			return &venuev1.CheckSlotResponse{Available: false}, nil
@@ -119,9 +130,9 @@ func TestCreateBooking_SlotNotAvailable(t *testing.T) {
 	uc := NewBookingUseCase(&mockBookingRepo{}, venue, &mockPaymentClient{}, &mockEventPublisher{}, "Europe/Moscow")
 
 	_, err := uc.CreateBooking(ctx, CreateBookingInput{
-		UserID:  "user-1",
-		VenueID: "venue-1",
-		Date:    "2026-04-10",
+		UserID:   "user-1",
+		VenueID:  "venue-1",
+		Date:     testDate,
 		TimeFrom: "10:00",
 		TimeTo:   "12:00",
 	})
@@ -134,6 +145,7 @@ func TestCreateBooking_SlotNotAvailable(t *testing.T) {
 
 func TestCreateBooking_ReserveConflictDeletesBooking(t *testing.T) {
 	ctx := context.Background()
+	testDate := visitDateNotInPast(t)
 	const bookingID = "b-conflict"
 	var deleted bool
 
@@ -165,7 +177,7 @@ func TestCreateBooking_ReserveConflictDeletesBooking(t *testing.T) {
 	_, err := uc.CreateBooking(ctx, CreateBookingInput{
 		UserID:   "user-1",
 		VenueID:  "venue-1",
-		Date:     "2026-04-10",
+		Date:     testDate,
 		TimeFrom: "10:00",
 		TimeTo:   "12:00",
 	})

@@ -22,7 +22,7 @@ func testRedisClient(t *testing.T) *redis.Client {
 
 func testPaymentUseCase(t *testing.T, repo *mockPaymentRepo, pub *mockEventPublisher) *PaymentUseCase {
 	t.Helper()
-	return NewPaymentUseCase(repo, NewYooKassaClient("", ""), testRedisClient(t), pub, "https://example.com/return")
+	return NewPaymentUseCase(repo, NewYooKassaClient("", ""), testRedisClient(t), pub, "https://example.com/return", 1500)
 }
 
 func TestHandleWebhook_Succeeded(t *testing.T) {
@@ -100,6 +100,35 @@ func TestHandleWebhook_Cancelled(t *testing.T) {
 	require.True(t, updateCalled)
 	require.NotNil(t, published)
 	assert.Equal(t, "cancelled", published.Status)
+}
+
+func TestHandleWebhook_WaitingForCapture_SplitNoOpInMock(t *testing.T) {
+	t.Parallel()
+	providerID := "yk_wait_cap"
+	p := &domain.Payment{
+		ID:                      "pay-cap",
+		BookingID:               "book-cap",
+		Status:                  "pending",
+		ProviderID:              providerID,
+		YooKassaSellerAccountID: "seller-shop-1",
+	}
+	repo := &mockPaymentRepo{
+		GetByProviderIDFunc: func(ctx context.Context, pid string) (*domain.Payment, error) {
+			assert.Equal(t, providerID, pid)
+			return p, nil
+		},
+	}
+	pub := &mockEventPublisher{
+		PublishPaymentCompletedFunc: func(ctx context.Context, pay *domain.Payment) error {
+			t.Fatal("should not publish on waiting_for_capture")
+			return nil
+		},
+	}
+	uc := testPaymentUseCase(t, repo, pub)
+	err := uc.HandleWebhook(context.Background(), WebhookPayload{
+		Object: WebhookObject{ID: providerID, Status: "waiting_for_capture"},
+	})
+	require.NoError(t, err)
 }
 
 func TestHandleWebhook_UnknownStatus(t *testing.T) {

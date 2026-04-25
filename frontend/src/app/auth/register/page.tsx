@@ -10,7 +10,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Separator } from "@/components/ui/separator"
-import { register, userFromRegisterResponse, ApiError } from "@/lib/api"
+import { register, userFromRegisterResponse, ApiError, formatApiErrorMessage } from "@/lib/api"
 import { useAuthStore } from "@/store/auth"
 import { Flame } from "lucide-react"
 
@@ -55,14 +55,9 @@ export default function RegisterPage() {
       router.push("/")
     } catch (err) {
       if (err instanceof ApiError) {
-        try {
-          const body = JSON.parse(err.message)
-          setError(body.error || "Ошибка регистрации")
-        } catch {
-          setError(err.message)
-        }
+        setError(formatApiErrorMessage(err, "Не удалось зарегистрироваться"))
       } else {
-        setError("Не удалось подключиться к серверу")
+        setError(formatApiErrorMessage(err, "Не удалось подключиться к серверу"))
       }
     } finally {
       setLoading(false)

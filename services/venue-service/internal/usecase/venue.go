@@ -2,15 +2,18 @@ package usecase
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 	"unicode/utf8"
 
 	"github.com/google/uuid"
 	goredis "github.com/redis/go-redis/v9"
+	"golang.org/x/sync/singleflight"
 
 	pkgerrors "github.com/tienlao/agregator/pkg/errors"
 
@@ -20,6 +23,7 @@ import (
 
 const (
 	cacheTTL              = 10 * time.Minute
+	listSearchCacheTTL    = 2 * time.Minute
 	maxVenueServices      = 50
 	maxServiceDurationMin = 10080 // 7 days in minutes
 )
@@ -27,6 +31,7 @@ const (
 type VenueUseCase struct {
 	repo  domain.VenueRepository
 	redis *goredis.Client
+	sf    singleflight.Group
 }
 
 func NewVenueUseCase(repo domain.VenueRepository, redis *goredis.Client) *VenueUseCase {
@@ -37,16 +42,26 @@ func (uc *VenueUseCase) Create(ctx context.Context, venue *domain.Venue) error {
 	if err := ValidateVenueVerificationForCreate(venue); err != nil {
 		return err
 	}
+	if err := NormalizeVenuePayoutProfile(venue); err != nil {
+		return err
+	}
 	sl, err := NormalizeSocialLinksJSON(venue.SocialLinks)
 	if err != nil {
 		return err
 	}
 	venue.SocialLinks = sl
-	return uc.repo.Create(ctx, venue)
+	if err := uc.repo.Create(ctx, venue); err != nil {
+		return err
+	}
+	uc.invalidateCache(ctx, venue.ID, venue.Slug)
+	return nil
 }
 
 func (uc *VenueUseCase) Update(ctx context.Context, venue *domain.Venue) error {
 	if err := ValidateVenueVerificationForUpdate(venue); err != nil {
+		return err
+	}
+	if err := NormalizeVenuePayoutProfile(venue); err != nil {
 		return err
 	}
 	sl, err := NormalizeSocialLinksJSON(venue.SocialLinks)
@@ -122,11 +137,23 @@ func (uc *VenueUseCase) ReplaceVenueServices(ctx context.Context, venueID, owner
 }
 
 func (uc *VenueUseCase) GetByID(ctx context.Context, id uuid.UUID) (*domain.Venue, error) {
+	v, err, _ := uc.sf.Do("gid:"+id.String(), func() (any, error) {
+		return uc.getByIDUncached(ctx, id)
+	})
+	if err != nil {
+		return nil, err
+	}
+	if v == nil {
+		return nil, nil
+	}
+	return v.(*domain.Venue), nil
+}
+
+func (uc *VenueUseCase) getByIDUncached(ctx context.Context, id uuid.UUID) (*domain.Venue, error) {
 	key := fmt.Sprintf("venue:id:%s", id)
 	if v, err := uc.getFromCache(ctx, key); err == nil && v != nil {
 		return v, nil
 	}
-
 	v, err := uc.repo.GetByID(ctx, id)
 	if err != nil {
 		return nil, err
@@ -138,11 +165,23 @@ func (uc *VenueUseCase) GetByID(ctx context.Context, id uuid.UUID) (*domain.Venu
 }
 
 func (uc *VenueUseCase) GetBySlug(ctx context.Context, slug string) (*domain.Venue, error) {
+	v, err, _ := uc.sf.Do("gslug:"+slug, func() (any, error) {
+		return uc.getBySlugUncached(ctx, slug)
+	})
+	if err != nil {
+		return nil, err
+	}
+	if v == nil {
+		return nil, nil
+	}
+	return v.(*domain.Venue), nil
+}
+
+func (uc *VenueUseCase) getBySlugUncached(ctx context.Context, slug string) (*domain.Venue, error) {
 	key := fmt.Sprintf("venue:slug:%s", slug)
 	if v, err := uc.getFromCache(ctx, key); err == nil && v != nil {
 		return v, nil
 	}
-
 	v, err := uc.repo.GetBySlug(ctx, slug)
 	if err != nil {
 		return nil, err
@@ -153,20 +192,81 @@ func (uc *VenueUseCase) GetBySlug(ctx context.Context, slug string) (*domain.Ven
 	return v, nil
 }
 
+func (uc *VenueUseCase) catalogVersion(ctx context.Context) int64 {
+	if uc.redis == nil {
+		return 0
+	}
+	ver, err := uc.redis.Get(ctx, "venue:catalog:ver").Int64()
+	if err == goredis.Nil {
+		return 0
+	}
+	if err != nil {
+		return 0
+	}
+	return ver
+}
+
 func (uc *VenueUseCase) List(ctx context.Context, page, pageSize int32, venueType, sortBy string) (*domain.ListResult, error) {
-	return uc.repo.List(ctx, page, pageSize, venueType, sortBy)
+	if uc.redis == nil {
+		return uc.repo.List(ctx, page, pageSize, venueType, sortBy)
+	}
+	ver := uc.catalogVersion(ctx)
+	sum := sha256.Sum256([]byte(fmt.Sprintf("%d|%d|%d|%s|%s", ver, page, pageSize, venueType, sortBy)))
+	rkey := fmt.Sprintf("venue:list:%x", sum[:])
+	if raw, err := uc.redis.Get(ctx, rkey).Bytes(); err == nil {
+		var res domain.ListResult
+		if json.Unmarshal(raw, &res) == nil {
+			return &res, nil
+		}
+	}
+	res, err := uc.repo.List(ctx, page, pageSize, venueType, sortBy)
+	if err != nil {
+		return nil, err
+	}
+	if data, err := json.Marshal(res); err == nil {
+		_ = uc.redis.Set(ctx, rkey, data, listSearchCacheTTL).Err()
+	}
+	return res, nil
+}
+
+func searchParamsCacheString(ver int64, p domain.SearchParams) string {
+	am := append([]string(nil), p.Amenities...)
+	sort.Strings(am)
+	cc := append([]string(nil), p.EffectiveCities()...)
+	sort.Strings(cc)
+	return fmt.Sprintf("%d|q=%s|c=%s|lat=%.8f|lng=%.8f|r=%.6f|vt=%s|pmin=%d|pmax=%d|rmin=%.6f|a=%v|page=%d|ps=%d",
+		ver, p.Query, strings.Join(cc, ","), p.Lat, p.Lng, p.RadiusKM, p.VenueType, p.PriceMin, p.PriceMax, p.RatingMin, am, p.Page, p.PageSize)
 }
 
 func (uc *VenueUseCase) Search(ctx context.Context, params domain.SearchParams) (*domain.ListResult, error) {
-	return uc.repo.Search(ctx, params)
+	if uc.redis == nil {
+		return uc.repo.Search(ctx, params)
+	}
+	ver := uc.catalogVersion(ctx)
+	sum := sha256.Sum256([]byte(searchParamsCacheString(ver, params)))
+	rkey := fmt.Sprintf("venue:search:%x", sum[:])
+	if raw, err := uc.redis.Get(ctx, rkey).Bytes(); err == nil {
+		var res domain.ListResult
+		if json.Unmarshal(raw, &res) == nil {
+			return &res, nil
+		}
+	}
+	res, err := uc.repo.Search(ctx, params)
+	if err != nil {
+		return nil, err
+	}
+	if data, err := json.Marshal(res); err == nil {
+		_ = uc.redis.Set(ctx, rkey, data, listSearchCacheTTL).Err()
+	}
+	return res, nil
 }
 
 func (uc *VenueUseCase) ListByOwner(ctx context.Context, ownerID uuid.UUID) ([]domain.Venue, error) {
 	return uc.repo.ListByOwner(ctx, ownerID)
 }
 
-func (uc *VenueUseCase) ListByStatus(ctx context.Context, status string, page, pageSize int32) (*domain.ListResult, error) {
-	return uc.repo.ListByStatus(ctx, status, page, pageSize)
+func (uc *VenueUseCase) ListByStatus(ctx context.Context, status string, page, pageSize int32, nameQuery string) (*domain.ListResult, error) {
+	return uc.repo.ListByStatus(ctx, status, page, pageSize, nameQuery)
 }
 
 func (uc *VenueUseCase) SubmitVenueForReview(ctx context.Context, venueID, ownerID uuid.UUID) (*domain.Venue, error) {
@@ -189,29 +289,47 @@ func (uc *VenueUseCase) SubmitVenueForReview(ctx context.Context, venueID, owner
 }
 
 func (uc *VenueUseCase) Moderate(ctx context.Context, venueID uuid.UUID, action, comment string, moderatedBy uuid.UUID) (*domain.Venue, error) {
-	var newStatus string
-	switch action {
-	case "approve":
-		newStatus = domain.StatusActive
-	case "reject":
-		newStatus = domain.StatusRejected
-	case "suspend":
-		newStatus = domain.StatusSuspended
-	default:
-		return nil, fmt.Errorf("unknown moderation action: %s", action)
-	}
-
-	if (action == "reject" || action == "suspend") && comment == "" {
-		return nil, fmt.Errorf("comment is required for %s action", action)
-	}
-
 	existing, err := uc.repo.GetByID(ctx, venueID)
 	if err != nil {
 		return nil, err
 	}
 	if existing == nil {
-		return nil, fmt.Errorf("venue not found: %s", venueID)
+		return nil, pkgerrors.NotFound("venue not found")
 	}
+
+	action = strings.TrimSpace(strings.ToLower(action))
+	comment = strings.TrimSpace(comment)
+
+	var newStatus string
+	switch action {
+	case "approve":
+		newStatus = domain.StatusActive
+		if existing.Status != domain.StatusPendingReview && existing.Status != domain.StatusRejected {
+			return nil, pkgerrors.InvalidArgument("одобрение доступно только для заявок на проверке или отклонённых карточек")
+		}
+	case "reject":
+		newStatus = domain.StatusRejected
+		if existing.Status != domain.StatusPendingReview {
+			return nil, pkgerrors.InvalidArgument("отклонение доступно только для заявок на проверке")
+		}
+	case "suspend":
+		newStatus = domain.StatusSuspended
+		if existing.Status != domain.StatusActive {
+			return nil, pkgerrors.InvalidArgument("приостановка доступна только для активных заведений")
+		}
+	case "resume":
+		newStatus = domain.StatusActive
+		if existing.Status != domain.StatusSuspended {
+			return nil, pkgerrors.InvalidArgument("возобновление доступно только для приостановленных заведений")
+		}
+	default:
+		return nil, pkgerrors.InvalidArgument("неизвестное действие модерации")
+	}
+
+	if (action == "reject" || action == "suspend") && comment == "" {
+		return nil, pkgerrors.InvalidArgument("комментарий обязателен для этого действия")
+	}
+
 	oldStatus := existing.Status
 
 	if err := uc.repo.UpdateStatus(ctx, venueID, newStatus, comment, moderatedBy); err != nil {
@@ -232,6 +350,32 @@ func (uc *VenueUseCase) Moderate(ctx context.Context, venueID uuid.UUID, action,
 	}
 	uc.invalidateCache(ctx, venueID, v.Slug)
 	return v, nil
+}
+
+// RecipientUserIDsForVenue возвращает владельца и CRM-персонал (для уведомлений после модерации). Без проверки прав вызывающего — только из доверенного кода сервиса.
+func (uc *VenueUseCase) RecipientUserIDsForVenue(ctx context.Context, venueID uuid.UUID) ([]uuid.UUID, error) {
+	v, err := uc.repo.GetByID(ctx, venueID)
+	if err != nil {
+		return nil, err
+	}
+	if v == nil {
+		return nil, fmt.Errorf("venue not found: %s", venueID)
+	}
+	staff, err := uc.repo.ListVenueStaff(ctx, venueID)
+	if err != nil {
+		return nil, err
+	}
+	out := []uuid.UUID{v.OwnerID}
+	seen := map[uuid.UUID]struct{}{v.OwnerID: {}}
+	for i := range staff {
+		id := staff[i].UserID
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	return out, nil
 }
 
 func (uc *VenueUseCase) GetModerationHistory(ctx context.Context, venueID uuid.UUID) ([]domain.ModerationHistoryEntry, error) {
@@ -299,7 +443,7 @@ func validateSlotDateAndTimes(date, timeFrom, timeTo string) error {
 
 // CreateManualSlotBlock reserves a time interval without an aggregator booking (external booking).
 func (uc *VenueUseCase) CreateManualSlotBlock(ctx context.Context, ownerID, venueID uuid.UUID, date, timeFrom, timeTo, note string) (uuid.UUID, error) {
-	if _, err := uc.ensureVenueOwner(ctx, venueID, ownerID); err != nil {
+	if err := uc.ensureVenueCRMMember(ctx, venueID, ownerID); err != nil {
 		return uuid.Nil, err
 	}
 	if err := validateSlotDateAndTimes(date, timeFrom, timeTo); err != nil {
@@ -320,7 +464,7 @@ func (uc *VenueUseCase) CreateManualSlotBlock(ctx context.Context, ownerID, venu
 
 // DeleteManualSlotBlock removes a manual block created by the owner.
 func (uc *VenueUseCase) DeleteManualSlotBlock(ctx context.Context, ownerID, venueID, blockID uuid.UUID) error {
-	if _, err := uc.ensureVenueOwner(ctx, venueID, ownerID); err != nil {
+	if err := uc.ensureVenueCRMMember(ctx, venueID, ownerID); err != nil {
 		return err
 	}
 	ok, err := uc.repo.DeleteManualSlotBlock(ctx, venueID, blockID)
@@ -335,7 +479,7 @@ func (uc *VenueUseCase) DeleteManualSlotBlock(ctx context.Context, ownerID, venu
 
 // ListManualSlotBlocks returns manual blocks for the venue in the inclusive date range.
 func (uc *VenueUseCase) ListManualSlotBlocks(ctx context.Context, ownerID, venueID uuid.UUID, dateFrom, dateTo string) ([]domain.ManualSlotBlock, error) {
-	if _, err := uc.ensureVenueOwner(ctx, venueID, ownerID); err != nil {
+	if err := uc.ensureVenueCRMMember(ctx, venueID, ownerID); err != nil {
 		return nil, err
 	}
 	d0, err := time.Parse("2006-01-02", dateFrom)
@@ -541,13 +685,20 @@ func (uc *VenueUseCase) SetVenueHallCoverPhoto(ctx context.Context, venueID, hal
 }
 
 func (uc *VenueUseCase) invalidateCache(ctx context.Context, id uuid.UUID, slug string) {
+	if uc.redis == nil {
+		return
+	}
 	uc.redis.Del(ctx, fmt.Sprintf("venue:id:%s", id))
 	if slug != "" {
 		uc.redis.Del(ctx, fmt.Sprintf("venue:slug:%s", slug))
 	}
+	_ = uc.redis.Incr(ctx, "venue:catalog:ver").Err()
 }
 
 func (uc *VenueUseCase) getFromCache(ctx context.Context, key string) (*domain.Venue, error) {
+	if uc.redis == nil {
+		return nil, goredis.Nil
+	}
 	data, err := uc.redis.Get(ctx, key).Bytes()
 	if err != nil {
 		return nil, err
@@ -560,6 +711,9 @@ func (uc *VenueUseCase) getFromCache(ctx context.Context, key string) (*domain.V
 }
 
 func (uc *VenueUseCase) setCache(ctx context.Context, key string, v *domain.Venue) {
+	if uc.redis == nil {
+		return
+	}
 	data, err := json.Marshal(v)
 	if err != nil {
 		return

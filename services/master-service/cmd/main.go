@@ -10,6 +10,7 @@ import (
 	"google.golang.org/grpc"
 
 	masterv1 "github.com/tienlao/agregator/gen/go/master/v1"
+	"github.com/tienlao/agregator/pkg/grpcutil"
 	"github.com/tienlao/agregator/pkg/logger"
 	"github.com/tienlao/agregator/pkg/postgres"
 
@@ -22,6 +23,9 @@ import (
 func main() {
 	log := logger.New("master-service")
 	cfg := config.Load()
+	if err := cfg.Postgres.Validate(); err != nil {
+		log.Fatal().Err(err).Msg("invalid postgres config")
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -36,7 +40,7 @@ func main() {
 	repo := repository.NewMasterRepo(pgPool)
 	uc := usecase.NewMasterUseCase(repo)
 
-	grpcServer := grpc.NewServer()
+	grpcServer := grpc.NewServer(grpcutil.ServerOptions()...)
 	masterv1.RegisterMasterServiceServer(grpcServer, delivery.NewServer(uc))
 
 	lis, err := net.Listen("tcp", ":"+cfg.GRPCPort)

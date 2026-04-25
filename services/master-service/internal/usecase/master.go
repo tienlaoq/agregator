@@ -166,7 +166,7 @@ func (uc *MasterUseCase) UpdateMyProfile(ctx context.Context, userID uuid.UUID, 
 	if in.PayoutLegalForm != nil {
 		v := strings.TrimSpace(strings.ToLower(*in.PayoutLegalForm))
 		switch v {
-		case "", domain.PayoutLegalFormIP, domain.PayoutLegalFormGPH, domain.PayoutLegalFormSelfEmployed:
+		case "", domain.PayoutLegalFormIP, domain.PayoutLegalFormOOO, domain.PayoutLegalFormIndividual, domain.PayoutLegalFormSelfEmployed:
 			m.PayoutLegalForm = v
 		default:
 			return nil, pkgerrors.InvalidArgument("invalid payout_legal_form")
@@ -284,9 +284,9 @@ func validateReadyForReview(m *domain.Master) error {
 		return fmt.Errorf("добавьте хотя бы одну услугу")
 	}
 	switch strings.TrimSpace(strings.ToLower(m.PayoutLegalForm)) {
-	case domain.PayoutLegalFormIP, domain.PayoutLegalFormGPH, domain.PayoutLegalFormSelfEmployed:
+	case domain.PayoutLegalFormIP, domain.PayoutLegalFormOOO, domain.PayoutLegalFormIndividual, domain.PayoutLegalFormSelfEmployed:
 	default:
-		return fmt.Errorf("укажите форму получения выплат: ИП, договор ГПХ или самозанятость")
+		return fmt.Errorf("укажите форму получения выплат: ИП, ООО, физическое лицо или самозанятость")
 	}
 	return nil
 }

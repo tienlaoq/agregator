@@ -120,6 +120,14 @@ func (m *mockBookingClient) HasCompletedBooking(ctx context.Context, in *booking
 	return &bookingv1.HasCompletedBookingResponse{}, nil
 }
 
+func (m *mockBookingClient) AddBookingStaffNote(ctx context.Context, in *bookingv1.AddBookingStaffNoteRequest, opts ...grpc.CallOption) (*bookingv1.AddBookingStaffNoteResponse, error) {
+	return &bookingv1.AddBookingStaffNoteResponse{}, nil
+}
+
+func (m *mockBookingClient) ListBookingStaffNotes(ctx context.Context, in *bookingv1.ListBookingStaffNotesRequest, opts ...grpc.CallOption) (*bookingv1.ListBookingStaffNotesResponse, error) {
+	return &bookingv1.ListBookingStaffNotesResponse{}, nil
+}
+
 type mockVenueClient struct {
 	CheckSlotAvailabilityFunc func(ctx context.Context, in *venuev1.CheckSlotRequest, opts ...grpc.CallOption) (*venuev1.CheckSlotResponse, error)
 	ReserveSlotFunc           func(ctx context.Context, in *venuev1.ReserveSlotRequest, opts ...grpc.CallOption) (*venuev1.ReserveSlotResponse, error)
@@ -228,5 +236,33 @@ func (m *mockVenueClient) DeleteVenueHallPhoto(ctx context.Context, in *venuev1.
 }
 
 func (m *mockVenueClient) SetVenueHallCoverPhoto(ctx context.Context, in *venuev1.SetVenueHallCoverPhotoRequest, opts ...grpc.CallOption) (*venuev1.VenueResponse, error) {
+	return nil, nil
+}
+
+func (m *mockVenueClient) GetVenueManagementAccess(ctx context.Context, in *venuev1.GetVenueManagementAccessRequest, opts ...grpc.CallOption) (*venuev1.GetVenueManagementAccessResponse, error) {
+	return &venuev1.GetVenueManagementAccessResponse{Access: "owner"}, nil
+}
+
+func (m *mockVenueClient) ListVenueStaff(ctx context.Context, in *venuev1.ListVenueStaffRequest, opts ...grpc.CallOption) (*venuev1.ListVenueStaffResponse, error) {
+	return nil, nil
+}
+
+func (m *mockVenueClient) AddVenueStaff(ctx context.Context, in *venuev1.AddVenueStaffRequest, opts ...grpc.CallOption) (*venuev1.AddVenueStaffResponse, error) {
+	return &venuev1.AddVenueStaffResponse{}, nil
+}
+
+func (m *mockVenueClient) RemoveVenueStaff(ctx context.Context, in *venuev1.RemoveVenueStaffRequest, opts ...grpc.CallOption) (*venuev1.RemoveVenueStaffResponse, error) {
+	return &venuev1.RemoveVenueStaffResponse{}, nil
+}
+
+func (m *mockVenueClient) ListVenueCRMTasks(ctx context.Context, in *venuev1.ListVenueCRMTasksRequest, opts ...grpc.CallOption) (*venuev1.ListVenueCRMTasksResponse, error) {
+	return nil, nil
+}
+
+func (m *mockVenueClient) CreateVenueCRMTask(ctx context.Context, in *venuev1.CreateVenueCRMTaskRequest, opts ...grpc.CallOption) (*venuev1.CreateVenueCRMTaskResponse, error) {
+	return nil, nil
+}
+
+func (m *mockVenueClient) CompleteVenueCRMTask(ctx context.Context, in *venuev1.CompleteVenueCRMTaskRequest, opts ...grpc.CallOption) (*venuev1.CompleteVenueCRMTaskResponse, error) {
 	return nil, nil
 }

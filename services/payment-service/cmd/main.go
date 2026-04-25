@@ -10,6 +10,7 @@ import (
 	"google.golang.org/grpc"
 
 	paymentv1 "github.com/tienlao/agregator/gen/go/payment/v1"
+	"github.com/tienlao/agregator/pkg/grpcutil"
 	"github.com/tienlao/agregator/pkg/logger"
 	"github.com/tienlao/agregator/pkg/natsutil"
 	"github.com/tienlao/agregator/pkg/postgres"
@@ -26,6 +27,9 @@ func main() {
 	log := logger.New("payment-service")
 
 	cfg := config.Load()
+	if err := cfg.Postgres.Validate(); err != nil {
+		log.Fatal().Err(err).Msg("invalid postgres config")
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -63,9 +67,9 @@ func main() {
 	paymentRepo := repository.NewPaymentRepo(pgPool)
 	publisher := events.NewPublisher(js)
 
-	uc := usecase.NewPaymentUseCase(paymentRepo, yooKassaClient, rdb, publisher, cfg.PaymentReturnURL)
+	uc := usecase.NewPaymentUseCase(paymentRepo, yooKassaClient, rdb, publisher, cfg.PaymentReturnURL, cfg.PlatformFeeBPS)
 
-	grpcServer := grpc.NewServer()
+	grpcServer := grpc.NewServer(grpcutil.ServerOptions()...)
 	paymentv1.RegisterPaymentServiceServer(grpcServer, delivery.NewServer(uc))
 
 	lis, err := net.Listen("tcp", ":"+cfg.GRPCPort)

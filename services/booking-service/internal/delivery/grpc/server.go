@@ -58,7 +58,7 @@ func (s *Server) ListUserBookings(ctx context.Context, req *bookingv1.ListUserBo
 }
 
 func (s *Server) ListVenueBookings(ctx context.Context, req *bookingv1.ListVenueBookingsRequest) (*bookingv1.ListBookingsResponse, error) {
-	bookings, total, err := s.uc.ListVenueBookings(ctx, req.VenueId, req.Status, req.Date, req.Page, req.PageSize)
+	bookings, total, err := s.uc.ListVenueBookings(ctx, req.VenueId, req.GetOwnerId(), req.Status, req.Date, req.Page, req.PageSize)
 	if err != nil {
 		return nil, err
 	}
@@ -67,6 +67,43 @@ func (s *Server) ListVenueBookings(ctx context.Context, req *bookingv1.ListVenue
 		resp.Bookings = append(resp.Bookings, toProto(b))
 	}
 	return resp, nil
+}
+
+func (s *Server) ListBookingStaffNotes(ctx context.Context, req *bookingv1.ListBookingStaffNotesRequest) (*bookingv1.ListBookingStaffNotesResponse, error) {
+	notes, err := s.uc.ListBookingStaffNotes(ctx, req.GetBookingId(), req.GetRequesterUserId())
+	if err != nil {
+		return nil, err
+	}
+	out := &bookingv1.ListBookingStaffNotesResponse{}
+	for i := range notes {
+		n := &notes[i]
+		out.Notes = append(out.Notes, &bookingv1.BookingStaffNote{
+			Id:            n.ID,
+			BookingId:     n.BookingID,
+			VenueId:       n.VenueID,
+			AuthorUserId:  n.AuthorUserID,
+			Body:          n.Body,
+			CreatedAt:     timestamppb.New(n.CreatedAt),
+		})
+	}
+	return out, nil
+}
+
+func (s *Server) AddBookingStaffNote(ctx context.Context, req *bookingv1.AddBookingStaffNoteRequest) (*bookingv1.AddBookingStaffNoteResponse, error) {
+	n, err := s.uc.AddBookingStaffNote(ctx, req.GetBookingId(), req.GetRequesterUserId(), req.GetBody())
+	if err != nil {
+		return nil, err
+	}
+	return &bookingv1.AddBookingStaffNoteResponse{
+		Note: &bookingv1.BookingStaffNote{
+			Id:            n.ID,
+			BookingId:     n.BookingID,
+			VenueId:       n.VenueID,
+			AuthorUserId:  n.AuthorUserID,
+			Body:          n.Body,
+			CreatedAt:     timestamppb.New(n.CreatedAt),
+		},
+	}, nil
 }
 
 func (s *Server) CancelBooking(ctx context.Context, req *bookingv1.CancelBookingRequest) (*bookingv1.BookingResponse, error) {

@@ -21,12 +21,14 @@ func NewPaymentRepo(pool *pgxpool.Pool) *PaymentRepo {
 
 func (r *PaymentRepo) Create(ctx context.Context, p *domain.Payment) error {
 	const q = `
-		INSERT INTO payments (booking_id, amount, status, provider_id, payment_url, idempotency_key)
-		VALUES ($1, $2, $3, $4, $5, $6)
+		INSERT INTO payments (booking_id, amount, status, provider_id, payment_url, idempotency_key,
+			platform_fee_kopecks, counterparty_net_kopecks, counterparty_type, counterparty_id, yookassa_seller_account_id)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 		RETURNING id, created_at, updated_at`
 	return r.pool.QueryRow(ctx, q,
 		p.BookingID, p.Amount, p.Status,
 		p.ProviderID, p.PaymentURL, p.IdempotencyKey,
+		p.PlatformFeeKopecks, p.CounterpartyNetKopecks, p.CounterpartyType, p.CounterpartyID, p.YooKassaSellerAccountID,
 	).Scan(&p.ID, &p.CreatedAt, &p.UpdatedAt)
 }
 
@@ -34,6 +36,9 @@ func (r *PaymentRepo) GetByID(ctx context.Context, id string) (*domain.Payment, 
 	const q = `
 		SELECT id, booking_id, amount, status, COALESCE(provider_id, ''),
 		       COALESCE(payment_url, ''), COALESCE(idempotency_key, ''),
+		       COALESCE(platform_fee_kopecks, 0), COALESCE(counterparty_net_kopecks, 0),
+		       COALESCE(counterparty_type, ''), COALESCE(counterparty_id, ''),
+		       COALESCE(yookassa_seller_account_id, ''),
 		       created_at, updated_at
 		FROM payments WHERE id = $1`
 	return r.scanOne(ctx, q, id)
@@ -43,6 +48,9 @@ func (r *PaymentRepo) GetByBookingID(ctx context.Context, bookingID string) (*do
 	const q = `
 		SELECT id, booking_id, amount, status, COALESCE(provider_id, ''),
 		       COALESCE(payment_url, ''), COALESCE(idempotency_key, ''),
+		       COALESCE(platform_fee_kopecks, 0), COALESCE(counterparty_net_kopecks, 0),
+		       COALESCE(counterparty_type, ''), COALESCE(counterparty_id, ''),
+		       COALESCE(yookassa_seller_account_id, ''),
 		       created_at, updated_at
 		FROM payments WHERE booking_id = $1`
 	return r.scanOne(ctx, q, bookingID)
@@ -52,6 +60,9 @@ func (r *PaymentRepo) GetByProviderID(ctx context.Context, providerID string) (*
 	const q = `
 		SELECT id, booking_id, amount, status, COALESCE(provider_id, ''),
 		       COALESCE(payment_url, ''), COALESCE(idempotency_key, ''),
+		       COALESCE(platform_fee_kopecks, 0), COALESCE(counterparty_net_kopecks, 0),
+		       COALESCE(counterparty_type, ''), COALESCE(counterparty_id, ''),
+		       COALESCE(yookassa_seller_account_id, ''),
 		       created_at, updated_at
 		FROM payments WHERE provider_id = $1`
 	return r.scanOne(ctx, q, providerID)
@@ -61,6 +72,9 @@ func (r *PaymentRepo) GetByIdempotencyKey(ctx context.Context, key string) (*dom
 	const q = `
 		SELECT id, booking_id, amount, status, COALESCE(provider_id, ''),
 		       COALESCE(payment_url, ''), COALESCE(idempotency_key, ''),
+		       COALESCE(platform_fee_kopecks, 0), COALESCE(counterparty_net_kopecks, 0),
+		       COALESCE(counterparty_type, ''), COALESCE(counterparty_id, ''),
+		       COALESCE(yookassa_seller_account_id, ''),
 		       created_at, updated_at
 		FROM payments WHERE idempotency_key = $1`
 	return r.scanOne(ctx, q, key)
@@ -83,6 +97,7 @@ func (r *PaymentRepo) scanOne(ctx context.Context, q string, args ...any) (*doma
 	err := r.pool.QueryRow(ctx, q, args...).Scan(
 		&p.ID, &p.BookingID, &p.Amount, &p.Status,
 		&p.ProviderID, &p.PaymentURL, &p.IdempotencyKey,
+		&p.PlatformFeeKopecks, &p.CounterpartyNetKopecks, &p.CounterpartyType, &p.CounterpartyID, &p.YooKassaSellerAccountID,
 		&p.CreatedAt, &p.UpdatedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {

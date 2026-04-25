@@ -12,6 +12,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	masterv1 "github.com/tienlao/agregator/gen/go/master/v1"
+	"github.com/tienlao/agregator/services/api-gateway/internal/apicatalog"
 	"github.com/tienlao/agregator/services/api-gateway/internal/middleware"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -64,14 +65,14 @@ func (h *MasterHandler) removeMasterStoredUpload(publicPath string) {
 func (h *MasterHandler) UploadMasterPhoto(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.UserIDFromCtx(r.Context())
 	if userID == "" {
-		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		writeCatalog(w, apicatalog.GatewayAuthUnauthorized)
 		return
 	}
 
 	prof, err := h.client.GetMyProfile(r.Context(), &masterv1.GetMyProfileRequest{UserId: userID})
 	if err != nil {
 		if st, ok := status.FromError(err); ok && st.Code() == codes.NotFound {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "сначала создайте профиль мастера"})
+			writeCatalog(w, apicatalog.GatewayMasterNotCreated)
 			return
 		}
 		grpcErrorToHTTP(w, err)
@@ -79,22 +80,22 @@ func (h *MasterHandler) UploadMasterPhoto(w http.ResponseWriter, r *http.Request
 	}
 	masterID := prof.GetMaster().GetId()
 	if masterID == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "сначала создайте профиль мастера"})
+		writeCatalog(w, apicatalog.GatewayMasterNotCreated)
 		return
 	}
 	if _, err := uuid.Parse(masterID); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "invalid master id"})
+		writeCatalog(w, apicatalog.GatewayInternalInvalidMasterId)
 		return
 	}
 
 	r.Body = http.MaxBytesReader(w, r.Body, maxMasterPhotoBytes+1024)
 	if err := r.ParseMultipartForm(maxMasterPhotoBytes); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid multipart form or file too large"})
+		writeCatalog(w, apicatalog.GatewayRequestInvalidMultipart)
 		return
 	}
 	file, _, err := r.FormFile("photo")
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "field \"photo\" is required"})
+		writeCatalog(w, apicatalog.GatewayRequestPhotoFieldRequired)
 		return
 	}
 	defer file.Close()
@@ -102,17 +103,17 @@ func (h *MasterHandler) UploadMasterPhoto(w http.ResponseWriter, r *http.Request
 	head := make([]byte, 512)
 	n, err := io.ReadFull(file, head)
 	if err != nil && err != io.ErrUnexpectedEOF && err != io.EOF {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "could not read file"})
+		writeCatalog(w, apicatalog.GatewayRequestInvalidFileRead)
 		return
 	}
 	if n == 0 {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "empty file"})
+		writeCatalog(w, apicatalog.GatewayRequestEmptyFile)
 		return
 	}
 	ct := http.DetectContentType(head[:n])
 	ext, ok := venuePhotoExt(ct, head[:n])
 	if !ok {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "only JPEG, PNG and WebP are allowed"})
+		writeCatalog(w, apicatalog.GatewayRequestInvalidImageType)
 		return
 	}
 
@@ -120,19 +121,19 @@ func (h *MasterHandler) UploadMasterPhoto(w http.ResponseWriter, r *http.Request
 	fname := uuid.NewString() + ext
 	dir := filepath.Join(h.uploadRoot, "masters", masterID)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not store file"})
+		writeCatalog(w, apicatalog.GatewayStorageFailed)
 		return
 	}
 	fullPath := filepath.Join(dir, fname)
 	dst, err := os.Create(fullPath)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not store file"})
+		writeCatalog(w, apicatalog.GatewayStorageFailed)
 		return
 	}
 	defer dst.Close()
 	if _, err := io.Copy(dst, body); err != nil {
 		_ = os.Remove(fullPath)
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "could not store file"})
+		writeCatalog(w, apicatalog.GatewayStorageFailed)
 		return
 	}
 
@@ -153,12 +154,12 @@ func (h *MasterHandler) UploadMasterPhoto(w http.ResponseWriter, r *http.Request
 func (h *MasterHandler) DeleteMasterPhoto(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.UserIDFromCtx(r.Context())
 	if userID == "" {
-		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		writeCatalog(w, apicatalog.GatewayAuthUnauthorized)
 		return
 	}
 	photoID := chi.URLParam(r, "photoId")
 	if _, err := uuid.Parse(photoID); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid photo id"})
+		writeCatalog(w, apicatalog.GatewayRequestInvalidPhotoId)
 		return
 	}
 	del, err := h.client.DeleteMasterPhoto(r.Context(), &masterv1.DeleteMasterPhotoRequest{
@@ -179,12 +180,12 @@ func (h *MasterHandler) DeleteMasterPhoto(w http.ResponseWriter, r *http.Request
 func (h *MasterHandler) SetMasterCoverPhoto(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.UserIDFromCtx(r.Context())
 	if userID == "" {
-		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		writeCatalog(w, apicatalog.GatewayAuthUnauthorized)
 		return
 	}
 	photoID := chi.URLParam(r, "photoId")
 	if _, err := uuid.Parse(photoID); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid photo id"})
+		writeCatalog(w, apicatalog.GatewayRequestInvalidPhotoId)
 		return
 	}
 	resp, err := h.client.SetMasterCoverPhoto(r.Context(), &masterv1.SetMasterCoverPhotoRequest{

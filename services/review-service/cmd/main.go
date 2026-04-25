@@ -8,11 +8,11 @@ import (
 	"syscall"
 
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 
 	bookingv1 "github.com/tienlao/agregator/gen/go/booking/v1"
 	reviewv1 "github.com/tienlao/agregator/gen/go/review/v1"
 	venuev1 "github.com/tienlao/agregator/gen/go/venue/v1"
+	"github.com/tienlao/agregator/pkg/grpcutil"
 	"github.com/tienlao/agregator/pkg/logger"
 	"github.com/tienlao/agregator/pkg/natsutil"
 	"github.com/tienlao/agregator/pkg/postgres"
@@ -28,6 +28,9 @@ func main() {
 	log := logger.New("review-service")
 
 	cfg := config.Load()
+	if err := cfg.Postgres.Validate(); err != nil {
+		log.Fatal().Err(err).Msg("invalid postgres config")
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -50,9 +53,7 @@ func main() {
 		log.Fatal().Err(err).Msg("failed to ensure REVIEWS stream")
 	}
 
-	bookingConn, err := grpc.NewClient(cfg.BookingServiceAddr,
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
-	)
+	bookingConn, err := grpc.NewClient(cfg.BookingServiceAddr, grpcutil.InsecureDialOptions()...)
 	if err != nil {
 		log.Fatal().Err(err).Msg("failed to dial booking-service")
 	}
@@ -60,9 +61,7 @@ func main() {
 	bookingClient := bookingv1.NewBookingServiceClient(bookingConn)
 	log.Info().Str("addr", cfg.BookingServiceAddr).Msg("booking-service client ready")
 
-	venueConn, err := grpc.NewClient(cfg.VenueServiceAddr,
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
-	)
+	venueConn, err := grpc.NewClient(cfg.VenueServiceAddr, grpcutil.InsecureDialOptions()...)
 	if err != nil {
 		log.Fatal().Err(err).Msg("failed to dial venue-service")
 	}
@@ -75,7 +74,7 @@ func main() {
 
 	uc := usecase.NewReviewUseCase(reviewRepo, bookingClient, venueClient, publisher)
 
-	grpcServer := grpc.NewServer()
+	grpcServer := grpc.NewServer(grpcutil.ServerOptions()...)
 	reviewv1.RegisterReviewServiceServer(grpcServer, delivery.NewServer(uc))
 
 	lis, err := net.Listen("tcp", ":"+cfg.GRPCPort)

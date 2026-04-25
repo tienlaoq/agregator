@@ -8,9 +8,10 @@ import (
 	"strings"
 	"testing"
 
-	authv1 "github.com/tienlao/agregator/gen/go/auth/v1"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	authv1 "github.com/tienlao/agregator/gen/go/auth/v1"
+	"github.com/tienlao/agregator/services/api-gateway/internal/apicatalog"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -110,7 +111,8 @@ func TestRegister_InvalidBody(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, rec.Code)
 	var out map[string]string
 	require.NoError(t, json.NewDecoder(rec.Body).Decode(&out))
-	assert.Equal(t, "invalid request body", out["error"])
+	assert.Equal(t, apicatalog.GatewayRequestInvalidBody.Code, out["code"])
+	assert.Equal(t, apicatalog.GatewayRequestInvalidBody.Message, out["error"])
 }
 
 func TestRegister_GRPCError(t *testing.T) {
@@ -130,6 +132,7 @@ func TestRegister_GRPCError(t *testing.T) {
 	require.Equal(t, http.StatusConflict, rec.Code)
 	var out map[string]string
 	require.NoError(t, json.NewDecoder(rec.Body).Decode(&out))
+	assert.Equal(t, apicatalog.GatewayUpstreamAlreadyExists.Code, out["code"])
 	assert.Equal(t, "email taken", out["error"])
 }
 
@@ -178,6 +181,7 @@ func TestLogin_WrongCredentials(t *testing.T) {
 	require.Equal(t, http.StatusUnauthorized, rec.Code)
 	var out map[string]string
 	require.NoError(t, json.NewDecoder(rec.Body).Decode(&out))
+	assert.Equal(t, apicatalog.GatewayUpstreamUnauthenticated.Code, out["code"])
 	assert.Equal(t, "invalid credentials", out["error"])
 }
 
@@ -223,6 +227,7 @@ func TestRefreshToken_Invalid(t *testing.T) {
 	require.Equal(t, http.StatusUnauthorized, rec.Code)
 	var out map[string]string
 	require.NoError(t, json.NewDecoder(rec.Body).Decode(&out))
+	assert.Equal(t, apicatalog.GatewayUpstreamUnauthenticated.Code, out["code"])
 	assert.Equal(t, "bad refresh", out["error"])
 }
 

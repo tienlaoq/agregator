@@ -4,7 +4,7 @@ services:
     container_name: banya-postgres
     environment:
       POSTGRES_USER: banya
-      POSTGRES_PASSWORD: banya_secret
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in deploy/.env}
       POSTGRES_DB: banya
     ports:
       - "5432:5432"
@@ -50,8 +50,8 @@ services:
     image: minio/minio:latest
     container_name: banya-minio
     environment:
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minio}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?Set MINIO_ROOT_PASSWORD in deploy/.env}
     ports:
       - "9000:9000"
       - "9001:9001"

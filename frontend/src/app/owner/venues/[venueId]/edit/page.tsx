@@ -149,14 +149,15 @@ const PRESET_LABEL_SET = new Set(
   PRESET_AMENITIES.map((a) => a.label as string),
 );
 
-const DEFAULT_WORKING_HOURS = {
-  weekdays: { from: "10:00", to: "23:00" },
-  weekends: { from: "09:00", to: "23:00" },
-} as const;
-
 type WorkingHoursDraft = {
   weekdays: { from: string; to: string };
   weekends: { from: string; to: string };
+};
+
+/** Пустой черновик: время не подставляем — партнёр заполняет сам. */
+const EMPTY_WORKING_HOURS: WorkingHoursDraft = {
+  weekdays: { from: "", to: "" },
+  weekends: { from: "", to: "" },
 };
 
 function getWorkingHoursDraft(raw: string): WorkingHoursDraft {
@@ -190,8 +191,8 @@ function getWorkingHoursDraft(raw: string): WorkingHoursDraft {
     /* empty */
   }
   return {
-    weekdays: { ...DEFAULT_WORKING_HOURS.weekdays },
-    weekends: { ...DEFAULT_WORKING_HOURS.weekends },
+    weekdays: { ...EMPTY_WORKING_HOURS.weekdays },
+    weekends: { ...EMPTY_WORKING_HOURS.weekends },
   };
 }
 
@@ -252,6 +253,59 @@ function serializeForm(f: UpdateVenueRequest): string {
       description: s.description.trim(),
     })),
   });
+}
+
+function hallsPayloadForApi(form: UpdateVenueRequest) {
+  return form.halls
+    .map((h, i) => ({
+      id: h.id,
+      name: h.name.trim(),
+      price_from: h.price_from,
+      capacity: h.capacity,
+      amenities: [...h.amenities],
+      sort_order: i,
+    }))
+    .filter((h) => h.name !== "");
+}
+
+/** Тело PATCH (как при «Сохранить»), без побочных эффектов навигации. */
+function buildVenueUpdatePayload(form: UpdateVenueRequest): VenueUpdatePayload {
+  return {
+    ...form,
+    phone: getRawPhone(form.phone),
+    inn: form.inn.replace(/\D/g, ""),
+    ogrn: form.ogrn.replace(/\D/g, ""),
+    verification_note: form.verification_note?.trim() || undefined,
+    social_links: trimVenueSocialLinks(form.social_links),
+    services: venueServiceLinesForApi(form.services),
+    halls: hallsPayloadForApi(form),
+  };
+}
+
+/** Подставить id и фото залов из ответа сервера в текущий черновик формы. */
+function mergeHallIdsFromUpdatedVenue(
+  prev: UpdateVenueRequest,
+  updated: Venue,
+): UpdateVenueRequest {
+  const srvHalls = updated.halls ?? [];
+  const nextHalls = prev.halls.map((line, idx) => {
+    if (line.id) return line;
+    const name = line.name.trim();
+    if (!name) return line;
+    const byIndex = srvHalls[idx];
+    const srv =
+      byIndex?.name.trim() === name
+        ? byIndex
+        : srvHalls.find((h) => h.name.trim() === name);
+    if (!srv?.id) return line;
+    return {
+      ...line,
+      id: srv.id,
+      clientKey: srv.id,
+      photos: [...(srv.photos ?? line.photos ?? [])],
+    };
+  });
+  return { ...prev, halls: nextHalls };
 }
 
 function sortPhotos(photos?: VenuePhoto[]): VenuePhoto[] {
@@ -363,7 +417,7 @@ export default function EditOwnerVenuePage() {
 
   const workingDraft = form
     ? getWorkingHoursDraft(form.working_hours)
-    : DEFAULT_WORKING_HOURS;
+    : EMPTY_WORKING_HOURS;
 
   const setWorkingDraft = (next: WorkingHoursDraft) => {
     updateField("working_hours", JSON.stringify(next));
@@ -431,6 +485,24 @@ export default function EditOwnerVenuePage() {
     },
     onError: () => {
       setError("Не удалось сохранить. Проверьте соединение и попробуйте снова.");
+    },
+  });
+
+  /** Тихое сохранение карточки (остаёмся на странице) — чтобы у нового зала появился id и можно было загрузить фото. */
+  const persistVenueMutation = useMutation({
+    mutationFn: (payload: VenueUpdatePayload) =>
+      updateVenue(venueId as string, payload),
+    onSuccess: (updated) => {
+      patchOwnerVenueInCache(queryClient, updated);
+      void queryClient.invalidateQueries({ queryKey: ["owner-venues"] });
+    },
+    onError: (e: unknown) => {
+      setPhotoError(
+        formatApiErrorMessage(
+          e,
+          "Не удалось сохранить карточку для загрузки фото зала.",
+        ),
+      );
     },
   });
 
@@ -583,26 +655,7 @@ export default function EditOwnerVenuePage() {
     submittingRef.current = true;
     setError("");
     try {
-      const hallsPayload = form.halls
-        .map((h, i) => ({
-          id: h.id,
-          name: h.name.trim(),
-          price_from: h.price_from,
-          capacity: h.capacity,
-          amenities: [...h.amenities],
-          sort_order: i,
-        }))
-        .filter((h) => h.name !== "");
-      await mutation.mutateAsync({
-        ...form,
-        phone: getRawPhone(form.phone),
-        inn: form.inn.replace(/\D/g, ""),
-        ogrn: form.ogrn.replace(/\D/g, ""),
-        verification_note: form.verification_note?.trim() || undefined,
-        social_links: trimVenueSocialLinks(form.social_links),
-        services: venueServiceLinesForApi(form.services),
-        halls: hallsPayload,
-      });
+      await mutation.mutateAsync(buildVenueUpdatePayload(form));
     } finally {
       submittingRef.current = false;
     }
@@ -682,7 +735,8 @@ export default function EditOwnerVenuePage() {
       })
     : null;
 
-  const saveDisabled = mutation.isPending || !canSave;
+  const saveDisabled =
+    mutation.isPending || persistVenueMutation.isPending || !canSave;
 
   return (
     <section className="min-h-screen bg-muted/30 pb-28">
@@ -1094,8 +1148,8 @@ export default function EditOwnerVenuePage() {
                 <CardDescription>
                   У каждого зала — цена за час, вместимость и свои удобства. На
                   витрине каталога показывается минимальная цена и объединение
-                  удобств по всем залам. Фото зала можно загрузить после первого
-                  сохранения (когда у зала появится id).
+                  удобств по всем залам. Фото можно добавить сразу: для нового
+                  зала карточка сохранится автоматически перед загрузкой.
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-8">
@@ -1112,7 +1166,7 @@ export default function EditOwnerVenuePage() {
                     hall.photos as VenuePhoto[] | undefined,
                   );
                   const maxHallPhotos = 16;
-                  const canHallPhotos = Boolean(hall.id);
+                  const canPickHallPhoto = Boolean(hall.id || hall.name.trim());
                   return (
                     <div
                       key={hall.clientKey}
@@ -1253,112 +1307,171 @@ export default function EditOwnerVenuePage() {
                       </div>
                       <div className="mt-6 border-t border-border pt-5">
                         <Label className="mb-2 block">Фото зала</Label>
-                        {!canHallPhotos ? (
-                          <p className="text-sm text-muted-foreground">
-                            Сохраните карточку заведения — затем загрузите фото
-                            для этого зала.
+                        {!hall.id ? (
+                          <p className="mb-3 text-sm text-muted-foreground">
+                            Укажите название зала — при первой загрузке фото
+                            карточка сохранится автоматически.
                           </p>
-                        ) : (
-                          <>
-                            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4">
-                              {hallPhotos.map((p) => (
-                                <div
-                                  key={p.id}
-                                  className="group relative aspect-square overflow-hidden rounded-lg border border-border"
-                                >
-                                  <Image
-                                    src={venueMediaUrl(p.url)}
-                                    alt=""
-                                    fill
-                                    className="object-cover"
-                                    sizes="(max-width: 768px) 50vw, 25vw"
-                                    unoptimized
-                                  />
-                                  {p.is_cover ? (
-                                    <div className="absolute left-2 top-2">
-                                      <Badge
-                                        variant="secondary"
-                                        className="text-xs"
-                                      >
-                                        Обложка
-                                      </Badge>
-                                    </div>
-                                  ) : null}
-                                  <div className="absolute inset-x-0 bottom-0 flex flex-wrap justify-center gap-1 bg-black/55 p-2 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
-                                    {!p.is_cover ? (
-                                      <Button
-                                        type="button"
-                                        size="sm"
-                                        variant="secondary"
-                                        className="h-8 text-xs"
-                                        disabled={coverHallPhotoMu.isPending}
-                                        onClick={() =>
-                                          coverHallPhotoMu.mutate({
-                                            hallId: hall.id as string,
-                                            photoId: p.id,
-                                          })
-                                        }
-                                      >
-                                        В обложку
-                                      </Button>
-                                    ) : null}
-                                    <Button
-                                      type="button"
-                                      size="sm"
-                                      variant="destructive"
-                                      className="h-8 text-xs"
-                                      disabled={deleteHallPhotoMu.isPending}
-                                      onClick={() =>
-                                        deleteHallPhotoMu.mutate({
-                                          hallId: hall.id as string,
-                                          photoId: p.id,
-                                        })
-                                      }
-                                    >
-                                      Удалить
-                                    </Button>
-                                  </div>
+                        ) : null}
+                        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4">
+                          {hallPhotos.map((p) => (
+                            <div
+                              key={p.id}
+                              className="group relative aspect-square overflow-hidden rounded-lg border border-border"
+                            >
+                              <Image
+                                src={venueMediaUrl(p.url)}
+                                alt=""
+                                fill
+                                className="object-cover"
+                                sizes="(max-width: 768px) 50vw, 25vw"
+                                unoptimized
+                              />
+                              {p.is_cover ? (
+                                <div className="absolute left-2 top-2">
+                                  <Badge
+                                    variant="secondary"
+                                    className="text-xs"
+                                  >
+                                    Обложка
+                                  </Badge>
                                 </div>
-                              ))}
-                            </div>
-                            {hallPhotos.length < maxHallPhotos ? (
-                              <div className="mt-3">
-                                <input
-                                  type="file"
-                                  accept="image/jpeg,image/png,image/webp"
-                                  className="hidden"
-                                  id={`hall-photo-${hall.clientKey}`}
-                                  onChange={(e) => {
-                                    const f = e.target.files?.[0];
-                                    e.target.value = "";
-                                    if (f && hall.id)
-                                      uploadHallPhotoMu.mutate({
-                                        hallId: hall.id,
-                                        file: f,
-                                      });
-                                  }}
-                                />
+                              ) : null}
+                              <div className="absolute inset-x-0 bottom-0 flex flex-wrap justify-center gap-1 bg-black/55 p-2 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
+                                {!p.is_cover ? (
+                                  <Button
+                                    type="button"
+                                    size="sm"
+                                    variant="secondary"
+                                    className="h-8 text-xs"
+                                    disabled={
+                                      coverHallPhotoMu.isPending || !hall.id
+                                    }
+                                    onClick={() =>
+                                      coverHallPhotoMu.mutate({
+                                        hallId: hall.id as string,
+                                        photoId: p.id,
+                                      })
+                                    }
+                                  >
+                                    В обложку
+                                  </Button>
+                                ) : null}
                                 <Button
                                   type="button"
-                                  variant="outline"
                                   size="sm"
-                                  className="gap-2"
-                                  disabled={uploadHallPhotoMu.isPending}
+                                  variant="destructive"
+                                  className="h-8 text-xs"
+                                  disabled={
+                                    deleteHallPhotoMu.isPending || !hall.id
+                                  }
                                   onClick={() =>
-                                    document
-                                      .getElementById(
-                                        `hall-photo-${hall.clientKey}`,
-                                      )
-                                      ?.click()
+                                    deleteHallPhotoMu.mutate({
+                                      hallId: hall.id as string,
+                                      photoId: p.id,
+                                    })
                                   }
                                 >
-                                  <Upload className="h-4 w-4" />
-                                  Добавить фото
+                                  Удалить
                                 </Button>
                               </div>
-                            ) : null}
-                          </>
-                        )}
+                            </div>
+                          ))}
+                        </div>
+                        {hallPhotos.length < maxHallPhotos ? (
+                          <div className="mt-3">
+                            <input
+                              type="file"
+                              accept="image/jpeg,image/png,image/webp"
+                              className="hidden"
+                              id={`hall-photo-${hall.clientKey}`}
+                              onChange={async (e) => {
+                                const f = e.target.files?.[0];
+                                e.target.value = "";
+                                if (!f || !form) return;
+                                const h = form.halls[hallIndex];
+                                if (!h) return;
+                                setPhotoError("");
+                                try {
+                                  let hallId = h.id ?? "";
+                                  if (!hallId) {
+                                    const t = h.name.trim();
+                                    if (!t) {
+                                      setPhotoError(
+                                        "Укажите название зала, чтобы загрузить фото.",
+                                      );
+                                      return;
+                                    }
+                                    if (
+                                      !form.halls.some((x) => x.name.trim())
+                                    ) {
+                                      setPhotoError(
+                                        "Укажите название хотя бы для одного зала.",
+                                      );
+                                      return;
+                                    }
+                                    const updated =
+                                      await persistVenueMutation.mutateAsync(
+                                        buildVenueUpdatePayload(form),
+                                      );
+                                    const merged =
+                                      mergeHallIdsFromUpdatedVenue(
+                                        form,
+                                        updated,
+                                      );
+                                    setForm(merged);
+                                    baselineSerializedRef.current =
+                                      serializeForm(merged);
+                                    hallId =
+                                      merged.halls[hallIndex]?.id ?? "";
+                                  }
+                                  if (!hallId) {
+                                    setPhotoError(
+                                      "Не удалось сохранить зал. Сохраните карточку кнопкой «Сохранить изменения» и попробуйте снова.",
+                                    );
+                                    return;
+                                  }
+                                  uploadHallPhotoMu.mutate({
+                                    hallId,
+                                    file: f,
+                                  });
+                                } catch {
+                                  /* persistVenueMutation.onError */
+                                }
+                              }}
+                            />
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              className="gap-2"
+                              disabled={
+                                !canPickHallPhoto ||
+                                uploadHallPhotoMu.isPending ||
+                                persistVenueMutation.isPending
+                              }
+                              title={
+                                !canPickHallPhoto
+                                  ? "Сначала укажите название зала"
+                                  : undefined
+                              }
+                              onClick={() =>
+                                document
+                                  .getElementById(
+                                    `hall-photo-${hall.clientKey}`,
+                                  )
+                                  ?.click()
+                              }
+                            >
+                              <Upload className="h-4 w-4" />
+                              {persistVenueMutation.isPending
+                                ? "Сохранение…"
+                                : uploadHallPhotoMu.isPending
+                                  ? "Загрузка…"
+                                  : "Добавить фото"}
+                            </Button>
+                          </div>
+                        ) : null}
                       </div>
                     </div>
                   );

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -50,23 +51,41 @@ func NewPostgresConfig(prefix string) PostgresConfig {
 		Host:     GetEnv(prefix+"_HOST", "localhost"),
 		Port:     GetEnvInt(prefix+"_PORT", 5432),
 		User:     GetEnv(prefix+"_USER", "banya"),
-		Password: GetEnv(prefix+"_PASSWORD", "banya_secret"),
+		Password: GetEnv(prefix+"_PASSWORD", ""),
 		DBName:   GetEnv(prefix+"_DB", "banya"),
 		SSLMode:  GetEnv(prefix+"_SSLMODE", "disable"),
 	}
 }
 
+// Validate returns an error if the DSN would use an empty password (never safe outside controlled tests).
+func (c PostgresConfig) Validate() error {
+	if c.Password == "" {
+		return errors.New("postgres password is empty: set PG_PASSWORD (or the matching *_PASSWORD for your service prefix)")
+	}
+	return nil
+}
+
 type RedisConfig struct {
-	Addr     string
-	Password string
-	DB       int
+	Addr         string
+	Password     string
+	DB           int
+	PoolSize     int
+	MinIdleConns int
+	DialTimeout  int // seconds
+	ReadTimeout  int // seconds
+	WriteTimeout int // seconds
 }
 
 func NewRedisConfig() RedisConfig {
 	return RedisConfig{
-		Addr:     GetEnv("REDIS_ADDR", "localhost:6379"),
-		Password: GetEnv("REDIS_PASSWORD", ""),
-		DB:       GetEnvInt("REDIS_DB", 0),
+		Addr:         GetEnv("REDIS_ADDR", "localhost:6379"),
+		Password:     GetEnv("REDIS_PASSWORD", ""),
+		DB:           GetEnvInt("REDIS_DB", 0),
+		PoolSize:     GetEnvInt("REDIS_POOL_SIZE", 32),
+		MinIdleConns: GetEnvInt("REDIS_MIN_IDLE_CONNS", 8),
+		DialTimeout:  GetEnvInt("REDIS_DIAL_TIMEOUT_SEC", 5),
+		ReadTimeout:  GetEnvInt("REDIS_READ_TIMEOUT_SEC", 5),
+		WriteTimeout: GetEnvInt("REDIS_WRITE_TIMEOUT_SEC", 5),
 	}
 }
 

@@ -15,7 +15,13 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { Badge } from "@/components/ui/badge"
-import { register, createVenue, userFromRegisterResponse, ApiError } from "@/lib/api"
+import {
+  register,
+  createVenue,
+  userFromRegisterResponse,
+  ApiError,
+  formatApiErrorMessage,
+} from "@/lib/api"
 import { useAuthStore } from "@/store/auth"
 import { CityCombobox } from "@/components/banya/city-combobox"
 import { AddressSuggest } from "@/components/banya/address-suggest"
@@ -156,14 +162,9 @@ export default function PartnerPage() {
       setStep(4)
     } catch (err) {
       if (err instanceof ApiError) {
-        try {
-          const body = JSON.parse(err.message)
-          setError(body.error || "Ошибка при создании аккаунта")
-        } catch {
-          setError(err.message)
-        }
+        setError(formatApiErrorMessage(err, "Не удалось создать аккаунт"))
       } else {
-        setError("Не удалось подключиться к серверу")
+        setError(formatApiErrorMessage(err, "Не удалось подключиться к серверу"))
       }
     } finally {
       setLoading(false)

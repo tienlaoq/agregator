@@ -38,7 +38,19 @@ type VenueRepository interface {
 	List(ctx context.Context, page, pageSize int32, venueType, sortBy string) (*ListResult, error)
 	Search(ctx context.Context, params SearchParams) (*ListResult, error)
 	ListByOwner(ctx context.Context, ownerID uuid.UUID) ([]Venue, error)
-	ListByStatus(ctx context.Context, status string, page, pageSize int32) (*ListResult, error)
+	// ListForManagingUser returns venues the user owns or is assigned to as CRM staff, with ManagementAccess set.
+	ListForManagingUser(ctx context.Context, userID uuid.UUID) ([]Venue, error)
+	GetVenueManagementAccess(ctx context.Context, venueID, userID uuid.UUID) (access string, err error)
+
+	AddVenueStaff(ctx context.Context, venueID, userID uuid.UUID, role string, invitedBy uuid.UUID) error
+	RemoveVenueStaff(ctx context.Context, venueID, userID uuid.UUID) error
+	ListVenueStaff(ctx context.Context, venueID uuid.UUID) ([]VenueStaff, error)
+
+	CreateVenueCRMTask(ctx context.Context, t *VenueCRMTask) error
+	ListVenueCRMTasks(ctx context.Context, venueID uuid.UUID, status string) ([]VenueCRMTask, error)
+	CompleteVenueCRMTask(ctx context.Context, venueID, taskID uuid.UUID) (bool, error)
+	// nameQuery optional substring for admin list (ILIKE), empty = all names.
+	ListByStatus(ctx context.Context, status string, page, pageSize int32, nameQuery string) (*ListResult, error)
 	UpdateStatus(ctx context.Context, venueID uuid.UUID, status, comment string, moderatedBy uuid.UUID) error
 	ResetToPendingReview(ctx context.Context, venueID uuid.UUID) error
 	// SubmitDraftForReview sets status pending_review for venue in draft owned by ownerID. Returns false if no row updated.

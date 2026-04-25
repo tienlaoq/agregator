@@ -18,6 +18,7 @@ import {
   Building2,
   CalendarCheck,
   Eye,
+  LayoutDashboard,
   Pencil,
   Plus,
   Star,
@@ -203,6 +204,10 @@ type OwnerDashboardSectionProps = {
   todayBookingsByVenueId: Map<string, number>;
   recentBookings: Booking[];
   onAddVenue: () => void;
+  /** Кнопка «Добавить заведение» (только владелец/мастер, не персонал с ролью user). */
+  canCreateVenue?: boolean;
+  /** Карточка заведения в каталоге (PATCH) — только владелец/мастер. */
+  canEditVenueCard?: boolean;
 };
 
 export function OwnerDashboardSection({
@@ -213,6 +218,8 @@ export function OwnerDashboardSection({
   todayBookingsByVenueId,
   recentBookings,
   onAddVenue,
+  canCreateVenue = true,
+  canEditVenueCard = true,
 }: OwnerDashboardSectionProps) {
   const statItems = [
     {
@@ -244,10 +251,12 @@ export function OwnerDashboardSection({
           <h1 className="text-3xl font-bold text-foreground md:text-4xl">
             Панель владельца
           </h1>
-          <Button type="button" className="gap-2" onClick={onAddVenue}>
-            <Plus className="h-4 w-4" />
-            Добавить заведение
-          </Button>
+          {canCreateVenue ? (
+            <Button type="button" className="gap-2" onClick={onAddVenue}>
+              <Plus className="h-4 w-4" />
+              Добавить заведение
+            </Button>
+          ) : null}
         </div>
 
         {hasDraftVenues ? (
@@ -351,11 +360,19 @@ export function OwnerDashboardSection({
                             </Button>
                           ) : null}
                           <Button variant="outline" size="sm" className="gap-1" asChild>
-                            <Link href={`/owner/venues/${venue.id}/edit`}>
-                              <Pencil className="h-4 w-4" />
-                              Редактировать
+                            <Link href={`/owner/venues/${venue.id}/crm`}>
+                              <LayoutDashboard className="h-4 w-4" />
+                              CRM
                             </Link>
                           </Button>
+                          {canEditVenueCard ? (
+                            <Button variant="outline" size="sm" className="gap-1" asChild>
+                              <Link href={`/owner/venues/${venue.id}/edit`}>
+                                <Pencil className="h-4 w-4" />
+                                Редактировать
+                              </Link>
+                            </Button>
+                          ) : null}
                         </div>
                       </div>
                     );

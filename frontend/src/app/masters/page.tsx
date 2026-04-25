@@ -3,7 +3,7 @@
 import Image from "next/image";
 import { useQuery } from "@tanstack/react-query";
 import Link from "next/link";
-import { listPublicMasters, masterCardImageSrc } from "@/lib/api";
+import { listPublicMasters, masterCardImageSrc, masterCardPriceLabel } from "@/lib/api";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Users } from "lucide-react";
@@ -35,34 +35,41 @@ export default function MastersCatalogPage() {
       )}
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-        {masters.map((m) => (
-          <Link key={m.id} href={`/masters/${m.slug}`}>
-            <Card className="h-full overflow-hidden transition-colors hover:border-primary/40">
-              {masterCardImageSrc(m) ? (
-                <div className="relative aspect-[5/3] w-full bg-muted">
-                  <Image
-                    src={masterCardImageSrc(m)!}
-                    alt=""
-                    fill
-                    className="object-cover"
-                    sizes="(max-width: 768px) 100vw, 33vw"
-                    unoptimized
-                  />
-                </div>
-              ) : null}
-              <CardContent className="p-5">
-                <h2 className="font-semibold text-lg mb-1">{m.display_name}</h2>
-                <p className="text-sm text-muted-foreground mb-2">{m.city}</p>
-                {m.experience_years > 0 && (
-                  <Badge variant="outline" className="text-xs">
-                    Опыт {m.experience_years} лет
-                  </Badge>
-                )}
-                <p className="mt-3 line-clamp-2 text-sm text-muted-foreground">{m.bio}</p>
-              </CardContent>
-            </Card>
-          </Link>
-        ))}
+        {masters.map((m) => {
+          const priceLine = masterCardPriceLabel(m);
+          const img = masterCardImageSrc(m);
+          return (
+            <Link key={m.id} href={`/masters/${m.slug}`}>
+              <Card className="h-full overflow-hidden transition-colors hover:border-primary/40">
+                {img ? (
+                  <div className="relative aspect-[5/3] w-full bg-muted">
+                    <Image
+                      src={img}
+                      alt=""
+                      fill
+                      className="object-cover"
+                      sizes="(max-width: 768px) 100vw, 33vw"
+                      unoptimized
+                    />
+                  </div>
+                ) : null}
+                <CardContent className="p-5">
+                  <h2 className="font-semibold text-lg mb-1">{m.display_name}</h2>
+                  <p className="text-sm text-muted-foreground mb-2">{m.city}</p>
+                  {m.experience_years > 0 && (
+                    <Badge variant="outline" className="text-xs">
+                      Опыт {m.experience_years} лет
+                    </Badge>
+                  )}
+                  {priceLine ? (
+                    <p className="mt-2 text-sm font-medium text-foreground">{priceLine}</p>
+                  ) : null}
+                  <p className="mt-3 line-clamp-2 text-sm text-muted-foreground">{m.bio}</p>
+                </CardContent>
+              </Card>
+            </Link>
+          );
+        })}
       </div>
     </div>
   );

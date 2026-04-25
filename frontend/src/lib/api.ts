@@ -3,28 +3,58 @@ import type {
   Booking,
   CreateBookingRequest,
   CreateReviewRequest,
+  BookingStaffNote,
   CreateVenueRequest,
   LoginRequest,
   ManualSlotBlock,
   RegisterRequest,
   Review,
+  VenueCrmTask,
+  VenueStaffRow,
   VenueUpdatePayload,
   User,
   Venue,
   MasterProfile,
   MasterBooking,
 } from "./types";
+import { userMessageForGatewayError } from "./api-user-messages";
 import { packCitiesForQuery } from "./cities-http";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080";
+/** Base URL браузера (и публичные ссылки на медиа). */
+const PUBLIC_API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080";
 
-class ApiError extends Error {
+/** URL api-gateway для fetch: в контейнере фронта — внутренний хост compose. */
+function apiUrlForFetch(): string {
+  if (typeof window !== "undefined") {
+    return PUBLIC_API_URL;
+  }
+  return process.env.INTERNAL_API_URL || PUBLIC_API_URL;
+}
+
+export class ApiError extends Error {
+  /** Machine code from JSON `code` when gateway returned a catalog error. */
+  public readonly code?: string;
+
   constructor(
     public status: number,
+    /** Raw response body (for tests/logs; do not show in UI). */
     message: string,
+    code?: string,
   ) {
     super(message);
     this.name = "ApiError";
+    this.code = code;
+  }
+}
+
+function parseGatewayErrorCode(text: string): string | undefined {
+  const t = text.trim();
+  if (!t.startsWith("{")) return undefined;
+  try {
+    const j = JSON.parse(t) as { code?: string };
+    return typeof j.code === "string" && j.code ? j.code : undefined;
+  } catch {
+    return undefined;
   }
 }
 
@@ -36,7 +66,7 @@ async function tryRefreshToken(): Promise<boolean> {
   if (!refreshToken) return false;
 
   try {
-    const res = await fetch(`${API_URL}/api/v1/auth/refresh`, {
+    const res = await fetch(`${apiUrlForFetch()}/api/v1/auth/refresh`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ refresh_token: refreshToken }),
@@ -72,7 +102,7 @@ async function fetchAPI<T>(path: string, options?: RequestInit): Promise<T> {
   const defaultCache: RequestCache | undefined =
     method === "GET" || method === "HEAD" ? "no-store" : undefined;
 
-  const res = await fetch(`${API_URL}${path}`, {
+  const res = await fetch(`${apiUrlForFetch()}${path}`, {
     ...options,
     cache: options?.cache ?? defaultCache,
     headers: {
@@ -97,15 +127,15 @@ async function fetchAPI<T>(path: string, options?: RequestInit): Promise<T> {
       if (!isFormData) {
         retryHeaders["Content-Type"] = "application/json";
       }
-      const retryRes = await fetch(`${API_URL}${path}`, {
+      const retryRes = await fetch(`${apiUrlForFetch()}${path}`, {
         ...options,
         cache: options?.cache ?? defaultCache,
         headers: retryHeaders,
       });
 
       if (!retryRes.ok) {
-        const text = await retryRes.text().catch(() => "Unknown error");
-        throw new ApiError(retryRes.status, text);
+        const text = await retryRes.text().catch(() => "");
+        throw new ApiError(retryRes.status, text, parseGatewayErrorCode(text));
       }
 
       if (retryRes.status === 204) return undefined as T;
@@ -120,8 +150,8 @@ async function fetchAPI<T>(path: string, options?: RequestInit): Promise<T> {
   }
 
   if (!res.ok) {
-    const text = await res.text().catch(() => "Unknown error");
-    throw new ApiError(res.status, text);
+    const text = await res.text().catch(() => "");
+    throw new ApiError(res.status, text, parseGatewayErrorCode(text));
   }
 
   if (res.status === 204) return undefined as T;
@@ -370,6 +400,92 @@ export async function getOwnerVenues(): Promise<Venue[]> {
   return data.venues ?? [];
 }
 
+export async function listVenueStaff(venueId: string): Promise<VenueStaffRow[]> {
+  const data = await fetchAPI<{ staff: VenueStaffRow[] }>(
+    `/api/v1/owner/venues/${encodeURIComponent(venueId)}/staff`,
+  );
+  return data.staff ?? [];
+}
+
+export async function inviteVenueStaffByEmail(
+  venueId: string,
+  body: { email: string; role: string },
+): Promise<{ user_id: string; email: string; role: string }> {
+  return fetchAPI(`/api/v1/owner/venues/${encodeURIComponent(venueId)}/staff`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export async function removeVenueStaff(
+  venueId: string,
+  userId: string,
+): Promise<void> {
+  return fetchAPI<void>(
+    `/api/v1/owner/venues/${encodeURIComponent(venueId)}/staff/${encodeURIComponent(userId)}`,
+    { method: "DELETE" },
+  );
+}
+
+export async function listVenueCrmTasks(
+  venueId: string,
+  params?: { status?: string },
+): Promise<VenueCrmTask[]> {
+  const q = new URLSearchParams();
+  if (params?.status) q.set("status", params.status);
+  const qs = q.toString();
+  const data = await fetchAPI<{ tasks: VenueCrmTask[] }>(
+    `/api/v1/owner/venues/${encodeURIComponent(venueId)}/crm/tasks${qs ? `?${qs}` : ""}`,
+  );
+  return data.tasks ?? [];
+}
+
+export async function createVenueCrmTask(
+  venueId: string,
+  body: {
+    title: string;
+    body: string;
+    booking_id?: string;
+    assignee_user_id?: string;
+  },
+): Promise<{ task: VenueCrmTask }> {
+  return fetchAPI(`/api/v1/owner/venues/${encodeURIComponent(venueId)}/crm/tasks`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export async function completeVenueCrmTask(
+  venueId: string,
+  taskId: string,
+): Promise<void> {
+  return fetchAPI<void>(
+    `/api/v1/owner/venues/${encodeURIComponent(venueId)}/crm/tasks/${encodeURIComponent(taskId)}/complete`,
+    { method: "POST" },
+  );
+}
+
+export async function listBookingStaffNotes(
+  venueId: string,
+  bookingId: string,
+): Promise<BookingStaffNote[]> {
+  const data = await fetchAPI<{ notes: BookingStaffNote[] }>(
+    `/api/v1/owner/venues/${encodeURIComponent(venueId)}/bookings/${encodeURIComponent(bookingId)}/staff-notes`,
+  );
+  return data.notes ?? [];
+}
+
+export async function addBookingStaffNote(
+  venueId: string,
+  bookingId: string,
+  body: string,
+): Promise<{ note: BookingStaffNote }> {
+  return fetchAPI(
+    `/api/v1/owner/venues/${encodeURIComponent(venueId)}/bookings/${encodeURIComponent(bookingId)}/staff-notes`,
+    { method: "POST", body: JSON.stringify({ body }) },
+  );
+}
+
 export async function createVenue(data: CreateVenueRequest): Promise<Venue> {
   return fetchAPI<Venue>("/api/v1/venues", {
     method: "POST",
@@ -399,7 +515,7 @@ export function venueMediaUrl(pathOrUrl: string | undefined): string {
   if (pathOrUrl.startsWith("http://") || pathOrUrl.startsWith("https://")) {
     return pathOrUrl;
   }
-  const base = API_URL.replace(/\/$/, "");
+  const base = PUBLIC_API_URL.replace(/\/$/, "");
   const p = pathOrUrl.startsWith("/") ? pathOrUrl : `/${pathOrUrl}`;
   return `${base}${p}`;
 }
@@ -578,6 +694,33 @@ export function masterCardImageSrc(m: {
   return venueMediaUrl(raw);
 }
 
+/**
+ * Цена для строки «от N ₽ / час» в каталоге и карточке: минимум среди цен услуг (коп.),
+ * иначе базовая ставка профиля. null — не показывать блок.
+ */
+export function masterCardFromPriceKopecks(m: MasterProfile): number | null {
+  const services = m.services ?? [];
+  let min = Infinity;
+  for (const s of services) {
+    const p = s.price;
+    if (typeof p === "number" && p > 0 && p < min) min = p;
+  }
+  if (min !== Infinity) return min;
+  if (typeof m.hourly_rate === "number" && m.hourly_rate > 0) return m.hourly_rate;
+  return null;
+}
+
+/** Человекочитаемая строка цены для карточки мастера или null. */
+export function masterCardPriceLabel(m: MasterProfile): string | null {
+  const k = masterCardFromPriceKopecks(m);
+  if (k == null) return null;
+  const rub = new Intl.NumberFormat("ru-RU", {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 2,
+  }).format(k / 100);
+  return `от ${rub} ₽ / час`;
+}
+
 export async function listMyMasterBookings(params?: {
   status?: string;
 }): Promise<{ bookings: MasterBooking[] }> {
@@ -613,6 +756,8 @@ export async function getAdminVenues(params?: {
   status?: string;
   page?: number;
   page_size?: number;
+  /** Подстрока в названии (серверный ILIKE), см. GET /admin/venues?q= */
+  q?: string;
 }): Promise<PaginatedVenues> {
   const search = new URLSearchParams();
   if (params) {
@@ -626,7 +771,7 @@ export async function getAdminVenues(params?: {
 
 export async function moderateVenue(
   venueId: string,
-  action: "approve" | "reject" | "suspend",
+  action: "approve" | "reject" | "suspend" | "resume",
   comment?: string,
 ): Promise<Venue> {
   return fetchAPI<Venue>(`/api/v1/admin/venues/${venueId}/moderate`, {
@@ -683,24 +828,16 @@ export async function getMasterModerationHistory(
   );
 }
 
-export { ApiError };
-
-/** Human-readable message from fetchAPI/ApiError (JSON `{ "error": "..." }` or plain text). */
+/** Short Russian text for UI; never exposes raw API/gRPC bodies. */
 export function formatApiErrorMessage(e: unknown, fallback: string): string {
   if (e instanceof ApiError) {
-    const t = e.message.trim();
-    if (!t) return fallback;
-    if (t.startsWith("{")) {
-      try {
-        const j = JSON.parse(t) as { error?: string; message?: string };
-        if (typeof j.error === "string" && j.error) return j.error;
-        if (typeof j.message === "string" && j.message) return j.message;
-      } catch {
-        /* use raw text */
-      }
-    }
-    return t;
+    return userMessageForGatewayError(e.status, e.code, fallback);
   }
-  if (e instanceof Error && e.message) return e.message;
+  if (e instanceof Error && e.message) {
+    const m = e.message;
+    if (/failed to fetch|load failed|networkerror|network request failed/i.test(m)) {
+      return "Нет соединения с сервером. Проверьте интернет и попробуйте снова.";
+    }
+  }
   return fallback;
 }

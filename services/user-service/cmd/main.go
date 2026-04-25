@@ -10,6 +10,7 @@ import (
 	"google.golang.org/grpc"
 
 	userv1 "github.com/tienlao/agregator/gen/go/user/v1"
+	"github.com/tienlao/agregator/pkg/grpcutil"
 	"github.com/tienlao/agregator/pkg/logger"
 	"github.com/tienlao/agregator/pkg/postgres"
 	"github.com/tienlao/agregator/services/user-service/config"
@@ -22,6 +23,9 @@ func main() {
 	log := logger.New("user-service")
 
 	cfg := config.Load()
+	if err := cfg.Postgres.Validate(); err != nil {
+		log.Fatal().Err(err).Msg("invalid postgres config")
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -37,7 +41,7 @@ func main() {
 	uc := usecase.NewUserUseCase(repo)
 	userServer := grpcdelivery.NewUserServer(uc)
 
-	grpcServer := grpc.NewServer()
+	grpcServer := grpc.NewServer(grpcutil.ServerOptions()...)
 	userv1.RegisterUserServiceServer(grpcServer, userServer)
 
 	lis, err := net.Listen("tcp", ":"+cfg.GRPCPort)

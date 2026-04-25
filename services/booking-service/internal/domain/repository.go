@@ -13,6 +13,9 @@ type BookingRepository interface {
 	HasCompleted(ctx context.Context, userID, venueID string) (bool, error)
 	// AutoCompleteVisitEnded переводит confirmed → completed, если конец слота (date+time_to) в зоне tz уже прошёл.
 	AutoCompleteVisitEnded(ctx context.Context, visitTimeZone string) ([]BookingCompletedRef, error)
+
+	ListBookingStaffNotes(ctx context.Context, bookingID string) ([]BookingStaffNote, error)
+	AddBookingStaffNote(ctx context.Context, n *BookingStaffNote) error
 }
 
 // BookingCompletedRef — строки, переведённые в completed (для событий).

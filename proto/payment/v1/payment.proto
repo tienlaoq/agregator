@@ -15,10 +15,15 @@ service PaymentService {
 
 message CreatePaymentRequest {
   string booking_id = 1;
-  int64 amount = 2; // kopecks
+  int64 amount = 2; // kopecks (gross)
   string description = 3;
   string return_url = 4;
   string idempotency_key = 5;
+  // Counterparty for split (ЮKassa transfers): venue | master
+  string counterparty_type = 6;
+  string counterparty_id = 7;
+  // ЮKassa marketplace: connected seller shop account_id (string digits)
+  string yookassa_seller_account_id = 8;
 }
 
 message PaymentResponse {
@@ -29,6 +34,8 @@ message PaymentResponse {
   string payment_url = 5;
   string provider_id = 6;
   google.protobuf.Timestamp created_at = 7;
+  int64 platform_fee_kopecks = 8;
+  int64 counterparty_net_kopecks = 9;
 }
 
 message GetPaymentRequest {

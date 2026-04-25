@@ -6,6 +6,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	reviewv1 "github.com/tienlao/agregator/gen/go/review/v1"
+	"github.com/tienlao/agregator/services/api-gateway/internal/apicatalog"
 	"github.com/tienlao/agregator/services/api-gateway/internal/middleware"
 )
 
@@ -20,7 +21,7 @@ func NewReviewHandler(client reviewv1.ReviewServiceClient) *ReviewHandler {
 func (h *ReviewHandler) Create(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.UserIDFromCtx(r.Context())
 	if userID == "" {
-		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		writeCatalog(w, apicatalog.GatewayAuthUnauthorized)
 		return
 	}
 
@@ -30,7 +31,7 @@ func (h *ReviewHandler) Create(w http.ResponseWriter, r *http.Request) {
 		Text    string `json:"text"`
 	}
 	if err := readJSON(r, &req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		writeCatalog(w, apicatalog.GatewayRequestInvalidBody)
 		return
 	}
 
@@ -51,13 +52,13 @@ func (h *ReviewHandler) Create(w http.ResponseWriter, r *http.Request) {
 func (h *ReviewHandler) CreateForVenue(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.UserIDFromCtx(r.Context())
 	if userID == "" {
-		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		writeCatalog(w, apicatalog.GatewayAuthUnauthorized)
 		return
 	}
 
 	venueID := chi.URLParam(r, "venueId")
 	if venueID == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "venue_id is required"})
+		writeCatalog(w, apicatalog.GatewayReviewVenueIdRequired)
 		return
 	}
 
@@ -66,7 +67,7 @@ func (h *ReviewHandler) CreateForVenue(w http.ResponseWriter, r *http.Request) {
 		Text   string `json:"text"`
 	}
 	if err := readJSON(r, &req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		writeCatalog(w, apicatalog.GatewayRequestInvalidBody)
 		return
 	}
 

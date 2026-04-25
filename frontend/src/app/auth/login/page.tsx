@@ -8,7 +8,12 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Separator } from "@/components/ui/separator"
-import { login, getProfile, ApiError } from "@/lib/api"
+import { login, getProfile, ApiError, formatApiErrorMessage } from "@/lib/api"
+
+const OAUTH_QUERY_ERROR_MESSAGES: Record<string, string> = {
+  oauth_failed: "Не удалось войти через соцсеть. Попробуйте ещё раз.",
+  profile_failed: "Не удалось загрузить профиль. Войдите снова.",
+}
 import { useAuthStore } from "@/store/auth"
 import { Flame } from "lucide-react"
 
@@ -33,9 +38,17 @@ function GoogleIcon({ className }: { className?: string }) {
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080"
 
+function LoginSuspenseFallback() {
+  return (
+    <div className="flex min-h-[70vh] items-center justify-center px-4 text-sm text-muted-foreground">
+      Загрузка…
+    </div>
+  )
+}
+
 export default function LoginPage() {
   return (
-    <Suspense>
+    <Suspense fallback={<LoginSuspenseFallback />}>
       <LoginForm />
     </Suspense>
   )
@@ -52,7 +65,9 @@ function LoginForm() {
 
   useEffect(() => {
     const oauthError = searchParams.get("error")
-    if (oauthError) setError(decodeURIComponent(oauthError))
+    if (!oauthError) return
+    const key = decodeURIComponent(oauthError).trim()
+    setError(OAUTH_QUERY_ERROR_MESSAGES[key] ?? "Не удалось выполнить вход. Попробуйте снова.")
   }, [searchParams])
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -68,14 +83,9 @@ function LoginForm() {
       router.push("/")
     } catch (err) {
       if (err instanceof ApiError) {
-        try {
-          const body = JSON.parse(err.message)
-          setError(body.error || "Неверный email или пароль")
-        } catch {
-          setError(err.message)
-        }
+        setError(formatApiErrorMessage(err, "Неверный email или пароль"))
       } else {
-        setError("Не удалось подключиться к серверу")
+        setError(formatApiErrorMessage(err, "Не удалось подключиться к серверу"))
       }
     } finally {
       setLoading(false)

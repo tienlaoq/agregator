@@ -9,6 +9,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	bookingv1 "github.com/tienlao/agregator/gen/go/booking/v1"
 	venuev1 "github.com/tienlao/agregator/gen/go/venue/v1"
+	"github.com/tienlao/agregator/services/api-gateway/internal/apicatalog"
 	"github.com/tienlao/agregator/services/api-gateway/internal/middleware"
 )
 
@@ -24,7 +25,7 @@ func NewBookingHandler(client bookingv1.BookingServiceClient, venueClient venuev
 func (h *BookingHandler) Create(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.UserIDFromCtx(r.Context())
 	if userID == "" {
-		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		writeCatalog(w, apicatalog.GatewayAuthUnauthorized)
 		return
 	}
 
@@ -39,7 +40,7 @@ func (h *BookingHandler) Create(w http.ResponseWriter, r *http.Request) {
 		Comment   string `json:"comment"`
 	}
 	if err := readJSON(r, &req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		writeCatalog(w, apicatalog.GatewayRequestInvalidBody)
 		return
 	}
 
@@ -48,7 +49,7 @@ func (h *BookingHandler) Create(w http.ResponseWriter, r *http.Request) {
 		timeFrom = req.Time
 	}
 	if timeFrom == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "time_from is required"})
+		writeCatalog(w, apicatalog.GatewayBookingTimeFromRequired)
 		return
 	}
 	timeTo := req.TimeTo
@@ -88,7 +89,7 @@ func (h *BookingHandler) Create(w http.ResponseWriter, r *http.Request) {
 func (h *BookingHandler) ListMy(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.UserIDFromCtx(r.Context())
 	if userID == "" {
-		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		writeCatalog(w, apicatalog.GatewayAuthUnauthorized)
 		return
 	}
 
@@ -130,7 +131,7 @@ func (h *BookingHandler) Get(w http.ResponseWriter, r *http.Request) {
 func (h *BookingHandler) Cancel(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.UserIDFromCtx(r.Context())
 	if userID == "" {
-		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		writeCatalog(w, apicatalog.GatewayAuthUnauthorized)
 		return
 	}
 	id := chi.URLParam(r, "id")
@@ -150,7 +151,7 @@ func (h *BookingHandler) Cancel(w http.ResponseWriter, r *http.Request) {
 func (h *BookingHandler) ListVenueBookings(w http.ResponseWriter, r *http.Request) {
 	ownerID := middleware.UserIDFromCtx(r.Context())
 	if ownerID == "" {
-		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		writeCatalog(w, apicatalog.GatewayAuthUnauthorized)
 		return
 	}
 	venueID := chi.URLParam(r, "venueId")
@@ -212,4 +213,72 @@ func bookingList(bookings []*bookingv1.BookingResponse) []map[string]any {
 		out[i] = bookingToJSON(b)
 	}
 	return out
+}
+
+func (h *BookingHandler) ListBookingStaffNotes(w http.ResponseWriter, r *http.Request) {
+	userID := middleware.UserIDFromCtx(r.Context())
+	if userID == "" {
+		writeCatalog(w, apicatalog.GatewayAuthUnauthorized)
+		return
+	}
+	bookingID := chi.URLParam(r, "bookingId")
+
+	resp, err := h.client.ListBookingStaffNotes(r.Context(), &bookingv1.ListBookingStaffNotesRequest{
+		BookingId:       bookingID,
+		RequesterUserId: userID,
+	})
+	if err != nil {
+		grpcErrorToHTTP(w, err)
+		return
+	}
+	notes := make([]map[string]any, 0, len(resp.GetNotes()))
+	for _, n := range resp.GetNotes() {
+		notes = append(notes, map[string]any{
+			"id":             n.GetId(),
+			"booking_id":     n.GetBookingId(),
+			"venue_id":       n.GetVenueId(),
+			"author_user_id": n.GetAuthorUserId(),
+			"body":           n.GetBody(),
+			"created_at":     n.GetCreatedAt().AsTime(),
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"notes": notes})
+}
+
+func (h *BookingHandler) AddBookingStaffNote(w http.ResponseWriter, r *http.Request) {
+	userID := middleware.UserIDFromCtx(r.Context())
+	if userID == "" {
+		writeCatalog(w, apicatalog.GatewayAuthUnauthorized)
+		return
+	}
+	bookingID := chi.URLParam(r, "bookingId")
+
+	var req struct {
+		Body string `json:"body"`
+	}
+	if err := readJSON(r, &req); err != nil {
+		writeCatalog(w, apicatalog.GatewayRequestInvalidBody)
+		return
+	}
+
+	resp, err := h.client.AddBookingStaffNote(r.Context(), &bookingv1.AddBookingStaffNoteRequest{
+		BookingId:       bookingID,
+		RequesterUserId: userID,
+		Body:            req.Body,
+	})
+	if err != nil {
+		grpcErrorToHTTP(w, err)
+		return
+	}
+	n := resp.GetNote()
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"note": map[string]any{
+			"id":             n.GetId(),
+			"booking_id":     n.GetBookingId(),
+			"venue_id":       n.GetVenueId(),
+			"author_user_id": n.GetAuthorUserId(),
+			"body":           n.GetBody(),
+			"created_at":     n.GetCreatedAt().AsTime(),
+		},
+	})
 }

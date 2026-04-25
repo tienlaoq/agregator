@@ -5,7 +5,7 @@ services:
     container_name: banya-postgres
     environment:
       POSTGRES_USER: banya
-      POSTGRES_PASSWORD: banya_secret
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in deploy/.env — copy from .env.example}
       POSTGRES_DB: banya
     ports:
       - "5432:5432"
@@ -16,7 +16,8 @@ services:
       test: ["CMD-SHELL", "pg_isready -U banya"]
       interval: 5s
       timeout: 5s
-      retries: 5
+      retries: 10
+      start_period: 120s
 
   redis:
     image: redis:7-alpine
@@ -51,11 +52,14 @@ services:
       PG_HOST: postgres
       PG_DB: auth_db
       PG_USER: banya
-      PG_PASSWORD: banya_secret
+      PG_PASSWORD: ${POSTGRES_PASSWORD}
       REDIS_ADDR: redis:6379
       NATS_URL: nats://nats:4222
-      JWT_SECRET: super-secret-jwt-key-change-in-production
+      JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in deploy/.env — long random string, min 32 chars}
       USER_SERVICE_ADDR: user-service:50052
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
+      FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3000}
     depends_on:
       postgres:
         condition: service_healthy
@@ -76,7 +80,7 @@ services:
       PG_HOST: postgres
       PG_DB: user_db
       PG_USER: banya
-      PG_PASSWORD: banya_secret
+      PG_PASSWORD: ${POSTGRES_PASSWORD}
       REDIS_ADDR: redis:6379
       NATS_URL: nats://nats:4222
     depends_on:
@@ -95,12 +99,12 @@ services:
       PG_HOST: postgres
       PG_DB: venue_db
       PG_USER: banya
-      PG_PASSWORD: banya_secret
+      PG_PASSWORD: ${POSTGRES_PASSWORD}
       REDIS_ADDR: redis:6379
       NATS_URL: nats://nats:4222
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
       TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
-      FRONTEND_URL: http://localhost:3000
+      FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3000}
     depends_on:
       postgres:
         condition: service_healthy
@@ -117,7 +121,7 @@ services:
       PG_HOST: postgres
       PG_DB: booking_db
       PG_USER: banya
-      PG_PASSWORD: banya_secret
+      PG_PASSWORD: ${POSTGRES_PASSWORD}
       REDIS_ADDR: redis:6379
       NATS_URL: nats://nats:4222
       VENUE_SERVICE_ADDR: venue-service:50053
@@ -143,7 +147,7 @@ services:
       PG_HOST: postgres
       PG_DB: review_db
       PG_USER: banya
-      PG_PASSWORD: banya_secret
+      PG_PASSWORD: ${POSTGRES_PASSWORD}
       REDIS_ADDR: redis:6379
       NATS_URL: nats://nats:4222
       BOOKING_SERVICE_ADDR: booking-service:50054
@@ -164,7 +168,7 @@ services:
       PG_HOST: postgres
       PG_DB: master_db
       PG_USER: banya
-      PG_PASSWORD: banya_secret
+      PG_PASSWORD: ${POSTGRES_PASSWORD}
     depends_on:
       postgres:
         condition: service_healthy
@@ -181,12 +185,13 @@ services:
       PG_HOST: postgres
       PG_DB: payment_db
       PG_USER: banya
-      PG_PASSWORD: banya_secret
+      PG_PASSWORD: ${POSTGRES_PASSWORD}
       REDIS_ADDR: redis:6379
       NATS_URL: nats://nats:4222
       YOOKASSA_SHOP_ID: ""
       YOOKASSA_SECRET_KEY: ""
-      PAYMENT_RETURN_URL: http://localhost:3000/my/bookings
+      PAYMENT_RETURN_URL: ${FRONTEND_URL:-http://localhost:3000}/my/bookings
+      PLATFORM_FEE_BPS: "1500"
     depends_on:
       postgres:
         condition: service_healthy
@@ -201,6 +206,9 @@ services:
     environment:
       HTTP_PORT: "8080"
       UPLOAD_ROOT: /data/uploads
+      NATS_URL: nats://nats:4222
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+      OTEL_EXPORTER_OTLP_INSECURE: ${OTEL_EXPORTER_OTLP_INSECURE:-}
       AUTH_SERVICE_ADDR: auth-service:50051
       USER_SERVICE_ADDR: user-service:50052
       VENUE_SERVICE_ADDR: venue-service:50053
@@ -208,12 +216,19 @@ services:
       REVIEW_SERVICE_ADDR: review-service:50055
       PAYMENT_SERVICE_ADDR: payment-service:50056
       MASTER_SERVICE_ADDR: master-service:50057
-      BASE_URL: http://localhost:8080
-      FRONTEND_URL: http://localhost:3000
+      BASE_URL: ${BASE_URL:-http://localhost:8080}
+      FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3000}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-}
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
       VK_CLIENT_ID: ${VK_CLIENT_ID:-}
       VK_CLIENT_SECRET: ${VK_CLIENT_SECRET:-}
+      # Письма владельцу и CRM при приостановке / возобновлении заведения (все пять — иначе рассылка отключена).
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM: ${SMTP_FROM:-}
     volumes:
       - gateway_uploads:/data/uploads
     depends_on:
@@ -224,6 +239,25 @@ services:
       - review-service
       - payment-service
       - master-service
+      - nats
+
+  # Next.js UI (опционально): docker compose --profile frontend up -d --build
+  frontend:
+    profiles:
+      - frontend
+    build:
+      context: ../frontend
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8080}
+    container_name: banya-frontend
+    ports:
+      - "${FRONTEND_PORT:-3000}:3000"
+    environment:
+      INTERNAL_API_URL: http://api-gateway:8080
+    depends_on:
+      api-gateway:
+        condition: service_started
 
 volumes:
   pgdata:

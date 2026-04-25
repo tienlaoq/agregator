@@ -42,25 +42,27 @@ func (s *Server) CreateVenue(ctx context.Context, req *venuev1.CreateVenueReques
 	}
 
 	venue := &domain.Venue{
-		OwnerID:           ownerID,
-		Name:              req.GetName(),
-		Type:              req.GetType(),
-		Description:       req.GetDescription(),
-		Address:           req.GetAddress(),
-		City:              req.GetCity(),
-		Latitude:          req.GetLatitude(),
-		Longitude:         req.GetLongitude(),
-		PriceFrom:         req.GetPriceFrom(),
-		Capacity:          req.GetCapacity(),
-		Amenities:         req.GetAmenities(),
-		WorkingHours:      req.GetWorkingHours(),
-		Phone:             req.GetPhone(),
-		LegalEntityName:   req.GetLegalEntityName(),
-		INN:               req.GetInn(),
-		OGRN:              req.GetOgrn(),
-		PublicListingURL:  req.GetPublicListingUrl(),
-		VerificationNote:  req.GetVerificationNote(),
-		SocialLinks:       req.GetSocialLinks(),
+		OwnerID:                 ownerID,
+		Name:                    req.GetName(),
+		Type:                    req.GetType(),
+		Description:             req.GetDescription(),
+		Address:                 req.GetAddress(),
+		City:                    req.GetCity(),
+		Latitude:                req.GetLatitude(),
+		Longitude:               req.GetLongitude(),
+		PriceFrom:               req.GetPriceFrom(),
+		Capacity:                req.GetCapacity(),
+		Amenities:               req.GetAmenities(),
+		WorkingHours:            req.GetWorkingHours(),
+		Phone:                   req.GetPhone(),
+		LegalEntityName:         req.GetLegalEntityName(),
+		INN:                     req.GetInn(),
+		OGRN:                    req.GetOgrn(),
+		PublicListingURL:        req.GetPublicListingUrl(),
+		VerificationNote:        req.GetVerificationNote(),
+		SocialLinks:             req.GetSocialLinks(),
+		PayoutLegalForm:         req.GetPayoutLegalForm(),
+		YooKassaSellerAccountID: req.GetYookassaSellerAccountId(),
 	}
 	if req.GetStartAsDraft() {
 		venue.Status = domain.StatusDraft
@@ -204,6 +206,12 @@ func (s *Server) UpdateVenue(ctx context.Context, req *venuev1.UpdateVenueReques
 	if req.SocialLinks != nil {
 		existing.SocialLinks = *req.SocialLinks
 	}
+	if req.PayoutLegalForm != nil {
+		existing.PayoutLegalForm = *req.PayoutLegalForm
+	}
+	if req.YookassaSellerAccountId != nil {
+		existing.YooKassaSellerAccountID = *req.YookassaSellerAccountId
+	}
 
 	if err := s.uc.Update(ctx, existing); err != nil {
 		if _, ok := status.FromError(err); ok {
@@ -345,7 +353,7 @@ func (s *Server) ListOwnerVenues(ctx context.Context, req *venuev1.ListOwnerVenu
 		return nil, pkgerrors.InvalidArgument("invalid owner_id")
 	}
 
-	venues, err := s.uc.ListByOwner(ctx, ownerID)
+	venues, err := s.uc.ListForManagingUser(ctx, ownerID)
 	if err != nil {
 		return nil, pkgerrors.Internal(err.Error())
 	}
@@ -485,6 +493,175 @@ func (s *Server) ListManualSlotBlocks(ctx context.Context, req *venuev1.ListManu
 	return &venuev1.ListManualSlotBlocksResponse{Blocks: out}, nil
 }
 
+func (s *Server) GetVenueManagementAccess(ctx context.Context, req *venuev1.GetVenueManagementAccessRequest) (*venuev1.GetVenueManagementAccessResponse, error) {
+	venueID, err := uuid.Parse(req.GetVenueId())
+	if err != nil {
+		return nil, pkgerrors.InvalidArgument("invalid venue_id")
+	}
+	userID, err := uuid.Parse(req.GetUserId())
+	if err != nil {
+		return nil, pkgerrors.InvalidArgument("invalid user_id")
+	}
+	access, err := s.uc.GetVenueManagementAccess(ctx, venueID, userID)
+	if err != nil {
+		return nil, pkgerrors.Internal(err.Error())
+	}
+	return &venuev1.GetVenueManagementAccessResponse{Access: access}, nil
+}
+
+func (s *Server) ListVenueStaff(ctx context.Context, req *venuev1.ListVenueStaffRequest) (*venuev1.ListVenueStaffResponse, error) {
+	venueID, err := uuid.Parse(req.GetVenueId())
+	if err != nil {
+		return nil, pkgerrors.InvalidArgument("invalid venue_id")
+	}
+	actorID, err := uuid.Parse(req.GetActorId())
+	if err != nil {
+		return nil, pkgerrors.InvalidArgument("invalid actor_id")
+	}
+	members, err := s.uc.ListVenueStaff(ctx, venueID, actorID)
+	if err != nil {
+		if _, ok := status.FromError(err); ok {
+			return nil, err
+		}
+		return nil, pkgerrors.Internal(err.Error())
+	}
+	out := &venuev1.ListVenueStaffResponse{}
+	for i := range members {
+		m := &members[i]
+		out.Members = append(out.Members, &venuev1.VenueStaffMember{
+			UserId:    m.UserID.String(),
+			Role:      m.Role,
+			InvitedBy: m.InvitedBy.String(),
+			CreatedAt: timestamppb.New(m.CreatedAt),
+		})
+	}
+	return out, nil
+}
+
+func (s *Server) AddVenueStaff(ctx context.Context, req *venuev1.AddVenueStaffRequest) (*venuev1.AddVenueStaffResponse, error) {
+	venueID, err := uuid.Parse(req.GetVenueId())
+	if err != nil {
+		return nil, pkgerrors.InvalidArgument("invalid venue_id")
+	}
+	actorID, err := uuid.Parse(req.GetActorId())
+	if err != nil {
+		return nil, pkgerrors.InvalidArgument("invalid actor_id")
+	}
+	targetID, err := uuid.Parse(req.GetUserId())
+	if err != nil {
+		return nil, pkgerrors.InvalidArgument("invalid user_id")
+	}
+	if err := s.uc.AddVenueStaff(ctx, venueID, actorID, targetID, req.GetRole()); err != nil {
+		if _, ok := status.FromError(err); ok {
+			return nil, err
+		}
+		return nil, pkgerrors.Internal(err.Error())
+	}
+	return &venuev1.AddVenueStaffResponse{}, nil
+}
+
+func (s *Server) RemoveVenueStaff(ctx context.Context, req *venuev1.RemoveVenueStaffRequest) (*venuev1.RemoveVenueStaffResponse, error) {
+	venueID, err := uuid.Parse(req.GetVenueId())
+	if err != nil {
+		return nil, pkgerrors.InvalidArgument("invalid venue_id")
+	}
+	actorID, err := uuid.Parse(req.GetActorId())
+	if err != nil {
+		return nil, pkgerrors.InvalidArgument("invalid actor_id")
+	}
+	targetID, err := uuid.Parse(req.GetUserId())
+	if err != nil {
+		return nil, pkgerrors.InvalidArgument("invalid user_id")
+	}
+	if err := s.uc.RemoveVenueStaff(ctx, venueID, actorID, targetID); err != nil {
+		if _, ok := status.FromError(err); ok {
+			return nil, err
+		}
+		return nil, pkgerrors.Internal(err.Error())
+	}
+	return &venuev1.RemoveVenueStaffResponse{}, nil
+}
+
+func (s *Server) ListVenueCRMTasks(ctx context.Context, req *venuev1.ListVenueCRMTasksRequest) (*venuev1.ListVenueCRMTasksResponse, error) {
+	venueID, err := uuid.Parse(req.GetVenueId())
+	if err != nil {
+		return nil, pkgerrors.InvalidArgument("invalid venue_id")
+	}
+	actorID, err := uuid.Parse(req.GetActorId())
+	if err != nil {
+		return nil, pkgerrors.InvalidArgument("invalid actor_id")
+	}
+	tasks, err := s.uc.ListVenueCRMTasks(ctx, venueID, actorID, req.GetStatus())
+	if err != nil {
+		if _, ok := status.FromError(err); ok {
+			return nil, err
+		}
+		return nil, pkgerrors.Internal(err.Error())
+	}
+	out := &venuev1.ListVenueCRMTasksResponse{}
+	for i := range tasks {
+		out.Tasks = append(out.Tasks, venueCRMTaskToProto(&tasks[i]))
+	}
+	return out, nil
+}
+
+func (s *Server) CreateVenueCRMTask(ctx context.Context, req *venuev1.CreateVenueCRMTaskRequest) (*venuev1.CreateVenueCRMTaskResponse, error) {
+	venueID, err := uuid.Parse(req.GetVenueId())
+	if err != nil {
+		return nil, pkgerrors.InvalidArgument("invalid venue_id")
+	}
+	actorID, err := uuid.Parse(req.GetActorId())
+	if err != nil {
+		return nil, pkgerrors.InvalidArgument("invalid actor_id")
+	}
+	var bookingID *uuid.UUID
+	if b := strings.TrimSpace(req.GetBookingId()); b != "" {
+		u, perr := uuid.Parse(b)
+		if perr != nil {
+			return nil, pkgerrors.InvalidArgument("invalid booking_id")
+		}
+		bookingID = &u
+	}
+	var assignee *uuid.UUID
+	if a := strings.TrimSpace(req.GetAssigneeUserId()); a != "" {
+		u, perr := uuid.Parse(a)
+		if perr != nil {
+			return nil, pkgerrors.InvalidArgument("invalid assignee_user_id")
+		}
+		assignee = &u
+	}
+	t, err := s.uc.CreateVenueCRMTask(ctx, venueID, actorID, req.GetTitle(), req.GetBody(), bookingID, assignee)
+	if err != nil {
+		if _, ok := status.FromError(err); ok {
+			return nil, err
+		}
+		return nil, pkgerrors.Internal(err.Error())
+	}
+	return &venuev1.CreateVenueCRMTaskResponse{Task: venueCRMTaskToProto(t)}, nil
+}
+
+func (s *Server) CompleteVenueCRMTask(ctx context.Context, req *venuev1.CompleteVenueCRMTaskRequest) (*venuev1.CompleteVenueCRMTaskResponse, error) {
+	venueID, err := uuid.Parse(req.GetVenueId())
+	if err != nil {
+		return nil, pkgerrors.InvalidArgument("invalid venue_id")
+	}
+	actorID, err := uuid.Parse(req.GetActorId())
+	if err != nil {
+		return nil, pkgerrors.InvalidArgument("invalid actor_id")
+	}
+	taskID, err := uuid.Parse(req.GetTaskId())
+	if err != nil {
+		return nil, pkgerrors.InvalidArgument("invalid task_id")
+	}
+	if err := s.uc.CompleteVenueCRMTask(ctx, venueID, actorID, taskID); err != nil {
+		if _, ok := status.FromError(err); ok {
+			return nil, err
+		}
+		return nil, pkgerrors.Internal(err.Error())
+	}
+	return &venuev1.CompleteVenueCRMTaskResponse{}, nil
+}
+
 func (s *Server) UpdateRating(ctx context.Context, req *venuev1.UpdateRatingRequest) (*venuev1.UpdateRatingResponse, error) {
 	venueID, err := uuid.Parse(req.GetVenueId())
 	if err != nil {
@@ -495,6 +672,29 @@ func (s *Server) UpdateRating(ctx context.Context, req *venuev1.UpdateRatingRequ
 		return nil, pkgerrors.Internal(err.Error())
 	}
 	return &venuev1.UpdateRatingResponse{}, nil
+}
+
+func (s *Server) publishVenueManagementAlert(ctx context.Context, venueID uuid.UUID, v *domain.Venue, typ, comment string) {
+	ids, err := s.uc.RecipientUserIDsForVenue(ctx, venueID)
+	if err != nil {
+		s.log.Warn().Err(err).Str("venue_id", venueID.String()).Msg("recipient ids for management alert failed")
+		return
+	}
+	uidStrs := make([]string, len(ids))
+	for i := range ids {
+		uidStrs[i] = ids[i].String()
+	}
+	alert := events.VenueManagementAlert{
+		Type:              typ,
+		VenueID:           v.ID.String(),
+		VenueName:         v.Name,
+		OwnerID:           v.OwnerID.String(),
+		RecipientUserIDs:  uidStrs,
+		ModerationComment: comment,
+	}
+	if pubErr := s.publisher.VenueManagementAlert(alert); pubErr != nil {
+		s.log.Warn().Err(pubErr).Str("venue_id", v.ID.String()).Str("alert_type", typ).Msg("venue.management.alert publish failed")
+	}
 }
 
 func (s *Server) ModerateVenue(ctx context.Context, req *venuev1.ModerateVenueRequest) (*venuev1.VenueResponse, error) {
@@ -510,10 +710,20 @@ func (s *Server) ModerateVenue(ctx context.Context, req *venuev1.ModerateVenueRe
 
 	v, err := s.uc.Moderate(ctx, venueID, req.GetAction(), req.GetComment(), moderatedBy)
 	if err != nil {
+		if _, ok := status.FromError(err); ok {
+			return nil, err
+		}
 		return nil, pkgerrors.Internal(err.Error())
 	}
 
 	_ = s.publisher.VenueUpdated(v)
+	actionLower := strings.ToLower(strings.TrimSpace(req.GetAction()))
+	if v.Status == domain.StatusSuspended && actionLower == "suspend" {
+		s.publishVenueManagementAlert(ctx, venueID, v, "suspended", req.GetComment())
+	}
+	if v.Status == domain.StatusActive && actionLower == "resume" {
+		s.publishVenueManagementAlert(ctx, venueID, v, "resumed", req.GetComment())
+	}
 	if err := s.tg.NotifyModerated(v); err != nil {
 		s.log.Warn().Err(err).Str("venue_id", v.ID.String()).Msg("telegram notify moderated failed")
 	}
@@ -527,7 +737,7 @@ func (s *Server) ListPendingVenues(ctx context.Context, req *venuev1.ListPending
 		status = "pending_review"
 	}
 
-	result, err := s.uc.ListByStatus(ctx, status, req.GetPage(), req.GetPageSize())
+	result, err := s.uc.ListByStatus(ctx, status, req.GetPage(), req.GetPageSize(), req.GetNameQuery())
 	if err != nil {
 		return nil, pkgerrors.Internal(err.Error())
 	}
@@ -705,6 +915,28 @@ func (s *Server) SetVenueHallCoverPhoto(ctx context.Context, req *venuev1.SetVen
 	return venueToProto(v), nil
 }
 
+func venueCRMTaskToProto(t *domain.VenueCRMTask) *venuev1.VenueCRMTask {
+	p := &venuev1.VenueCRMTask{
+		Id:        t.ID.String(),
+		VenueId:   t.VenueID.String(),
+		Title:     t.Title,
+		Body:      t.Body,
+		Status:    t.Status,
+		CreatedBy: t.CreatedBy.String(),
+		CreatedAt: timestamppb.New(t.CreatedAt),
+		UpdatedAt: timestamppb.New(t.UpdatedAt),
+	}
+	if t.BookingID != nil {
+		s := t.BookingID.String()
+		p.BookingId = &s
+	}
+	if t.AssigneeUserID != nil {
+		s := t.AssigneeUserID.String()
+		p.AssigneeUserId = &s
+	}
+	return p
+}
+
 func manualBlockToProto(b *domain.ManualSlotBlock) *venuev1.ManualSlotBlock {
 	return &venuev1.ManualSlotBlock{
 		Id:       b.ID.String(),
@@ -718,33 +950,36 @@ func manualBlockToProto(b *domain.ManualSlotBlock) *venuev1.ManualSlotBlock {
 
 func venueToProto(v *domain.Venue) *venuev1.VenueResponse {
 	resp := &venuev1.VenueResponse{
-		Id:                v.ID.String(),
-		OwnerId:           v.OwnerID.String(),
-		Slug:              v.Slug,
-		Name:              v.Name,
-		Type:              v.Type,
-		Description:       v.Description,
-		Address:           v.Address,
-		City:              v.City,
-		Latitude:          v.Latitude,
-		Longitude:         v.Longitude,
-		PriceFrom:         v.PriceFrom,
-		Capacity:          v.Capacity,
-		Amenities:         v.Amenities,
-		WorkingHours:      v.WorkingHours,
-		Phone:             v.Phone,
-		AvgRating:         v.AvgRating,
-		ReviewCount:       v.ReviewCount,
-		IsActive:          v.IsActive,
-		Status:            v.Status,
-		ModerationComment: v.ModerationComment,
-		CreatedAt:         timestamppb.New(v.CreatedAt),
-		LegalEntityName:   v.LegalEntityName,
-		Inn:               v.INN,
-		Ogrn:              v.OGRN,
-		PublicListingUrl:  v.PublicListingURL,
-		VerificationNote:  v.VerificationNote,
-		SocialLinks:       v.SocialLinks,
+		Id:                      v.ID.String(),
+		OwnerId:                 v.OwnerID.String(),
+		Slug:                    v.Slug,
+		Name:                    v.Name,
+		Type:                    v.Type,
+		Description:             v.Description,
+		Address:                 v.Address,
+		City:                    v.City,
+		Latitude:                v.Latitude,
+		Longitude:               v.Longitude,
+		PriceFrom:               v.PriceFrom,
+		Capacity:                v.Capacity,
+		Amenities:               v.Amenities,
+		WorkingHours:            v.WorkingHours,
+		Phone:                   v.Phone,
+		AvgRating:               v.AvgRating,
+		ReviewCount:             v.ReviewCount,
+		IsActive:                v.IsActive,
+		Status:                  v.Status,
+		ModerationComment:       v.ModerationComment,
+		CreatedAt:               timestamppb.New(v.CreatedAt),
+		LegalEntityName:         v.LegalEntityName,
+		Inn:                     v.INN,
+		Ogrn:                    v.OGRN,
+		PublicListingUrl:        v.PublicListingURL,
+		VerificationNote:        v.VerificationNote,
+		SocialLinks:             v.SocialLinks,
+		PayoutLegalForm:         v.PayoutLegalForm,
+		YookassaSellerAccountId: v.YooKassaSellerAccountID,
+		ManagementAccess:        v.ManagementAccess,
 	}
 
 	if v.ModeratedAt != nil {

@@ -149,28 +149,123 @@ func TestModerate_Suspend(t *testing.T) {
 	assert.Equal(t, domain.StatusSuspended, out.Status)
 }
 
+func TestModerate_Resume(t *testing.T) {
+	ctx := context.Background()
+	venueID := uuid.New()
+	moderatorID := uuid.New()
+	slug := "was-suspended"
+
+	var getCalls int
+	repo := &mockVenueRepo{
+		GetByIDFn: func(_ context.Context, id uuid.UUID) (*domain.Venue, error) {
+			require.Equal(t, venueID, id)
+			getCalls++
+			if getCalls == 1 {
+				return &domain.Venue{ID: venueID, Status: domain.StatusSuspended, Slug: slug}, nil
+			}
+			return &domain.Venue{ID: venueID, Status: domain.StatusActive, Slug: slug}, nil
+		},
+		UpdateStatusFn: func(_ context.Context, id uuid.UUID, status, c string, by uuid.UUID) error {
+			assert.Equal(t, domain.StatusActive, status)
+			assert.Equal(t, moderatorID, by)
+			return nil
+		},
+		InsertModerationHistoryFn: func(_ context.Context, entry *domain.ModerationHistoryEntry) error {
+			assert.Equal(t, domain.StatusSuspended, entry.OldStatus)
+			assert.Equal(t, domain.StatusActive, entry.NewStatus)
+			return nil
+		},
+	}
+
+	uc := NewVenueUseCase(repo, dummyRedis(t))
+	out, err := uc.Moderate(ctx, venueID, "resume", "", moderatorID)
+	require.NoError(t, err)
+	require.NotNil(t, out)
+	assert.Equal(t, domain.StatusActive, out.Status)
+}
+
+func TestModerate_ResumeNotSuspended(t *testing.T) {
+	ctx := context.Background()
+	venueID := uuid.New()
+	repo := &mockVenueRepo{
+		GetByIDFn: func(_ context.Context, id uuid.UUID) (*domain.Venue, error) {
+			return &domain.Venue{ID: id, Status: domain.StatusActive, Slug: "x"}, nil
+		},
+	}
+	uc := NewVenueUseCase(repo, dummyRedis(t))
+	_, err := uc.Moderate(ctx, venueID, "resume", "", uuid.New())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "приостановлен")
+}
+
+func TestModerate_ApproveFromSuspendedFails(t *testing.T) {
+	ctx := context.Background()
+	venueID := uuid.New()
+	repo := &mockVenueRepo{
+		GetByIDFn: func(_ context.Context, id uuid.UUID) (*domain.Venue, error) {
+			return &domain.Venue{ID: id, Status: domain.StatusSuspended, Slug: "x"}, nil
+		},
+	}
+	uc := NewVenueUseCase(repo, dummyRedis(t))
+	_, err := uc.Moderate(ctx, venueID, "approve", "", uuid.New())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "одобрение")
+}
+
+func TestModerate_SuspendNotActive(t *testing.T) {
+	ctx := context.Background()
+	venueID := uuid.New()
+	repo := &mockVenueRepo{
+		GetByIDFn: func(_ context.Context, id uuid.UUID) (*domain.Venue, error) {
+			return &domain.Venue{ID: id, Status: domain.StatusPendingReview, Slug: "x"}, nil
+		},
+	}
+	uc := NewVenueUseCase(repo, dummyRedis(t))
+	_, err := uc.Moderate(ctx, venueID, "suspend", "reason", uuid.New())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "актив")
+}
+
 func TestModerate_RejectWithoutComment(t *testing.T) {
 	ctx := context.Background()
-	uc := NewVenueUseCase(&mockVenueRepo{}, dummyRedis(t))
-	_, err := uc.Moderate(ctx, uuid.New(), "reject", "", uuid.New())
+	vid := uuid.New()
+	repo := &mockVenueRepo{
+		GetByIDFn: func(_ context.Context, id uuid.UUID) (*domain.Venue, error) {
+			return &domain.Venue{ID: id, Status: domain.StatusPendingReview, Slug: "x"}, nil
+		},
+	}
+	uc := NewVenueUseCase(repo, dummyRedis(t))
+	_, err := uc.Moderate(ctx, vid, "reject", "", uuid.New())
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "comment is required")
+	assert.Contains(t, err.Error(), "комментарий")
 }
 
 func TestModerate_SuspendWithoutComment(t *testing.T) {
 	ctx := context.Background()
-	uc := NewVenueUseCase(&mockVenueRepo{}, dummyRedis(t))
-	_, err := uc.Moderate(ctx, uuid.New(), "suspend", "", uuid.New())
+	vid := uuid.New()
+	repo := &mockVenueRepo{
+		GetByIDFn: func(_ context.Context, id uuid.UUID) (*domain.Venue, error) {
+			return &domain.Venue{ID: id, Status: domain.StatusActive, Slug: "x"}, nil
+		},
+	}
+	uc := NewVenueUseCase(repo, dummyRedis(t))
+	_, err := uc.Moderate(ctx, vid, "suspend", "", uuid.New())
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "comment is required")
+	assert.Contains(t, err.Error(), "комментарий")
 }
 
 func TestModerate_UnknownAction(t *testing.T) {
 	ctx := context.Background()
-	uc := NewVenueUseCase(&mockVenueRepo{}, dummyRedis(t))
-	_, err := uc.Moderate(ctx, uuid.New(), "ban", "x", uuid.New())
+	vid := uuid.New()
+	repo := &mockVenueRepo{
+		GetByIDFn: func(_ context.Context, id uuid.UUID) (*domain.Venue, error) {
+			return &domain.Venue{ID: id, Status: domain.StatusPendingReview, Slug: "x"}, nil
+		},
+	}
+	uc := NewVenueUseCase(repo, dummyRedis(t))
+	_, err := uc.Moderate(ctx, vid, "ban", "x", uuid.New())
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "unknown moderation action")
+	assert.Contains(t, err.Error(), "модерации")
 }
 
 func TestModerate_VenueNotFound(t *testing.T) {

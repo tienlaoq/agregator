@@ -15,6 +15,8 @@ service BookingService {
   rpc ConfirmBooking(ConfirmBookingRequest) returns (BookingResponse);
   rpc CompleteBooking(CompleteBookingRequest) returns (BookingResponse);
   rpc HasCompletedBooking(HasCompletedBookingRequest) returns (HasCompletedBookingResponse);
+  rpc ListBookingStaffNotes(ListBookingStaffNotesRequest) returns (ListBookingStaffNotesResponse);
+  rpc AddBookingStaffNote(AddBookingStaffNoteRequest) returns (AddBookingStaffNoteResponse);
 }
 
 message CreateBookingRequest {
@@ -59,6 +61,7 @@ message ListUserBookingsRequest {
 
 message ListVenueBookingsRequest {
   string venue_id = 1;
+  // Authenticated user (venue owner or CRM staff) requesting the list.
   string owner_id = 2;
   string status = 3;
   string date = 4;
@@ -92,4 +95,32 @@ message HasCompletedBookingRequest {
 
 message HasCompletedBookingResponse {
   bool has_completed = 1;
+}
+
+message BookingStaffNote {
+  string id = 1;
+  string booking_id = 2;
+  string venue_id = 3;
+  string author_user_id = 4;
+  string body = 5;
+  google.protobuf.Timestamp created_at = 6;
+}
+
+message ListBookingStaffNotesRequest {
+  string booking_id = 1;
+  string requester_user_id = 2;
+}
+
+message ListBookingStaffNotesResponse {
+  repeated BookingStaffNote notes = 1;
+}
+
+message AddBookingStaffNoteRequest {
+  string booking_id = 1;
+  string requester_user_id = 2;
+  string body = 3;
+}
+
+message AddBookingStaffNoteResponse {
+  BookingStaffNote note = 1;
 }

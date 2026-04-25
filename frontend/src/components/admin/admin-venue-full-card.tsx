@@ -6,6 +6,7 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible"
+import { venueMediaUrl } from "@/lib/api"
 import {
   VENUE_SOCIAL_PUBLIC_LABELS,
   parseVenueSocialLinks,
@@ -18,6 +19,45 @@ function formatMoneyRub(n: number): string {
   return `${n.toLocaleString("ru-RU")} ₽`
 }
 
+/** Текст для модерации: пустой `{}` / незаполненный график — null (не показывать). */
+function workingHoursModerationLabel(raw: string | undefined | null): string | null {
+  if (raw == null) return null;
+  const t = raw.trim();
+  if (t === "" || t === "{}" || t === "null") return null;
+  try {
+    const o = JSON.parse(t) as Record<string, unknown>;
+    if (
+      o &&
+      typeof o === "object" &&
+      "weekdays" in o &&
+      "weekends" in o &&
+      o.weekdays &&
+      typeof o.weekdays === "object" &&
+      o.weekends &&
+      typeof o.weekends === "object"
+    ) {
+      const wd = o.weekdays as { from?: string; to?: string };
+      const we = o.weekends as { from?: string; to?: string };
+      const wf = wd.from?.trim() ?? "";
+      const wt = wd.to?.trim() ?? "";
+      const ef = we.from?.trim() ?? "";
+      const et = we.to?.trim() ?? "";
+      const bits: string[] = [];
+      if (wf || wt) bits.push(`будни ${wf || "—"}–${wt || "—"}`);
+      if (ef || et) bits.push(`выходные ${ef || "—"}–${et || "—"}`);
+      if (bits.length === 0) return null;
+      return bits.join(" · ");
+    }
+    if (typeof o === "object" && o !== null && Object.keys(o).length > 0) {
+      return "График в нестандартном формате";
+    }
+    return null;
+  } catch {
+    if (t === "{}" || t === "null") return null;
+    return t;
+  }
+}
+
 type Props = { venue: Venue }
 
 /** Полная карточка заведения для экрана модерации (залы, фото, услуги, удобства). */
@@ -27,17 +67,16 @@ export function AdminVenueFullCard({ venue }: Props) {
   const services = venue.services ?? []
   const amenities = venue.amenities ?? []
   const social = parseVenueSocialLinks(venue.social_links)
+  const workingHoursLabel = workingHoursModerationLabel(venue.working_hours)
 
   const hasExtra =
     photos.length > 0 ||
     halls.length > 0 ||
     services.length > 0 ||
     amenities.length > 0 ||
-    (venue.working_hours && venue.working_hours.trim() !== "") ||
+    workingHoursLabel != null ||
     venue.capacity != null ||
     venue.price_from != null ||
-    venue.latitude != null ||
-    venue.longitude != null ||
     Object.values(social).some((u) => u.trim() !== "")
 
   if (!hasExtra) {
@@ -61,10 +100,10 @@ export function AdminVenueFullCard({ venue }: Props) {
       <CollapsibleContent>
         <div className="space-y-4 border-t border-border px-4 pb-4 pt-3 text-sm">
           <div className="flex flex-wrap gap-x-6 gap-y-1 text-muted-foreground">
-            {venue.working_hours ? (
+            {workingHoursLabel ? (
               <span>
-                <span className="font-medium text-foreground">Режим: </span>
-                {venue.working_hours}
+                <span className="font-medium text-foreground">Режим работы: </span>
+                {workingHoursLabel}
               </span>
             ) : null}
             {venue.capacity != null && venue.capacity > 0 ? (
@@ -77,12 +116,6 @@ export function AdminVenueFullCard({ venue }: Props) {
               <span>
                 <span className="font-medium text-foreground">Цена от: </span>
                 {formatMoneyRub(venue.price_from)}
-              </span>
-            ) : null}
-            {venue.latitude != null && venue.longitude != null ? (
-              <span className="font-mono text-xs">
-                <span className="font-medium text-foreground">Коорд.: </span>
-                {venue.latitude.toFixed(5)}, {venue.longitude.toFixed(5)}
               </span>
             ) : null}
           </div>
@@ -136,22 +169,25 @@ export function AdminVenueFullCard({ venue }: Props) {
                 Фото карточки ({photos.length})
               </div>
               <div className="flex flex-wrap gap-2">
-                {photos.map((p) => (
+                {photos.map((p) => {
+                  const src = venueMediaUrl(p.url)
+                  return (
                   <a
                     key={p.id}
-                    href={p.url}
+                    href={src}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="block overflow-hidden rounded-md border border-border bg-background"
                   >
                     {/* eslint-disable-next-line @next/next/no-img-element */}
                     <img
-                      src={p.url}
+                      src={src}
                       alt=""
                       className="h-28 w-40 object-cover"
                     />
                   </a>
-                ))}
+                  )
+                })}
               </div>
             </div>
           ) : null}
@@ -182,22 +218,25 @@ export function AdminVenueFullCard({ venue }: Props) {
                     ) : null}
                     {(h.photos ?? []).length > 0 ? (
                       <div className="mt-2 flex flex-wrap gap-2">
-                        {(h.photos ?? []).map((hp) => (
+                        {(h.photos ?? []).map((hp) => {
+                          const src = venueMediaUrl(hp.url)
+                          return (
                           <a
                             key={hp.id}
-                            href={hp.url}
+                            href={src}
                             target="_blank"
                             rel="noopener noreferrer"
                             className="block overflow-hidden rounded border border-border"
                           >
                             {/* eslint-disable-next-line @next/next/no-img-element */}
                             <img
-                              src={hp.url}
+                              src={src}
                               alt=""
                               className="h-20 w-28 object-cover"
                             />
                           </a>
-                        ))}
+                          )
+                        })}
                       </div>
                     ) : null}
                   </div>

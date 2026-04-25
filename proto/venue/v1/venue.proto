@@ -30,6 +30,13 @@ service VenueService {
   rpc AddVenueHallPhoto(AddVenueHallPhotoRequest) returns (VenueResponse);
   rpc DeleteVenueHallPhoto(DeleteVenueHallPhotoRequest) returns (DeleteVenueHallPhotoResponse);
   rpc SetVenueHallCoverPhoto(SetVenueHallCoverPhotoRequest) returns (VenueResponse);
+  rpc GetVenueManagementAccess(GetVenueManagementAccessRequest) returns (GetVenueManagementAccessResponse);
+  rpc ListVenueStaff(ListVenueStaffRequest) returns (ListVenueStaffResponse);
+  rpc AddVenueStaff(AddVenueStaffRequest) returns (AddVenueStaffResponse);
+  rpc RemoveVenueStaff(RemoveVenueStaffRequest) returns (RemoveVenueStaffResponse);
+  rpc ListVenueCRMTasks(ListVenueCRMTasksRequest) returns (ListVenueCRMTasksResponse);
+  rpc CreateVenueCRMTask(CreateVenueCRMTaskRequest) returns (CreateVenueCRMTaskResponse);
+  rpc CompleteVenueCRMTask(CompleteVenueCRMTaskRequest) returns (CompleteVenueCRMTaskResponse);
 }
 
 message CreateVenueRequest {
@@ -59,6 +66,10 @@ message CreateVenueRequest {
   repeated VenueHallInput halls = 21;
   // Если true — статус draft (не в очереди модерации), иначе как раньше pending_review.
   bool start_as_draft = 22;
+  // Форма получателя выплат: ip | ooo | self_employed | gph
+  string payout_legal_form = 23;
+  // Идентификатор магазина продавца в ЮKassa (split payments)
+  string yookassa_seller_account_id = 24;
 }
 
 message SubmitVenueForReviewRequest {
@@ -90,6 +101,8 @@ message UpdateVenueRequest {
   optional VenueServicesReplace services_replace = 20;
   // Полная замена списка залов; пересчитывает price_from/capacity/amenities на карточке.
   optional VenueHallsReplace halls_replace = 21;
+  optional string payout_legal_form = 22;
+  optional string yookassa_seller_account_id = 23;
 }
 
 // Full replace of the services list (owner cabinet). Empty items = remove all services.
@@ -165,6 +178,10 @@ message VenueResponse {
   string verification_note = 30;
   string social_links = 31;
   repeated VenueHall halls = 32;
+  string payout_legal_form = 33;
+  string yookassa_seller_account_id = 34;
+  // When listing venues for a managing user: owner | manager | staff; otherwise empty.
+  string management_access = 35;
 }
 
 message ListVenuesResponse {
@@ -305,7 +322,7 @@ message UpdateRatingResponse {}
 
 message ModerateVenueRequest {
   string venue_id = 1;
-  string action = 2; // approve, reject, suspend
+  string action = 2; // approve, reject, suspend, resume (из suspended → active)
   string comment = 3;
   string moderated_by = 4; // admin user ID
 }
@@ -314,6 +331,8 @@ message ListPendingVenuesRequest {
   int32 page = 1;
   int32 page_size = 2;
   string status = 3; // filter by specific status, empty = pending_review
+  // optional: substring match on venue name (case-insensitive), empty = no filter
+  string name_query = 4;
 }
 
 message AddVenuePhotoRequest {
@@ -362,3 +381,90 @@ message SetVenueHallCoverPhotoRequest {
   string owner_id = 3;
   string photo_id = 4;
 }
+
+message GetVenueManagementAccessRequest {
+  string venue_id = 1;
+  string user_id = 2;
+}
+
+message GetVenueManagementAccessResponse {
+  // owner | manager | staff | empty string if no access
+  string access = 1;
+}
+
+message VenueStaffMember {
+  string user_id = 1;
+  string role = 2;
+  string invited_by = 3;
+  google.protobuf.Timestamp created_at = 4;
+}
+
+message ListVenueStaffRequest {
+  string venue_id = 1;
+  string actor_id = 2;
+}
+
+message ListVenueStaffResponse {
+  repeated VenueStaffMember members = 1;
+}
+
+message AddVenueStaffRequest {
+  string venue_id = 1;
+  string actor_id = 2;
+  string user_id = 3;
+  string role = 4;
+}
+
+message AddVenueStaffResponse {}
+
+message RemoveVenueStaffRequest {
+  string venue_id = 1;
+  string actor_id = 2;
+  string user_id = 3;
+}
+
+message RemoveVenueStaffResponse {}
+
+message VenueCRMTask {
+  string id = 1;
+  string venue_id = 2;
+  optional string booking_id = 3;
+  string title = 4;
+  string body = 5;
+  string status = 6;
+  optional string assignee_user_id = 7;
+  string created_by = 8;
+  google.protobuf.Timestamp created_at = 9;
+  google.protobuf.Timestamp updated_at = 10;
+}
+
+message ListVenueCRMTasksRequest {
+  string venue_id = 1;
+  string actor_id = 2;
+  string status = 3;
+}
+
+message ListVenueCRMTasksResponse {
+  repeated VenueCRMTask tasks = 1;
+}
+
+message CreateVenueCRMTaskRequest {
+  string venue_id = 1;
+  string actor_id = 2;
+  string title = 3;
+  string body = 4;
+  optional string booking_id = 5;
+  optional string assignee_user_id = 6;
+}
+
+message CreateVenueCRMTaskResponse {
+  VenueCRMTask task = 1;
+}
+
+message CompleteVenueCRMTaskRequest {
+  string venue_id = 1;
+  string actor_id = 2;
+  string task_id = 3;
+}
+
+message CompleteVenueCRMTaskResponse {}

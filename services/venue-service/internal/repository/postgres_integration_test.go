@@ -45,6 +45,10 @@ func TestMain(m *testing.M) {
 			filepath.Join(migrationsDir, "007_manual_slot_blocks.up.sql"),
 			filepath.Join(migrationsDir, "008_venue_social_links.up.sql"),
 			filepath.Join(migrationsDir, "009_venue_service_sort_order.up.sql"),
+			filepath.Join(migrationsDir, "010_venue_halls.up.sql"),
+			filepath.Join(migrationsDir, "011_venue_payout_profile.up.sql"),
+			filepath.Join(migrationsDir, "012_venue_staff.up.sql"),
+			filepath.Join(migrationsDir, "013_venue_crm_tasks.up.sql"),
 		),
 		testcontainers.WithWaitStrategy(
 			wait.ForAll(
@@ -141,7 +145,7 @@ func TestIntegration_ListByStatus(t *testing.T) {
 	_, err := repo.AddVenuePhoto(ctx, withPhoto.ID, "https://example.com/moderation-list-by-status.jpg")
 	require.NoError(t, err)
 
-	result, err := repo.ListByStatus(ctx, domain.StatusPendingReview, 1, 100)
+	result, err := repo.ListByStatus(ctx, domain.StatusPendingReview, 1, 100, "")
 	require.NoError(t, err)
 	assert.GreaterOrEqual(t, int(result.Total), 4)
 

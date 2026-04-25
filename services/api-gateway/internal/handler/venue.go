@@ -10,19 +10,36 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"google.golang.org/grpc/metadata"
+	userv1 "github.com/tienlao/agregator/gen/go/user/v1"
 	venuev1 "github.com/tienlao/agregator/gen/go/venue/v1"
 	pkgcities "github.com/tienlao/agregator/pkg/cities"
+	"github.com/tienlao/agregator/services/api-gateway/internal/apicatalog"
 	"github.com/tienlao/agregator/services/api-gateway/internal/middleware"
+	"github.com/tienlao/agregator/services/api-gateway/internal/suspendnotify"
+	"google.golang.org/grpc/metadata"
 )
 
 type VenueHandler struct {
-	client     venuev1.VenueServiceClient
-	uploadRoot string // absolute or cwd-relative; files under uploadRoot/venues/{venueID}/
+	client          venuev1.VenueServiceClient
+	userClient      userv1.UserServiceClient // optional; used for staff invite by email
+	uploadRoot      string                   // absolute or cwd-relative; files under uploadRoot/venues/{venueID}/
+	suspendNotifier *suspendnotify.Sender    // optional; письма владельцу и персоналу при приостановке (SMTP)
 }
 
-func NewVenueHandler(client venuev1.VenueServiceClient, uploadRoot string) *VenueHandler {
-	return &VenueHandler{client: client, uploadRoot: uploadRoot}
+type VenueHandlerOption func(*VenueHandler)
+
+func WithSuspendNotifier(n *suspendnotify.Sender) VenueHandlerOption {
+	return func(h *VenueHandler) {
+		h.suspendNotifier = n
+	}
+}
+
+func NewVenueHandler(client venuev1.VenueServiceClient, userClient userv1.UserServiceClient, uploadRoot string, opts ...VenueHandlerOption) *VenueHandler {
+	h := &VenueHandler{client: client, userClient: userClient, uploadRoot: uploadRoot}
+	for _, o := range opts {
+		o(h)
+	}
+	return h
 }
 
 func socialLinksMapForJSON(s string) map[string]any {
@@ -163,7 +180,7 @@ func (h *VenueHandler) GetBySlug(w http.ResponseWriter, r *http.Request) {
 	viewer := middleware.UserIDFromCtx(r.Context())
 	role := middleware.RoleFromCtx(r.Context())
 	if !venueDraftVisibleToViewer(resp.GetStatus(), resp.GetOwnerId(), viewer, role) {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "venue not found"})
+		writeCatalog(w, apicatalog.GatewayVenueNotFound)
 		return
 	}
 
@@ -198,7 +215,7 @@ func (h *VenueHandler) AvailabilityBySlug(w http.ResponseWriter, r *http.Request
 	slug := chi.URLParam(r, "slug")
 	date := r.URL.Query().Get("date")
 	if date == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "query date is required (YYYY-MM-DD)"})
+		writeCatalog(w, apicatalog.GatewayRequestMissingDate)
 		return
 	}
 
@@ -217,7 +234,7 @@ func (h *VenueHandler) AvailabilityBySlug(w http.ResponseWriter, r *http.Request
 	viewer := middleware.UserIDFromCtx(r.Context())
 	role := middleware.RoleFromCtx(r.Context())
 	if !venueDraftVisibleToViewer(v.GetStatus(), v.GetOwnerId(), viewer, role) {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "venue not found"})
+		writeCatalog(w, apicatalog.GatewayVenueNotFound)
 		return
 	}
 
@@ -251,35 +268,37 @@ func (h *VenueHandler) AvailabilityBySlug(w http.ResponseWriter, r *http.Request
 func (h *VenueHandler) Create(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.UserIDFromCtx(r.Context())
 	if userID == "" {
-		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		writeCatalog(w, apicatalog.GatewayAuthUnauthorized)
 		return
 	}
 
 	var req struct {
-		Name              string                `json:"name"`
-		Type              string                `json:"type"`
-		Description       string                `json:"description"`
-		Address           string                `json:"address"`
-		City              string                `json:"city"`
-		Latitude          float64               `json:"latitude"`
-		Longitude         float64               `json:"longitude"`
-		PriceFrom         int64                 `json:"price_from"`
-		Capacity          int32                 `json:"capacity"`
-		Amenities         []string              `json:"amenities"`
-		WorkingHours      string                `json:"working_hours"`
-		Phone             string                `json:"phone"`
-		Services          []venueServiceItemReq `json:"services"`
-		LegalEntityName   string                `json:"legal_entity_name"`
-		INN               string                `json:"inn"`
-		OGRN              string                `json:"ogrn"`
-		PublicListingURL  string                `json:"public_listing_url"`
-		VerificationNote  string                `json:"verification_note"`
-		SocialLinks       json.RawMessage       `json:"social_links"`
-		Halls             []venueHallItemReq    `json:"halls"`
-		StartAsDraft      bool                  `json:"start_as_draft"`
+		Name                    string                `json:"name"`
+		Type                    string                `json:"type"`
+		Description             string                `json:"description"`
+		Address                 string                `json:"address"`
+		City                    string                `json:"city"`
+		Latitude                float64               `json:"latitude"`
+		Longitude               float64               `json:"longitude"`
+		PriceFrom               int64                 `json:"price_from"`
+		Capacity                int32                 `json:"capacity"`
+		Amenities               []string              `json:"amenities"`
+		WorkingHours            string                `json:"working_hours"`
+		Phone                   string                `json:"phone"`
+		Services                []venueServiceItemReq `json:"services"`
+		LegalEntityName         string                `json:"legal_entity_name"`
+		INN                     string                `json:"inn"`
+		OGRN                    string                `json:"ogrn"`
+		PublicListingURL        string                `json:"public_listing_url"`
+		VerificationNote        string                `json:"verification_note"`
+		SocialLinks             json.RawMessage       `json:"social_links"`
+		Halls                   []venueHallItemReq    `json:"halls"`
+		StartAsDraft            bool                  `json:"start_as_draft"`
+		PayoutLegalForm         string                `json:"payout_legal_form"`
+		YookassaSellerAccountID string                `json:"yookassa_seller_account_id"`
 	}
 	if err := readJSON(r, &req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		writeCatalog(w, apicatalog.GatewayRequestInvalidBody)
 		return
 	}
 
@@ -304,28 +323,30 @@ func (h *VenueHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp, err := h.client.CreateVenue(r.Context(), &venuev1.CreateVenueRequest{
-		OwnerId:           userID,
-		Name:              req.Name,
-		Type:              req.Type,
-		Description:       req.Description,
-		Address:           req.Address,
-		City:              req.City,
-		Latitude:          req.Latitude,
-		Longitude:         req.Longitude,
-		PriceFrom:         req.PriceFrom,
-		Capacity:          req.Capacity,
-		Amenities:         req.Amenities,
-		WorkingHours:      req.WorkingHours,
-		Phone:             req.Phone,
-		Services:          grpcServices,
-		LegalEntityName:   req.LegalEntityName,
-		Inn:               req.INN,
-		Ogrn:              req.OGRN,
-		PublicListingUrl:  req.PublicListingURL,
-		VerificationNote:  req.VerificationNote,
-		SocialLinks:       socialJSON,
-		Halls:             grpcHalls,
-		StartAsDraft:      req.StartAsDraft,
+		OwnerId:                 userID,
+		Name:                    req.Name,
+		Type:                    req.Type,
+		Description:             req.Description,
+		Address:                 req.Address,
+		City:                    req.City,
+		Latitude:                req.Latitude,
+		Longitude:               req.Longitude,
+		PriceFrom:               req.PriceFrom,
+		Capacity:                req.Capacity,
+		Amenities:               req.Amenities,
+		WorkingHours:            req.WorkingHours,
+		Phone:                   req.Phone,
+		Services:                grpcServices,
+		LegalEntityName:         req.LegalEntityName,
+		Inn:                     req.INN,
+		Ogrn:                    req.OGRN,
+		PublicListingUrl:        req.PublicListingURL,
+		VerificationNote:        req.VerificationNote,
+		SocialLinks:             socialJSON,
+		Halls:                   grpcHalls,
+		StartAsDraft:            req.StartAsDraft,
+		PayoutLegalForm:         req.PayoutLegalForm,
+		YookassaSellerAccountId: req.YookassaSellerAccountID,
 	})
 	if err != nil {
 		grpcErrorToHTTP(w, err)
@@ -338,7 +359,7 @@ func (h *VenueHandler) Create(w http.ResponseWriter, r *http.Request) {
 func (h *VenueHandler) SubmitForReview(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.UserIDFromCtx(r.Context())
 	if userID == "" {
-		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		writeCatalog(w, apicatalog.GatewayAuthUnauthorized)
 		return
 	}
 	venueID := chi.URLParam(r, "id")
@@ -356,34 +377,36 @@ func (h *VenueHandler) SubmitForReview(w http.ResponseWriter, r *http.Request) {
 func (h *VenueHandler) Update(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.UserIDFromCtx(r.Context())
 	if userID == "" {
-		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		writeCatalog(w, apicatalog.GatewayAuthUnauthorized)
 		return
 	}
 	venueID := chi.URLParam(r, "id")
 
 	var req struct {
-		Name              *string               `json:"name"`
-		Description       *string               `json:"description"`
-		Address           *string               `json:"address"`
-		City              *string               `json:"city"`
-		Latitude          *float64              `json:"latitude"`
-		Longitude         *float64              `json:"longitude"`
-		PriceFrom         *int64                `json:"price_from"`
-		Capacity          *int32                `json:"capacity"`
-		Amenities         *[]string             `json:"amenities"`
-		WorkingHours      *string               `json:"working_hours"`
-		Phone             *string               `json:"phone"`
-		LegalEntityName   *string               `json:"legal_entity_name"`
-		INN               *string               `json:"inn"`
-		OGRN              *string               `json:"ogrn"`
-		PublicListingURL  *string               `json:"public_listing_url"`
-		VerificationNote  *string               `json:"verification_note"`
-		SocialLinks       *json.RawMessage      `json:"social_links"`
-		Services          *[]venueServiceItemReq `json:"services"`
-		Halls             *[]venueHallItemReq    `json:"halls"`
+		Name                    *string                `json:"name"`
+		Description             *string                `json:"description"`
+		Address                 *string                `json:"address"`
+		City                    *string                `json:"city"`
+		Latitude                *float64               `json:"latitude"`
+		Longitude               *float64               `json:"longitude"`
+		PriceFrom               *int64                 `json:"price_from"`
+		Capacity                *int32                 `json:"capacity"`
+		Amenities               *[]string              `json:"amenities"`
+		WorkingHours            *string                `json:"working_hours"`
+		Phone                   *string                `json:"phone"`
+		LegalEntityName         *string                `json:"legal_entity_name"`
+		INN                     *string                `json:"inn"`
+		OGRN                    *string                `json:"ogrn"`
+		PublicListingURL        *string                `json:"public_listing_url"`
+		VerificationNote        *string                `json:"verification_note"`
+		SocialLinks             *json.RawMessage       `json:"social_links"`
+		Services                *[]venueServiceItemReq `json:"services"`
+		Halls                   *[]venueHallItemReq    `json:"halls"`
+		PayoutLegalForm         *string                `json:"payout_legal_form"`
+		YookassaSellerAccountID *string                `json:"yookassa_seller_account_id"`
 	}
 	if err := readJSON(r, &req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		writeCatalog(w, apicatalog.GatewayRequestInvalidBody)
 		return
 	}
 
@@ -458,6 +481,12 @@ func (h *VenueHandler) Update(w http.ResponseWriter, r *http.Request) {
 	if req.Halls != nil {
 		grpcReq.HallsReplace = &venuev1.VenueHallsReplace{Items: venueHallItemsToProto(*req.Halls)}
 	}
+	if req.PayoutLegalForm != nil {
+		grpcReq.PayoutLegalForm = req.PayoutLegalForm
+	}
+	if req.YookassaSellerAccountID != nil {
+		grpcReq.YookassaSellerAccountId = req.YookassaSellerAccountID
+	}
 
 	resp, err := h.client.UpdateVenue(r.Context(), grpcReq)
 	if err != nil {
@@ -471,7 +500,7 @@ func (h *VenueHandler) Update(w http.ResponseWriter, r *http.Request) {
 func (h *VenueHandler) ListOwnerVenues(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.UserIDFromCtx(r.Context())
 	if userID == "" {
-		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		writeCatalog(w, apicatalog.GatewayAuthUnauthorized)
 		return
 	}
 
@@ -495,7 +524,7 @@ func (h *VenueHandler) ListOwnerVenues(w http.ResponseWriter, r *http.Request) {
 func (h *VenueHandler) ListOwnerSlotBlocks(w http.ResponseWriter, r *http.Request) {
 	ownerID := middleware.UserIDFromCtx(r.Context())
 	if ownerID == "" {
-		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		writeCatalog(w, apicatalog.GatewayAuthUnauthorized)
 		return
 	}
 	venueID := chi.URLParam(r, "venueId")
@@ -503,7 +532,7 @@ func (h *VenueHandler) ListOwnerSlotBlocks(w http.ResponseWriter, r *http.Reques
 	dateFrom := q.Get("date_from")
 	dateTo := q.Get("date_to")
 	if dateFrom == "" || dateTo == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "укажите date_from и date_to в формате YYYY-MM-DD"})
+		writeCatalog(w, apicatalog.GatewayRequestMissingDateRange)
 		return
 	}
 
@@ -529,7 +558,7 @@ func (h *VenueHandler) ListOwnerSlotBlocks(w http.ResponseWriter, r *http.Reques
 func (h *VenueHandler) CreateOwnerSlotBlock(w http.ResponseWriter, r *http.Request) {
 	ownerID := middleware.UserIDFromCtx(r.Context())
 	if ownerID == "" {
-		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		writeCatalog(w, apicatalog.GatewayAuthUnauthorized)
 		return
 	}
 	venueID := chi.URLParam(r, "venueId")
@@ -541,7 +570,7 @@ func (h *VenueHandler) CreateOwnerSlotBlock(w http.ResponseWriter, r *http.Reque
 		Note     string `json:"note"`
 	}
 	if err := readJSON(r, &req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		writeCatalog(w, apicatalog.GatewayRequestInvalidBody)
 		return
 	}
 
@@ -565,7 +594,7 @@ func (h *VenueHandler) CreateOwnerSlotBlock(w http.ResponseWriter, r *http.Reque
 func (h *VenueHandler) DeleteOwnerSlotBlock(w http.ResponseWriter, r *http.Request) {
 	ownerID := middleware.UserIDFromCtx(r.Context())
 	if ownerID == "" {
-		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		writeCatalog(w, apicatalog.GatewayAuthUnauthorized)
 		return
 	}
 	venueID := chi.URLParam(r, "venueId")
@@ -638,11 +667,13 @@ func (h *VenueHandler) ListPending(w http.ResponseWriter, r *http.Request) {
 	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
 	pageSize, _ := strconv.Atoi(r.URL.Query().Get("page_size"))
 	status := r.URL.Query().Get("status")
+	nameQuery := strings.TrimSpace(r.URL.Query().Get("q"))
 
 	resp, err := h.client.ListPendingVenues(r.Context(), &venuev1.ListPendingVenuesRequest{
-		Page:     int32(page),
-		PageSize: int32(pageSize),
-		Status:   status,
+		Page:      int32(page),
+		PageSize:  int32(pageSize),
+		Status:    status,
+		NameQuery: nameQuery,
 	})
 	if err != nil {
 		grpcErrorToHTTP(w, err)
@@ -660,7 +691,7 @@ func (h *VenueHandler) ListPending(w http.ResponseWriter, r *http.Request) {
 func (h *VenueHandler) Moderate(w http.ResponseWriter, r *http.Request) {
 	adminID := middleware.UserIDFromCtx(r.Context())
 	if adminID == "" {
-		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
+		writeCatalog(w, apicatalog.GatewayAuthUnauthorized)
 		return
 	}
 
@@ -671,7 +702,7 @@ func (h *VenueHandler) Moderate(w http.ResponseWriter, r *http.Request) {
 		Comment string `json:"comment"`
 	}
 	if err := readJSON(r, &req); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		writeCatalog(w, apicatalog.GatewayRequestInvalidBody)
 		return
 	}
 
@@ -684,6 +715,28 @@ func (h *VenueHandler) Moderate(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		grpcErrorToHTTP(w, err)
 		return
+	}
+
+	act := strings.ToLower(strings.TrimSpace(req.Action))
+	if h.suspendNotifier != nil {
+		if act == "suspend" && strings.EqualFold(resp.GetStatus(), "suspended") {
+			h.suspendNotifier.NotifyVenueSuspended(
+				r.Context(),
+				venueID,
+				strings.TrimSpace(resp.GetOwnerId()),
+				strings.TrimSpace(resp.GetName()),
+				strings.TrimSpace(req.Comment),
+			)
+		}
+		if act == "resume" && strings.EqualFold(resp.GetStatus(), "active") {
+			h.suspendNotifier.NotifyVenueResumed(
+				r.Context(),
+				venueID,
+				strings.TrimSpace(resp.GetOwnerId()),
+				strings.TrimSpace(resp.GetName()),
+				strings.TrimSpace(req.Comment),
+			)
+		}
 	}
 
 	writeJSON(w, http.StatusOK, venueToJSON(resp, true))
@@ -736,14 +789,18 @@ func venueToJSON(v *venuev1.VenueResponse, includeVerification bool) map[string]
 			}
 		}
 		halls[i] = map[string]any{
-			"id":          hall.GetId(),
-			"name":        hall.GetName(),
-			"price_from":  hall.GetPriceFrom(),
-			"capacity":    hall.GetCapacity(),
-			"amenities":   hall.GetAmenities(),
-			"sort_order":  hall.GetSortOrder(),
-			"photos":      hPhotos,
+			"id":         hall.GetId(),
+			"name":       hall.GetName(),
+			"price_from": hall.GetPriceFrom(),
+			"capacity":   hall.GetCapacity(),
+			"amenities":  hall.GetAmenities(),
+			"sort_order": hall.GetSortOrder(),
+			"photos":     hPhotos,
 		}
+	}
+	var createdAt time.Time
+	if ts := v.GetCreatedAt(); ts != nil {
+		createdAt = ts.AsTime()
 	}
 	result := map[string]any{
 		"id":                 v.GetId(),
@@ -770,7 +827,7 @@ func venueToJSON(v *venuev1.VenueResponse, includeVerification bool) map[string]
 		"services":           services,
 		"photos":             photos,
 		"halls":              halls,
-		"created_at":         v.GetCreatedAt().AsTime(),
+		"created_at":         createdAt,
 		"social_links":       socialLinksMapForJSON(v.GetSocialLinks()),
 	}
 
@@ -788,6 +845,12 @@ func venueToJSON(v *venuev1.VenueResponse, includeVerification bool) map[string]
 		result["ogrn"] = v.GetOgrn()
 		result["public_listing_url"] = v.GetPublicListingUrl()
 		result["verification_note"] = v.GetVerificationNote()
+		result["payout_legal_form"] = v.GetPayoutLegalForm()
+		result["yookassa_seller_account_id"] = v.GetYookassaSellerAccountId()
+	}
+
+	if ma := strings.TrimSpace(v.GetManagementAccess()); ma != "" {
+		result["management_access"] = ma
 	}
 
 	return result

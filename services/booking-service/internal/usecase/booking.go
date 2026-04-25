@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -155,10 +156,13 @@ func (uc *BookingUseCase) CreateBooking(ctx context.Context, in CreateBookingInp
 	}
 
 	payResp, err := uc.paymentClient.CreatePayment(ctx, &paymentv1.CreatePaymentRequest{
-		BookingId:      b.ID,
-		Amount:         b.TotalPrice,
-		Description:    fmt.Sprintf("Booking %s", b.ID),
-		IdempotencyKey: b.ID,
+		BookingId:               b.ID,
+		Amount:                  b.TotalPrice,
+		Description:             fmt.Sprintf("Booking %s", b.ID),
+		IdempotencyKey:          b.ID,
+		CounterpartyType:        "venue",
+		CounterpartyId:          in.VenueID,
+		YookassaSellerAccountId: strings.TrimSpace(vResp.GetYookassaSellerAccountId()),
 	})
 	if err != nil {
 		_, _ = uc.venueClient.ReleaseSlot(ctx, &venuev1.ReleaseSlotRequest{
@@ -200,7 +204,27 @@ func (uc *BookingUseCase) ListUserBookings(ctx context.Context, userID, statusFi
 	return uc.repo.ListByUser(ctx, userID, statusFilter, offset, int(pageSize))
 }
 
-func (uc *BookingUseCase) ListVenueBookings(ctx context.Context, venueID, statusFilter, date string, page, pageSize int32) ([]*domain.Booking, int, error) {
+func (uc *BookingUseCase) requireVenueCRMAccess(ctx context.Context, venueID, userID string) error {
+	if strings.TrimSpace(userID) == "" {
+		return pkgerr.InvalidArgument("user id is required")
+	}
+	resp, err := uc.venueClient.GetVenueManagementAccess(ctx, &venuev1.GetVenueManagementAccessRequest{
+		VenueId: venueID,
+		UserId:  userID,
+	})
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(resp.GetAccess()) == "" {
+		return pkgerr.PermissionDenied("no venue management access")
+	}
+	return nil
+}
+
+func (uc *BookingUseCase) ListVenueBookings(ctx context.Context, venueID, requesterUserID, statusFilter, date string, page, pageSize int32) ([]*domain.Booking, int, error) {
+	if err := uc.requireVenueCRMAccess(ctx, venueID, requesterUserID); err != nil {
+		return nil, 0, err
+	}
 	if pageSize <= 0 {
 		pageSize = 20
 	}
@@ -209,6 +233,46 @@ func (uc *BookingUseCase) ListVenueBookings(ctx context.Context, venueID, status
 	}
 	offset := int((page - 1) * pageSize)
 	return uc.repo.ListByVenue(ctx, venueID, statusFilter, date, offset, int(pageSize))
+}
+
+const maxBookingStaffNoteRunes = 4000
+
+func (uc *BookingUseCase) ListBookingStaffNotes(ctx context.Context, bookingID, requesterUserID string) ([]domain.BookingStaffNote, error) {
+	b, err := uc.repo.GetByID(ctx, bookingID)
+	if err != nil {
+		return nil, err
+	}
+	if err := uc.requireVenueCRMAccess(ctx, b.VenueID, requesterUserID); err != nil {
+		return nil, err
+	}
+	return uc.repo.ListBookingStaffNotes(ctx, bookingID)
+}
+
+func (uc *BookingUseCase) AddBookingStaffNote(ctx context.Context, bookingID, requesterUserID, body string) (*domain.BookingStaffNote, error) {
+	body = strings.TrimSpace(body)
+	if body == "" {
+		return nil, pkgerr.InvalidArgument("текст заметки обязателен")
+	}
+	if utf8.RuneCountInString(body) > maxBookingStaffNoteRunes {
+		return nil, pkgerr.InvalidArgument("текст заметки слишком длинный")
+	}
+	b, err := uc.repo.GetByID(ctx, bookingID)
+	if err != nil {
+		return nil, err
+	}
+	if err := uc.requireVenueCRMAccess(ctx, b.VenueID, requesterUserID); err != nil {
+		return nil, err
+	}
+	n := &domain.BookingStaffNote{
+		BookingID:    b.ID,
+		VenueID:      b.VenueID,
+		AuthorUserID: requesterUserID,
+		Body:         body,
+	}
+	if err := uc.repo.AddBookingStaffNote(ctx, n); err != nil {
+		return nil, err
+	}
+	return n, nil
 }
 
 func (uc *BookingUseCase) CancelBooking(ctx context.Context, id, userID string) (*domain.Booking, error) {

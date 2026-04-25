@@ -12,6 +12,12 @@ const (
 	StatusActive        = "active"
 	StatusRejected      = "rejected"
 	StatusSuspended     = "suspended"
+
+	PayoutLegalFormEmpty        = ""
+	PayoutLegalFormIP           = "ip"
+	PayoutLegalFormOOO          = "ooo"
+	PayoutLegalFormSelfEmployed = "self_employed"
+	PayoutLegalFormGPH          = "gph"
 )
 
 type Venue struct {
@@ -44,11 +50,16 @@ type Venue struct {
 	VerificationNote  string
 	// SocialLinks is a JSON object string, e.g. {"vk":"https://vk.com/..."}; empty → "{}".
 	SocialLinks string
+	// PayoutLegalForm: ip | ooo | self_employed | gph (empty = not set).
+	PayoutLegalForm         string
+	YooKassaSellerAccountID string
 	Services    []VenueService
 	Photos            []VenuePhoto
 	Halls             []VenueHall
 	CreatedAt         time.Time
 	UpdatedAt         time.Time
+	// ManagementAccess is set only for ListForManagingUser (owner | manager | staff).
+	ManagementAccess string
 }
 
 type ModerationHistoryEntry struct {
