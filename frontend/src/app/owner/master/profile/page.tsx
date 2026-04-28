@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -30,8 +30,15 @@ import {
   formatApiErrorMessage,
   venueMediaUrl,
 } from "@/lib/api";
-import type { MasterPhoto, MasterProfile, MasterServiceItem } from "@/lib/types";
+import type {
+  MasterPhoto,
+  MasterProfile,
+  MasterServiceItem,
+  MasterTravelExcludeZone,
+} from "@/lib/types";
+import { excludeZoneContainedInTravelRadius, haversineKm } from "@/lib/geo";
 import { MASTER_PROFILE_STATUS_LABELS } from "@/lib/types";
+import { MasterTravelBaseMap } from "@/components/banya/master-travel-base-map";
 import { PhoneInput, getRawPhone, displayPhoneFromStored } from "@/components/banya/phone-input";
 import { Plus, Trash2, ArrowLeft, Send, Upload, CircleAlert } from "lucide-react";
 
@@ -123,6 +130,18 @@ function servicesFromProfile(s: MasterServiceItem[]): ServiceLine[] {
 
 const MAX_MASTER_PHOTOS = 12;
 
+/** Старое значение из БД (до миграции) и единый регистр slug для формы/API. */
+function normalizePayoutLegalFormStored(raw: string | undefined): string {
+  const s = (raw ?? "").trim().toLowerCase();
+  if (s === "gph") return "individual";
+  return s;
+}
+
+const MAX_TRAVEL_EXCLUDE_ZONES = 20;
+const DEFAULT_EXCLUDE_ZONE_RADIUS_KM = 1;
+const MIN_EXCLUDE_RADIUS_KM = 0.1;
+const MAX_EXCLUDE_RADIUS_KM = 50;
+
 /** Как на master-service: 11 цифр, страна 7. */
 function normalizeRussianMobileDigits(phone: string): string {
   const d = phone.replace(/\D/g, "");
@@ -155,6 +174,54 @@ function masterSubmitValidationMessage(body: Record<string, unknown>): string | 
   if (!["ip", "ooo", "individual", "self_employed"].includes(plf)) {
     return "Укажите форму получения выплат: ИП, ООО, физическое лицо или самозанятость";
   }
+  const wf = String(body.work_format ?? "").toLowerCase();
+  if (wf === "mobile" || wf === "both") {
+    const travelKm = Number(body.travel_radius_km);
+    const baseLat = Number(body.travel_base_latitude);
+    const baseLon = Number(body.travel_base_longitude);
+    if (Number.isFinite(travelKm) && travelKm > 0) {
+      if (!Number.isFinite(baseLat) || !Number.isFinite(baseLon)) {
+        return "Поставьте метку на Яндекс.Картах (или найдите адрес) — без неё нельзя задать зону выезда";
+      }
+    }
+    const rawZones = body.travel_exclude_zones;
+    if (Array.isArray(rawZones)) {
+      if (rawZones.length > MAX_TRAVEL_EXCLUDE_ZONES) {
+        return `Не более ${MAX_TRAVEL_EXCLUDE_ZONES} зон «куда не выезжаю»`;
+      }
+      for (let i = 0; i < rawZones.length; i++) {
+        const row = rawZones[i];
+        if (!row || typeof row !== "object" || Array.isArray(row)) {
+          return `Зона исключения ${i + 1}: некорректные данные`;
+        }
+        const o = row as Record<string, unknown>;
+        const id = String(o.id ?? "").trim();
+        if (!id) return `Зона исключения ${i + 1}: укажите идентификатор (сохраните профиль заново, если поле пустое)`;
+        const lat = Number(o.latitude);
+        const lon = Number(o.longitude);
+        if (!Number.isFinite(lat) || lat < -90 || lat > 90 || !Number.isFinite(lon) || lon < -180 || lon > 180) {
+          return `Зона исключения ${i + 1}: некорректные координаты`;
+        }
+        const rk = Number(o.radius_km);
+        if (
+          !Number.isFinite(rk) ||
+          rk < MIN_EXCLUDE_RADIUS_KM ||
+          rk > MAX_EXCLUDE_RADIUS_KM
+        ) {
+          return `Зона исключения ${i + 1}: радиус от ${MIN_EXCLUDE_RADIUS_KM} до ${MAX_EXCLUDE_RADIUS_KM} км`;
+        }
+        if (
+          Number.isFinite(travelKm) &&
+          travelKm > 0 &&
+          Number.isFinite(baseLat) &&
+          Number.isFinite(baseLon) &&
+          !excludeZoneContainedInTravelRadius(baseLat, baseLon, travelKm, lat, lon, rk)
+        ) {
+          return `Зона исключения ${i + 1}: круг должен целиком лежать внутри зоны выезда (${travelKm} км от метки)`;
+        }
+      }
+    }
+  }
   return null;
 }
 
@@ -181,6 +248,11 @@ export default function MasterProfilePage() {
   const [payoutLegalForm, setPayoutLegalForm] = useState("");
   const [workFormat, setWorkFormat] = useState("both");
   const [travelRadius, setTravelRadius] = useState(0);
+  /** Координаты метки с Яндекс.Карт (на сервер уходят как travel_base_*). */
+  const [travelBasePinLat, setTravelBasePinLat] = useState<number | null>(null);
+  const [travelBasePinLon, setTravelBasePinLon] = useState<number | null>(null);
+  const [travelExcludeZones, setTravelExcludeZones] = useState<MasterTravelExcludeZone[]>([]);
+  const [excludePlacementMode, setExcludePlacementMode] = useState(false);
   const [experienceYears, setExperienceYears] = useState(0);
   const [hourlyRub, setHourlyRub] = useState(0);
   const [specText, setSpecText] = useState("");
@@ -206,15 +278,92 @@ export default function MasterProfilePage() {
       : profileQuery.data;
   const notFound = profileQuery.isSuccess && profileQuery.data === null;
 
+  const yandexMapsApiKey = process.env.NEXT_PUBLIC_YANDEX_MAPS_API_KEY;
+  const travelMapVersion = useMemo(
+    () => `${profile?.updated_at ?? "none"}|${workFormat}|${city.trim().slice(0, 80)}`,
+    [profile?.updated_at, workFormat, city],
+  );
+
+  const onTravelBaseMapPosition = useCallback((lat: number, lon: number) => {
+    setTravelBasePinLat(lat);
+    setTravelBasePinLon(lon);
+  }, []);
+
+  const onAddExclusionFromMap = useCallback(
+    (lat: number, lon: number) => {
+      if (travelExcludeZones.length >= MAX_TRAVEL_EXCLUDE_ZONES) return;
+      const pinLat = travelBasePinLat;
+      const pinLon = travelBasePinLon;
+      if (
+        pinLat == null ||
+        pinLon == null ||
+        !Number.isFinite(pinLat) ||
+        !Number.isFinite(pinLon)
+      ) {
+        setError("Сначала поставьте метку на карте и задайте километраж выезда.");
+        return;
+      }
+      if (!Number.isFinite(travelRadius) || travelRadius <= 0) {
+        setError("Укажите километраж выезда от метки — зона исключения должна помещаться внутрь него.");
+        return;
+      }
+      if (
+        !excludeZoneContainedInTravelRadius(
+          pinLat,
+          pinLon,
+          travelRadius,
+          lat,
+          lon,
+          DEFAULT_EXCLUDE_ZONE_RADIUS_KM,
+        )
+      ) {
+        setError(
+          "Круг «куда не выезжаю» должен целиком лежать внутри синей зоны выезда. Кликните ближе к метке, увеличьте километраж выезда или уменьшите радиус зоны после добавления.",
+        );
+        return;
+      }
+      setError("");
+      setTravelExcludeZones((prev) => [
+        ...prev,
+        {
+          id: crypto.randomUUID(),
+          latitude: lat,
+          longitude: lon,
+          radius_km: DEFAULT_EXCLUDE_ZONE_RADIUS_KM,
+          label: "",
+        },
+      ]);
+      setExcludePlacementMode(false);
+    },
+    [
+      travelBasePinLat,
+      travelBasePinLon,
+      travelRadius,
+      travelExcludeZones.length,
+    ],
+  );
+
   useEffect(() => {
     if (!profile) return;
     setDisplayName(profile.display_name);
     setBio(profile.bio);
-    setPhone(displayPhoneFromStored(profile.phone));
+    const masterPhone = profile.phone?.trim() ?? "";
+    setPhone(
+      displayPhoneFromStored(masterPhone || (user?.role === "master" ? user.phone : "") || ""),
+    );
     setCity(profile.city);
-    setPayoutLegalForm(profile.payout_legal_form ?? "");
+    setPayoutLegalForm(normalizePayoutLegalFormStored(profile.payout_legal_form));
     setWorkFormat(profile.work_format || "both");
     setTravelRadius(profile.travel_radius_km);
+    const pLat = profile.travel_base_latitude;
+    const pLon = profile.travel_base_longitude;
+    if (pLat != null && pLon != null && Number.isFinite(pLat) && Number.isFinite(pLon)) {
+      setTravelBasePinLat(pLat);
+      setTravelBasePinLon(pLon);
+    } else {
+      setTravelBasePinLat(null);
+      setTravelBasePinLon(null);
+    }
     setExperienceYears(profile.experience_years);
     setHourlyRub(kopecksToRub(profile.hourly_rate));
     setSpecText(profile.specializations?.join(", ") ?? "");
@@ -222,7 +371,22 @@ export default function MasterProfilePage() {
     setServices(
       profile.services?.length ? servicesFromProfile(profile.services) : [newServiceLine()],
     );
-  }, [profile]);
+    const wf = profile.work_format || "both";
+    if (wf === "mobile" || wf === "both") {
+      setTravelExcludeZones(
+        (profile.travel_exclude_zones ?? []).map((z) => ({
+          id: z.id?.trim() ? z.id : crypto.randomUUID(),
+          latitude: z.latitude,
+          longitude: z.longitude,
+          radius_km: z.radius_km,
+          label: typeof z.label === "string" ? z.label : "",
+        })),
+      );
+    } else {
+      setTravelExcludeZones([]);
+    }
+    setExcludePlacementMode(false);
+  }, [profile, user?.phone, user?.role]);
 
   const createMut = useMutation({
     mutationFn: () => createMasterProfile(createName.trim()),
@@ -253,12 +417,12 @@ export default function MasterProfilePage() {
         if (l.id) row.id = l.id;
         return row;
       });
-    return {
+    const body: Record<string, unknown> = {
       display_name: displayName.trim(),
       bio: bio.trim(),
       phone: getRawPhone(phone).trim(),
       city: city.trim(),
-      payout_legal_form: payoutLegalForm.trim(),
+      payout_legal_form: normalizePayoutLegalFormStored(payoutLegalForm),
       work_format: workFormat,
       travel_radius_km: travelRadius,
       experience_years: experienceYears,
@@ -267,6 +431,22 @@ export default function MasterProfilePage() {
       specializations: specs,
       services: svcPayload,
     };
+    if (workFormat === "mobile" || workFormat === "both") {
+      const lat = travelBasePinLat;
+      const lon = travelBasePinLon;
+      if (lat != null && lon != null && Number.isFinite(lat) && Number.isFinite(lon)) {
+        body.travel_base_latitude = lat;
+        body.travel_base_longitude = lon;
+      }
+      body.travel_exclude_zones = travelExcludeZones.map((z) => ({
+        id: z.id,
+        latitude: z.latitude,
+        longitude: z.longitude,
+        radius_km: z.radius_km,
+        label: z.label.trim(),
+      }));
+    }
+    return body;
   };
 
   const saveMut = useMutation({
@@ -315,6 +495,9 @@ export default function MasterProfilePage() {
     payoutLegalForm,
     workFormat,
     travelRadius,
+    travelBasePinLat,
+    travelBasePinLon,
+    travelExcludeZones,
     experienceYears,
     hourlyRub,
     specText,
@@ -553,7 +736,10 @@ export default function MasterProfilePage() {
               </div>
               <div className="grid gap-4 sm:grid-cols-2">
                 <div className="space-y-2">
-                  <Label htmlFor="masterPhone">Телефон</Label>
+                  <Label htmlFor="masterPhone">Телефон для клиентов</Label>
+                  <p className="text-xs text-muted-foreground">
+                    Показывается в каталоге и на вашей странице; для входа в аккаунт используется email.
+                  </p>
                   <PhoneInput
                     id="masterPhone"
                     value={phone}
@@ -601,20 +787,189 @@ export default function MasterProfilePage() {
                   </SelectContent>
                 </Select>
               </div>
-              <div className="grid gap-4 sm:grid-cols-2">
-                <div className="space-y-2">
-                  <Label>Радиус выезда (км)</Label>
-                  <Input
-                    type="number"
-                    min={0}
-                    inputMode="numeric"
-                    value={numFieldValue(travelRadius, true)}
-                    onChange={(e) =>
-                      setTravelRadius(parseNonNegIntInput(e.target.value, 0))
-                    }
-                  />
+              {(workFormat === "mobile" || workFormat === "both") && (
+                <div className="space-y-4 rounded-lg border border-border bg-muted/20 p-4">
+                  <div className="space-y-2">
+                    <Label>Зона выезда на Яндекс.Картах</Label>
+                    <p className="text-xs text-muted-foreground">
+                      Сначала укажите точку на карте (поиск по адресу, перетаскивание метки или клик). От
+                      этой точки платформа считает расстояние до клиента. Если метка ещё не сохранена,
+                      карта подстраивается под поле «Город» выше.
+                    </p>
+                    <MasterTravelBaseMap
+                      key={travelMapVersion}
+                      apiKey={yandexMapsApiKey}
+                      mapVersion={travelMapVersion}
+                      cityHint={city.trim()}
+                      seedLat={travelBasePinLat}
+                      seedLon={travelBasePinLon}
+                      onPositionChange={onTravelBaseMapPosition}
+                      travelRadiusKm={travelRadius}
+                      excludeZones={travelExcludeZones}
+                      excludePlacementActive={excludePlacementMode}
+                      onAddExclusionAt={onAddExclusionFromMap}
+                    />
+                  </div>
+                  <div className="space-y-2 border-t border-border pt-4">
+                    <Label htmlFor="travelKmFromPin">На сколько километров от метки принимаете выезды</Label>
+                    <p className="text-xs text-muted-foreground">
+                      Число километров по прямой на карте от вашей метки до точки клиента (как ориентир;
+                      дорога может быть длиннее).
+                    </p>
+                    <Input
+                      id="travelKmFromPin"
+                      type="number"
+                      min={0}
+                      inputMode="numeric"
+                      value={numFieldValue(travelRadius, true)}
+                      onChange={(e) =>
+                        setTravelRadius(parseNonNegIntInput(e.target.value, 0))
+                      }
+                    />
+                  </div>
+                  <div className="space-y-3 border-t border-border pt-4">
+                    <div>
+                      <Label>Куда не выезжаю</Label>
+                      <p className="text-xs text-muted-foreground">
+                        Внутри синей зоны выезда можно отметить круги «сюда не приезжаю» (например, закрытая
+                        территория). Каждый такой круг должен целиком помещаться в синюю зону: от метки до
+                        дальней точки круга не дальше, чем ваш километраж выезда. Радиус зоны — от{" "}
+                        {MIN_EXCLUDE_RADIUS_KM} до {MAX_EXCLUDE_RADIUS_KM} км, не более{" "}
+                        {MAX_TRAVEL_EXCLUDE_ZONES} зон.
+                      </p>
+                    </div>
+                    {travelExcludeZones.length > 0 ? (
+                      <ul className="space-y-3">
+                        {travelExcludeZones.map((z) => (
+                          <li
+                            key={z.id}
+                            className="space-y-2 rounded-md border border-border bg-background/60 p-3"
+                          >
+                            <div className="flex flex-wrap items-end justify-between gap-2">
+                              <p className="text-xs text-muted-foreground">
+                                {z.latitude.toFixed(5)}, {z.longitude.toFixed(5)}
+                              </p>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="sm"
+                                className="h-8 shrink-0 gap-1 text-destructive hover:text-destructive"
+                                onClick={() =>
+                                  setTravelExcludeZones((list) =>
+                                    list.filter((x) => x.id !== z.id),
+                                  )
+                                }
+                              >
+                                <Trash2 className="h-4 w-4" aria-hidden />
+                                Убрать
+                              </Button>
+                            </div>
+                            <div className="space-y-1">
+                              <Label className="text-xs" htmlFor={`excl-label-${z.id}`}>
+                                Подпись (необязательно)
+                              </Label>
+                              <Input
+                                id={`excl-label-${z.id}`}
+                                value={z.label}
+                                onChange={(e) => {
+                                  const t = e.target.value;
+                                  setTravelExcludeZones((list) =>
+                                    list.map((x) => (x.id === z.id ? { ...x, label: t } : x)),
+                                  );
+                                }}
+                                placeholder="Например: промзона у ТЭЦ"
+                              />
+                            </div>
+                            <div className="space-y-1">
+                              <Label className="text-xs" htmlFor={`excl-r-${z.id}`}>
+                                Радиус зоны, км
+                              </Label>
+                              <Input
+                                id={`excl-r-${z.id}`}
+                                type="number"
+                                min={MIN_EXCLUDE_RADIUS_KM}
+                                max={MAX_EXCLUDE_RADIUS_KM}
+                                step={0.1}
+                                inputMode="decimal"
+                                value={numFieldValue(z.radius_km, false)}
+                                onChange={(e) => {
+                                  const v = parseNonNegFloatInput(e.target.value, z.radius_km);
+                                  setTravelExcludeZones((list) =>
+                                    list.map((x) =>
+                                      x.id === z.id ? { ...x, radius_km: v } : x,
+                                    ),
+                                  );
+                                }}
+                                onBlur={() => {
+                                  setTravelExcludeZones((list) =>
+                                    list.map((x) => {
+                                      if (x.id !== z.id) return x;
+                                      let r = x.radius_km;
+                                      if (!Number.isFinite(r) || r < MIN_EXCLUDE_RADIUS_KM) {
+                                        r = MIN_EXCLUDE_RADIUS_KM;
+                                      }
+                                      if (r > MAX_EXCLUDE_RADIUS_KM) {
+                                        r = MAX_EXCLUDE_RADIUS_KM;
+                                      }
+                                      const plat = travelBasePinLat;
+                                      const plon = travelBasePinLon;
+                                      if (
+                                        plat != null &&
+                                        plon != null &&
+                                        Number.isFinite(plat) &&
+                                        Number.isFinite(plon) &&
+                                        Number.isFinite(travelRadius) &&
+                                        travelRadius > 0
+                                      ) {
+                                        const d = haversineKm(plat, plon, x.latitude, x.longitude);
+                                        const maxRInTravel = travelRadius - d;
+                                        if (Number.isFinite(maxRInTravel)) {
+                                          r = Math.min(r, maxRInTravel);
+                                          if (r < MIN_EXCLUDE_RADIUS_KM) {
+                                            r = MIN_EXCLUDE_RADIUS_KM;
+                                          }
+                                        }
+                                      }
+                                      return { ...x, radius_km: r };
+                                    }),
+                                  );
+                                }}
+                              />
+                            </div>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p className="text-xs text-muted-foreground">Пока нет зон исключения.</p>
+                    )}
+                    <Button
+                      type="button"
+                      variant={excludePlacementMode ? "default" : "outline"}
+                      size="sm"
+                      className="w-full sm:w-auto"
+                      disabled={travelExcludeZones.length >= MAX_TRAVEL_EXCLUDE_ZONES}
+                      onClick={() => setExcludePlacementMode((v) => !v)}
+                    >
+                      {excludePlacementMode
+                        ? "Отменить: клик по карте"
+                        : "Добавить зону кликом по карте"}
+                    </Button>
+                    {excludePlacementMode ? (
+                      <p className="text-xs font-medium text-primary" role="status">
+                        Щёлкните по карте в центре зоны, куда не выезжаете. Метку базы при этом не
+                        сдвигаем.
+                      </p>
+                    ) : null}
+                    {travelExcludeZones.length >= MAX_TRAVEL_EXCLUDE_ZONES ? (
+                      <p className="text-xs text-muted-foreground">
+                        Достигнут лимит {MAX_TRAVEL_EXCLUDE_ZONES} зон.
+                      </p>
+                    ) : null}
+                  </div>
                 </div>
-                <div className="space-y-2">
+              )}
+              <div className="grid gap-4 sm:grid-cols-2">
+                <div className="space-y-2 sm:col-span-2">
                   <Label>Опыт (лет)</Label>
                   <Input
                     type="number"

@@ -39,6 +39,10 @@ type Master struct {
 	City              string
 	WorkFormat        string
 	TravelRadiusKm    int32
+	// Точка отсчёта радиуса выезда (если WorkFormat mobile/both).
+	TravelBaseLatitude  *float64
+	TravelBaseLongitude *float64
+	TravelExcludeZones  []MasterTravelExcludeZone
 	ExperienceYears   int32
 	Specializations   []string
 	HourlyRate        int64
@@ -70,6 +74,15 @@ type MasterService struct {
 	DurationMin int32
 	Price       int64
 	SortOrder   int32
+}
+
+// MasterTravelExcludeZone — круг на карте «сюда не выезжаю» (внутри общей зоны от метки).
+type MasterTravelExcludeZone struct {
+	ID        string  `json:"id"`
+	Latitude  float64 `json:"latitude"`
+	Longitude float64 `json:"longitude"`
+	RadiusKm  float64 `json:"radius_km"`
+	Label     string  `json:"label,omitempty"`
 }
 
 type MasterServiceUpsert struct {

@@ -182,6 +182,8 @@ func main() {
 		api.Post("/auth/login", authHandler.Login)
 		api.Post("/auth/refresh", authHandler.RefreshToken)
 		api.Post("/auth/logout", authHandler.Logout)
+		api.With(middleware.ForgotPasswordRateLimit(log)).Post("/auth/forgot-password", authHandler.ForgotPassword)
+		api.Post("/auth/reset-password", authHandler.ResetPassword)
 
 		// OAuth (public)
 		api.Get("/auth/google", oauthHandler.GoogleRedirect)

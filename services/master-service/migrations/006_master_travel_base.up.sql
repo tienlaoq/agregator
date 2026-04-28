@@ -1,0 +1,3 @@
+ALTER TABLE masters
+    ADD COLUMN IF NOT EXISTS travel_base_latitude DOUBLE PRECISION,
+    ADD COLUMN IF NOT EXISTS travel_base_longitude DOUBLE PRECISION;

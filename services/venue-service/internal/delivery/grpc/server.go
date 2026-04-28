@@ -1026,12 +1026,16 @@ func hallProtoInputsToUpserts(items []*venuev1.VenueHallInput) ([]domain.VenueHa
 			}
 			id = &u
 		}
+		am := it.GetAmenities()
+		if am == nil {
+			am = []string{}
+		}
 		out = append(out, domain.VenueHallUpsert{
 			ID:        id,
 			Name:      it.GetName(),
 			PriceFrom: it.GetPriceFrom(),
 			Capacity:  it.GetCapacity(),
-			Amenities: append([]string(nil), it.GetAmenities()...),
+			Amenities: append([]string(nil), am...),
 			SortOrder: it.GetSortOrder(),
 		})
 	}

@@ -2,6 +2,7 @@ package grpc
 
 import (
 	"context"
+	"strings"
 
 	"google.golang.org/protobuf/types/known/timestamppb"
 
@@ -21,15 +22,17 @@ func NewServer(uc *usecase.BookingUseCase) *Server {
 
 func (s *Server) CreateBooking(ctx context.Context, req *bookingv1.CreateBookingRequest) (*bookingv1.BookingResponse, error) {
 	b, err := s.uc.CreateBooking(ctx, usecase.CreateBookingInput{
-		UserID:    req.UserId,
-		VenueID:   req.VenueId,
-		VenueName: req.VenueName,
-		ServiceID: req.ServiceId,
-		Date:      req.Date,
-		TimeFrom:  req.TimeFrom,
-		TimeTo:    req.TimeTo,
-		Guests:    req.Guests,
-		Comment:   req.Comment,
+		UserID:     req.UserId,
+		VenueID:    req.VenueId,
+		VenueName:  req.VenueName,
+		ServiceID:  req.ServiceId,
+		ServiceIDs: req.GetServiceIds(),
+		HallIDs:    req.GetHallIds(),
+		Date:       req.Date,
+		TimeFrom:   req.TimeFrom,
+		TimeTo:     req.TimeTo,
+		Guests:     req.Guests,
+		Comment:    req.Comment,
 	})
 	if err != nil {
 		return nil, err
@@ -142,20 +145,32 @@ func (s *Server) HasCompletedBooking(ctx context.Context, req *bookingv1.HasComp
 }
 
 func toProto(b *domain.Booking) *bookingv1.BookingResponse {
+	svcOut := b.ServiceID
+	pkgOut := append([]string(nil), b.PackageServiceIDs...)
+	if len(pkgOut) > 1 {
+		svcOut = ""
+	} else if len(pkgOut) == 1 {
+		svcOut = pkgOut[0]
+		pkgOut = nil
+	} else if strings.TrimSpace(svcOut) != "" {
+		pkgOut = nil
+	}
 	return &bookingv1.BookingResponse{
-		Id:         b.ID,
-		UserId:     b.UserID,
-		VenueId:    b.VenueID,
-		VenueName:  b.VenueName,
-		ServiceId:  b.ServiceID,
-		Date:       b.Date.Format("2006-01-02"),
-		TimeFrom:   b.TimeFrom,
-		TimeTo:     b.TimeTo,
-		Guests:     b.Guests,
-		Comment:    b.Comment,
-		Status:     b.Status,
-		TotalPrice: b.TotalPrice,
-		PaymentUrl: b.PaymentURL,
-		CreatedAt:  timestamppb.New(b.CreatedAt),
+		Id:                b.ID,
+		UserId:            b.UserID,
+		VenueId:           b.VenueID,
+		VenueName:         b.VenueName,
+		ServiceId:         svcOut,
+		Date:              b.Date.Format("2006-01-02"),
+		TimeFrom:          b.TimeFrom,
+		TimeTo:            b.TimeTo,
+		Guests:            b.Guests,
+		Comment:           b.Comment,
+		Status:            b.Status,
+		TotalPrice:        b.TotalPrice,
+		PaymentUrl:        b.PaymentURL,
+		CreatedAt:         timestamppb.New(b.CreatedAt),
+		PackageServiceIds: pkgOut,
+		HallIds:           append([]string(nil), b.HallIDs...),
 	}
 }

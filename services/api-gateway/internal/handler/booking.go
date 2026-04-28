@@ -30,14 +30,16 @@ func (h *BookingHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		VenueID   string `json:"venue_id"`
-		ServiceID string `json:"service_id"`
-		Date      string `json:"date"`
-		TimeFrom  string `json:"time_from"`
-		TimeTo    string `json:"time_to"`
-		Time      string `json:"time"`
-		Guests    int32  `json:"guests"`
-		Comment   string `json:"comment"`
+		VenueID    string   `json:"venue_id"`
+		ServiceID  string   `json:"service_id"`
+		ServiceIDs []string `json:"service_ids"`
+		HallIDs    []string `json:"hall_ids"`
+		Date       string   `json:"date"`
+		TimeFrom   string   `json:"time_from"`
+		TimeTo     string   `json:"time_to"`
+		Time       string   `json:"time"`
+		Guests     int32    `json:"guests"`
+		Comment    string   `json:"comment"`
 	}
 	if err := readJSON(r, &req); err != nil {
 		writeCatalog(w, apicatalog.GatewayRequestInvalidBody)
@@ -68,15 +70,17 @@ func (h *BookingHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp, err := h.client.CreateBooking(r.Context(), &bookingv1.CreateBookingRequest{
-		UserId:    userID,
-		VenueId:   req.VenueID,
-		VenueName: venueName,
-		ServiceId: req.ServiceID,
-		Date:      req.Date,
-		TimeFrom:  timeFrom,
-		TimeTo:    timeTo,
-		Guests:    req.Guests,
-		Comment:   req.Comment,
+		UserId:     userID,
+		VenueId:    req.VenueID,
+		VenueName:  venueName,
+		ServiceId:  req.ServiceID,
+		ServiceIds: req.ServiceIDs,
+		HallIds:    req.HallIDs,
+		Date:       req.Date,
+		TimeFrom:   timeFrom,
+		TimeTo:     timeTo,
+		Guests:     req.Guests,
+		Comment:    req.Comment,
 	})
 	if err != nil {
 		grpcErrorToHTTP(w, err)
@@ -200,6 +204,12 @@ func bookingToJSON(b *bookingv1.BookingResponse) map[string]any {
 		"status":      b.GetStatus(),
 		"total_price": b.GetTotalPrice(),
 		"created_at":  b.GetCreatedAt().AsTime(),
+	}
+	if p := b.GetPackageServiceIds(); len(p) > 0 {
+		m["package_service_ids"] = p
+	}
+	if h := b.GetHallIds(); len(h) > 0 {
+		m["hall_ids"] = h
 	}
 	if url := b.GetPaymentUrl(); url != "" {
 		m["payment_url"] = url

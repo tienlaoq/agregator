@@ -48,6 +48,8 @@ var (
 	GatewayRequestMissingDateRange = Entry{HTTP: 400, Code: "GATEWAY.REQUEST.MISSING_DATE_RANGE", Message: "Укажите date_from и date_to в формате YYYY-MM-DD"}
 	// GatewayRequestEmailRequired — GATEWAY.REQUEST.EMAIL_REQUIRED
 	GatewayRequestEmailRequired = Entry{HTTP: 400, Code: "GATEWAY.REQUEST.EMAIL_REQUIRED", Message: "Укажите email"}
+	// GatewayRequestRateLimited — GATEWAY.REQUEST.RATE_LIMITED
+	GatewayRequestRateLimited = Entry{HTTP: 429, Code: "GATEWAY.REQUEST.RATE_LIMITED", Message: "Слишком много запросов. Повторите через несколько минут."}
 	// GatewayVenueNotFound — GATEWAY.VENUE.NOT_FOUND
 	GatewayVenueNotFound = Entry{HTTP: 404, Code: "GATEWAY.VENUE.NOT_FOUND", Message: "Заведение не найдено"}
 	// GatewayDependencyUserServiceUnavailable — GATEWAY.DEPENDENCY.USER_SERVICE_UNAVAILABLE
@@ -131,6 +133,8 @@ func ByCode(code string) (Entry, bool) {
 		return GatewayRequestMissingDateRange, true
 	case "GATEWAY.REQUEST.EMAIL_REQUIRED":
 		return GatewayRequestEmailRequired, true
+	case "GATEWAY.REQUEST.RATE_LIMITED":
+		return GatewayRequestRateLimited, true
 	case "GATEWAY.VENUE.NOT_FOUND":
 		return GatewayVenueNotFound, true
 	case "GATEWAY.DEPENDENCY.USER_SERVICE_UNAVAILABLE":

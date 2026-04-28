@@ -24,7 +24,9 @@ type mockAuthClient struct {
 	OAuthLoginFn    func(ctx context.Context, in *authv1.OAuthLoginRequest, opts ...grpc.CallOption) (*authv1.OAuthLoginResponse, error)
 	RefreshTokenFn  func(ctx context.Context, in *authv1.RefreshTokenRequest, opts ...grpc.CallOption) (*authv1.RefreshTokenResponse, error)
 	ValidateTokenFn func(ctx context.Context, in *authv1.ValidateTokenRequest, opts ...grpc.CallOption) (*authv1.ValidateTokenResponse, error)
-	LogoutFn        func(ctx context.Context, in *authv1.LogoutRequest, opts ...grpc.CallOption) (*authv1.LogoutResponse, error)
+	LogoutFn                 func(ctx context.Context, in *authv1.LogoutRequest, opts ...grpc.CallOption) (*authv1.LogoutResponse, error)
+	RequestPasswordResetFn   func(ctx context.Context, in *authv1.RequestPasswordResetRequest, opts ...grpc.CallOption) (*authv1.RequestPasswordResetResponse, error)
+	CompletePasswordResetFn  func(ctx context.Context, in *authv1.CompletePasswordResetRequest, opts ...grpc.CallOption) (*authv1.CompletePasswordResetResponse, error)
 }
 
 func (m *mockAuthClient) Register(ctx context.Context, in *authv1.RegisterRequest, opts ...grpc.CallOption) (*authv1.RegisterResponse, error) {
@@ -67,6 +69,20 @@ func (m *mockAuthClient) Logout(ctx context.Context, in *authv1.LogoutRequest, o
 		return m.LogoutFn(ctx, in, opts...)
 	}
 	return nil, nil
+}
+
+func (m *mockAuthClient) RequestPasswordReset(ctx context.Context, in *authv1.RequestPasswordResetRequest, opts ...grpc.CallOption) (*authv1.RequestPasswordResetResponse, error) {
+	if m.RequestPasswordResetFn != nil {
+		return m.RequestPasswordResetFn(ctx, in, opts...)
+	}
+	return &authv1.RequestPasswordResetResponse{}, nil
+}
+
+func (m *mockAuthClient) CompletePasswordReset(ctx context.Context, in *authv1.CompletePasswordResetRequest, opts ...grpc.CallOption) (*authv1.CompletePasswordResetResponse, error) {
+	if m.CompletePasswordResetFn != nil {
+		return m.CompletePasswordResetFn(ctx, in, opts...)
+	}
+	return &authv1.CompletePasswordResetResponse{}, nil
 }
 
 func TestRegister_Success(t *testing.T) {
@@ -250,4 +266,56 @@ func TestLogout_Success(t *testing.T) {
 	var out map[string]string
 	require.NoError(t, json.NewDecoder(rec.Body).Decode(&out))
 	assert.Equal(t, "logged_out", out["status"])
+}
+
+func TestForgotPassword_Success(t *testing.T) {
+	mock := &mockAuthClient{
+		RequestPasswordResetFn: func(ctx context.Context, in *authv1.RequestPasswordResetRequest, _ ...grpc.CallOption) (*authv1.RequestPasswordResetResponse, error) {
+			assert.Equal(t, "a@b.com", in.GetEmail())
+			return &authv1.RequestPasswordResetResponse{}, nil
+		},
+	}
+	h := NewAuthHandler(mock)
+	body := `{"email":"a@b.com"}`
+	req := httptest.NewRequest(http.MethodPost, "/auth/forgot-password", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	h.ForgotPassword(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	var out map[string]string
+	require.NoError(t, json.NewDecoder(rec.Body).Decode(&out))
+	assert.Contains(t, out["message"], "Если указанный адрес")
+}
+
+func TestForgotPassword_EmptyEmail(t *testing.T) {
+	h := NewAuthHandler(&mockAuthClient{})
+	body := `{"email":"  "}`
+	req := httptest.NewRequest(http.MethodPost, "/auth/forgot-password", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	h.ForgotPassword(rec, req)
+
+	require.Equal(t, http.StatusBadRequest, rec.Code)
+}
+
+func TestResetPassword_GRPCInvalidArgument(t *testing.T) {
+	mock := &mockAuthClient{
+		CompletePasswordResetFn: func(ctx context.Context, in *authv1.CompletePasswordResetRequest, _ ...grpc.CallOption) (*authv1.CompletePasswordResetResponse, error) {
+			assert.Equal(t, "tok1", in.GetToken())
+			assert.Equal(t, "newpass123", in.GetNewPassword())
+			return nil, status.Error(codes.InvalidArgument, "Ссылка сброса недействительна или истекла")
+		},
+	}
+	h := NewAuthHandler(mock)
+	body := `{"token":"tok1","new_password":"newpass123"}`
+	req := httptest.NewRequest(http.MethodPost, "/auth/reset-password", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	h.ResetPassword(rec, req)
+
+	require.Equal(t, http.StatusBadRequest, rec.Code)
 }

@@ -2,6 +2,8 @@ package usecase
 
 import (
 	"context"
+	"errors"
+	"time"
 
 	"google.golang.org/grpc"
 
@@ -10,11 +12,12 @@ import (
 )
 
 type mockCredRepo struct {
-	CreateFunc        func(ctx context.Context, cred *domain.Credential) error
-	GetByEmailFunc    func(ctx context.Context, email string) (*domain.Credential, error)
-	GetByUserIDFunc   func(ctx context.Context, userID string) (*domain.Credential, error)
-	GetByProviderFunc func(ctx context.Context, provider, providerID string) (*domain.Credential, error)
-	CreateOAuthFunc   func(ctx context.Context, cred *domain.Credential) error
+	CreateFunc             func(ctx context.Context, cred *domain.Credential) error
+	GetByEmailFunc         func(ctx context.Context, email string) (*domain.Credential, error)
+	GetByUserIDFunc        func(ctx context.Context, userID string) (*domain.Credential, error)
+	GetByProviderFunc      func(ctx context.Context, provider, providerID string) (*domain.Credential, error)
+	CreateOAuthFunc        func(ctx context.Context, cred *domain.Credential) error
+	UpdatePasswordHashFunc func(ctx context.Context, userID, passwordHash string) error
 }
 
 func (m *mockCredRepo) Create(ctx context.Context, cred *domain.Credential) error {
@@ -48,6 +51,13 @@ func (m *mockCredRepo) GetByProvider(ctx context.Context, provider, providerID s
 func (m *mockCredRepo) CreateOAuth(ctx context.Context, cred *domain.Credential) error {
 	if m.CreateOAuthFunc != nil {
 		return m.CreateOAuthFunc(ctx, cred)
+	}
+	return nil
+}
+
+func (m *mockCredRepo) UpdatePasswordHash(ctx context.Context, userID, passwordHash string) error {
+	if m.UpdatePasswordHashFunc != nil {
+		return m.UpdatePasswordHashFunc(ctx, userID, passwordHash)
 	}
 	return nil
 }
@@ -120,4 +130,68 @@ func (m *mockUserClient) GetUserByEmail(ctx context.Context, in *userv1.GetUserB
 		return m.GetUserByEmailFunc(ctx, in, opts...)
 	}
 	return nil, nil
+}
+
+type mockPasswordResetRepo struct {
+	InvalidateUnusedByUserIDFunc func(ctx context.Context, userID string) error
+	CreateFunc                   func(ctx context.Context, userID, tokenHash string, expiresAt time.Time) error
+	ConsumeByTokenHashFunc       func(ctx context.Context, tokenHash string) (string, error)
+}
+
+func (m *mockPasswordResetRepo) InvalidateUnusedByUserID(ctx context.Context, userID string) error {
+	if m.InvalidateUnusedByUserIDFunc != nil {
+		return m.InvalidateUnusedByUserIDFunc(ctx, userID)
+	}
+	return nil
+}
+
+func (m *mockPasswordResetRepo) Create(ctx context.Context, userID, tokenHash string, expiresAt time.Time) error {
+	if m.CreateFunc != nil {
+		return m.CreateFunc(ctx, userID, tokenHash, expiresAt)
+	}
+	return nil
+}
+
+func (m *mockPasswordResetRepo) ConsumeByTokenHash(ctx context.Context, tokenHash string) (string, error) {
+	if m.ConsumeByTokenHashFunc != nil {
+		return m.ConsumeByTokenHashFunc(ctx, tokenHash)
+	}
+	return "", errors.New("consume not stubbed")
+}
+
+type mockPasswordMail struct {
+	enabled    bool
+	sendErr    error
+	lastTo     string
+	lastToken  string
+	sendCalled int
+}
+
+func (m *mockPasswordMail) Enabled() bool { return m != nil && m.enabled }
+
+func (m *mockPasswordMail) SendPasswordReset(ctx context.Context, toEmail, rawToken string) error {
+	if m == nil {
+		return nil
+	}
+	m.sendCalled++
+	m.lastTo = toEmail
+	m.lastToken = rawToken
+	return m.sendErr
+}
+
+type noopPasswordResetRepo struct{}
+
+func (noopPasswordResetRepo) InvalidateUnusedByUserID(context.Context, string) error { return nil }
+func (noopPasswordResetRepo) Create(context.Context, string, string, time.Time) error {
+	return nil
+}
+func (noopPasswordResetRepo) ConsumeByTokenHash(context.Context, string) (string, error) {
+	return "", errors.New("noop reset repo")
+}
+
+type noopPasswordMail struct{}
+
+func (noopPasswordMail) Enabled() bool { return false }
+func (noopPasswordMail) SendPasswordReset(context.Context, string, string) error {
+	return nil
 }

@@ -14,7 +14,7 @@ type MasterRepository interface {
 	UpdateProfile(ctx context.Context, m *Master) error
 	UpdateStatus(ctx context.Context, masterID uuid.UUID, status, comment string, moderatedBy *uuid.UUID) error
 	ListByStatus(ctx context.Context, statusFilter string, limit, offset int32) ([]Master, int32, error)
-	ListPublic(ctx context.Context, city string, limit, offset int32) ([]Master, int32, error)
+	ListPublic(ctx context.Context, params ListPublicMastersParams) ([]Master, int32, error)
 	ReplaceServices(ctx context.Context, masterID uuid.UUID, items []MasterServiceUpsert) error
 	InsertModerationHistory(ctx context.Context, e *ModerationHistoryEntry) error
 	ListModerationHistory(ctx context.Context, masterID uuid.UUID, limit int32) ([]ModerationHistoryEntry, error)

@@ -30,7 +30,7 @@ func (r *CredentialRepo) Create(ctx context.Context, cred *domain.Credential) er
 }
 
 func (r *CredentialRepo) GetByEmail(ctx context.Context, email string) (*domain.Credential, error) {
-	const q = `SELECT id, user_id, email, password_hash, created_at FROM credentials WHERE email = $1`
+	const q = `SELECT id, user_id, email, COALESCE(password_hash, ''), created_at FROM credentials WHERE lower(trim(email)) = lower(trim($1))`
 	c := &domain.Credential{}
 	err := r.pool.QueryRow(ctx, q, email).Scan(&c.ID, &c.UserID, &c.Email, &c.PasswordHash, &c.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -43,7 +43,7 @@ func (r *CredentialRepo) GetByEmail(ctx context.Context, email string) (*domain.
 }
 
 func (r *CredentialRepo) GetByUserID(ctx context.Context, userID string) (*domain.Credential, error) {
-	const q = `SELECT id, user_id, email, password_hash, created_at FROM credentials WHERE user_id = $1`
+	const q = `SELECT id, user_id, email, COALESCE(password_hash, ''), created_at FROM credentials WHERE user_id = $1`
 	c := &domain.Credential{}
 	err := r.pool.QueryRow(ctx, q, userID).Scan(&c.ID, &c.UserID, &c.Email, &c.PasswordHash, &c.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -77,6 +77,17 @@ func (r *CredentialRepo) CreateOAuth(ctx context.Context, cred *domain.Credentia
 		RETURNING id, created_at`
 	return r.pool.QueryRow(ctx, q, cred.UserID, cred.Email, cred.Provider, cred.ProviderID).
 		Scan(&cred.ID, &cred.CreatedAt)
+}
+
+func (r *CredentialRepo) UpdatePasswordHash(ctx context.Context, userID, passwordHash string) error {
+	tag, err := r.pool.Exec(ctx, `UPDATE credentials SET password_hash = $2 WHERE user_id = $1`, userID, passwordHash)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return pkgerr.NotFound("credential not found")
+	}
+	return nil
 }
 
 // RefreshTokenRepo implements domain.RefreshTokenRepository backed by PostgreSQL.

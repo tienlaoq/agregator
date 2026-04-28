@@ -33,6 +33,7 @@ import {
   ChevronLeft,
   ChevronRight,
   ExternalLink,
+  Check,
 } from "lucide-react"
 import Link from "next/link"
 import {
@@ -52,6 +53,13 @@ import {
 } from "@/lib/types"
 import { useAuthStore } from "@/store/auth"
 import { cn } from "@/lib/utils"
+import {
+  defaultEndTimeForDuration,
+  endTimeOptionsThirtyMinutes,
+  hhmmToMinutes,
+  slotLengthMinutes,
+  thirtyMinuteStartGridFrom10To22,
+} from "@/lib/booking-slot-time"
 
 function socialHref(url: string): string {
   const u = url.trim()
@@ -60,73 +68,32 @@ function socialHref(url: string): string {
   return `https://${u}`
 }
 
-function hhmmToMinutes(s: string): number | null {
-  const m = s.match(/^(\d{1,2}):(\d{2})$/)
-  if (!m) return null
-  const h = parseInt(m[1], 10)
-  const min = parseInt(m[2], 10)
-  if (
-    !Number.isFinite(h) ||
-    !Number.isFinite(min) ||
-    min < 0 ||
-    min > 59 ||
-    h < 0 ||
-    h > 23
-  ) {
-    return null
+/** Длительность слота для проверки доступности: максимум среди выбранных пакетов. */
+function maxSlotMinutesForSelectedServices(
+  ids: string[],
+  services: Venue["services"],
+): number {
+  if (ids.length === 0) return 120
+  let m = 30
+  for (const id of ids) {
+    const s = services?.find((x) => x.id === id)
+    if (!s) continue
+    const d = venueServiceDurationMinutes(s)
+    m = Math.max(m, d > 0 ? d : 120)
   }
-  return h * 60 + min
+  return Math.min(720, m)
 }
 
-/** Сетка «время начала»: 10:00–22:00 с шагом 30 мин (совпадает с api-gateway). */
-function thirtyMinuteStartGridFrom10To22(): string[] {
-  const out: string[] = []
-  for (let m = 10 * 60; m <= 22 * 60; m += 30) {
-    out.push(
-      `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`,
-    )
+/** Почасовая база для подсказки: max(цена заведения, выбранные залы). Совпадает с логикой бронирования. */
+function effectiveHourlyRateRub(venue: Venue, hallIds: string[]): number {
+  let base = Math.max(0, Number(venue.price_from) || 0)
+  for (const id of hallIds) {
+    const h = venue.halls?.find((x) => x.id === id)
+    if (h && Number(h.price_from) > 0) {
+      base = Math.max(base, Number(h.price_from))
+    }
   }
-  return out
-}
-
-/** Окончание визита в тот же день: от +30 мин до +12 ч, шаг 30 минут. */
-function endTimeOptionsThirtyMinutes(startHHMM: string): string[] {
-  const startTotal = hhmmToMinutes(startHHMM)
-  if (startTotal == null) return []
-  const out: string[] = []
-  for (let delta = 30; delta <= 720; delta += 30) {
-    const total = startTotal + delta
-    if (total >= 24 * 60) break
-    const eh = Math.floor(total / 60)
-    const em = total % 60
-    out.push(`${String(eh).padStart(2, "0")}:${String(em).padStart(2, "0")}`)
-  }
-  return out
-}
-
-function defaultEndTimeForDuration(
-  startHHMM: string,
-  preferredDurMin: number,
-): string {
-  const opts = endTimeOptionsThirtyMinutes(startHHMM)
-  if (opts.length === 0) return ""
-  const startM = hhmmToMinutes(startHHMM)
-  if (startM == null) return opts[0] ?? ""
-  const need = Math.max(30, Math.min(720, preferredDurMin))
-  for (const o of opts) {
-    const om = hhmmToMinutes(o)
-    if (om != null && om - startM >= need) return o
-  }
-  return opts[opts.length - 1] ?? ""
-}
-
-/** Длина интервала в минутах (тот же день, to > from). */
-function slotLengthMinutes(from: string, to: string): number | null {
-  const [fh, fm] = from.split(":").map((x) => parseInt(x, 10))
-  const [th, tm] = to.split(":").map((x) => parseInt(x, 10))
-  if (![fh, fm, th, tm].every((n) => Number.isFinite(n))) return null
-  const v = th * 60 + tm - (fh * 60 + fm)
-  return v > 0 ? v : null
+  return base
 }
 
 /** Слайды карусели: порядок как в кабинете (обложка → sort_order), без дублей по URL. */
@@ -169,8 +136,10 @@ export default function VenueDetailPage() {
   const [date, setDate] = useState<Date>()
   const [time, setTime] = useState("")
   const [timeTo, setTimeTo] = useState("")
-  /** «none» — почасовая оплата по price_from; иначе id услуги */
-  const [serviceId, setServiceId] = useState<string>("none")
+  /** Пакеты, выбранные на карточках услуг; пусто — почасовая оплата по price_from */
+  const [selectedServiceIds, setSelectedServiceIds] = useState<string[]>([])
+  /** Залы, выбранные на карточках; влияют на почасовую ставку (max с заведением). */
+  const [selectedHallIds, setSelectedHallIds] = useState<string[]>([])
   const [guests, setGuests] = useState(2)
   const [booking, setBooking] = useState(false)
   const [bookingMsg, setBookingMsg] = useState("")
@@ -183,15 +152,11 @@ export default function VenueDetailPage() {
       const m = slotLengthMinutes(time, timeTo)
       if (m != null && m >= 30 && m <= 720) return m
     }
-    if (serviceId !== "none" && venue) {
-      const s = venue.services?.find((x) => x.id === serviceId)
-      if (s) {
-        const d = venueServiceDurationMinutes(s)
-        return Math.min(720, Math.max(30, d > 0 ? d : 120))
-      }
+    if (selectedServiceIds.length > 0 && venue) {
+      return maxSlotMinutesForSelectedServices(selectedServiceIds, venue.services)
     }
     return 120
-  }, [time, timeTo, serviceId, venue])
+  }, [time, timeTo, selectedServiceIds, venue])
 
   const slotValid = useMemo(() => {
     if (!time || !timeTo) return false
@@ -209,21 +174,36 @@ export default function VenueDetailPage() {
 
   const priceHint = useMemo(() => {
     if (!venue) return null
-    if (serviceId !== "none") {
-      const s = venue.services?.find((x) => x.id === serviceId)
-      if (s && Number(s.price) > 0) {
-        return `${Number(s.price).toLocaleString("ru-RU")} ₽`
+    const hourlyBase = effectiveHourlyRateRub(venue, selectedHallIds)
+    if (selectedServiceIds.length > 0) {
+      let sumRub = 0
+      let hourlySlots = 0
+      for (const id of selectedServiceIds) {
+        const s = venue.services?.find((x) => x.id === id)
+        if (!s) continue
+        if (Number(s.price) > 0) sumRub += Number(s.price)
+        else hourlySlots++
       }
+      if (hourlySlots > 1) return null
+      if (hourlySlots === 1 && hourlyBase > 0 && slotValid) {
+        const mins = slotLengthMinutes(time, timeTo)
+        if (mins != null) {
+          const hours = Math.ceil(mins / 60)
+          sumRub += hourlyBase * hours
+        }
+      }
+      if (sumRub > 0) return `${sumRub.toLocaleString("ru-RU")} ₽`
+      return null
     }
-    if (venue.price_from > 0 && slotValid) {
+    if (hourlyBase > 0 && slotValid) {
       const mins = slotLengthMinutes(time, timeTo)
       if (mins != null) {
         const hours = Math.ceil(mins / 60)
-        return `≈ ${(venue.price_from * hours).toLocaleString("ru-RU")} ₽`
+        return `≈ ${(hourlyBase * hours).toLocaleString("ru-RU")} ₽`
       }
     }
     return null
-  }, [venue, serviceId, time, timeTo, slotValid])
+  }, [venue, selectedServiceIds, selectedHallIds, time, timeTo, slotValid])
 
   useEffect(() => {
     if (!slug) return
@@ -240,6 +220,11 @@ export default function VenueDetailPage() {
 
   useEffect(() => {
     setGalleryIndex(0)
+  }, [slug, venue?.id])
+
+  useEffect(() => {
+    setSelectedServiceIds([])
+    setSelectedHallIds([])
   }, [slug, venue?.id])
 
   useEffect(() => {
@@ -269,30 +254,23 @@ export default function VenueDetailPage() {
       return
     }
     let addMin = 120
-    if (serviceId !== "none") {
-      const s = venue.services?.find((x) => x.id === serviceId)
-      if (s) {
-        const d = venueServiceDurationMinutes(s)
-        addMin = Math.max(30, d > 0 ? d : 120)
-      }
+    if (selectedServiceIds.length > 0 && venue) {
+      addMin = maxSlotMinutesForSelectedServices(selectedServiceIds, venue.services)
+      addMin = Math.max(30, addMin)
     }
     setTimeTo(defaultEndTimeForDuration(time, addMin))
-  }, [time, serviceId, venue])
+  }, [time, selectedServiceIds, venue])
 
   useEffect(() => {
     if (!time || !timeTo || !venue) return
     const opts = endTimeOptionsThirtyMinutes(time)
     if (opts.length === 0 || opts.includes(timeTo)) return
     let addMin = 120
-    if (serviceId !== "none") {
-      const s = venue.services?.find((x) => x.id === serviceId)
-      if (s) {
-        const d = venueServiceDurationMinutes(s)
-        addMin = Math.max(30, d > 0 ? d : 120)
-      }
+    if (selectedServiceIds.length > 0 && venue) {
+      addMin = Math.max(30, maxSlotMinutesForSelectedServices(selectedServiceIds, venue.services))
     }
     setTimeTo(defaultEndTimeForDuration(time, addMin))
-  }, [time, timeTo, serviceId, venue])
+  }, [time, timeTo, selectedServiceIds, venue])
 
   useEffect(() => {
     if (time && availableSlots.length > 0 && !availableStartSet.has(time)) {
@@ -315,7 +293,8 @@ export default function VenueDetailPage() {
         time_from: time,
         time_to: timeTo,
         guests,
-        ...(serviceId !== "none" ? { service_id: serviceId } : {}),
+        ...(selectedServiceIds.length > 0 ? { service_ids: selectedServiceIds } : {}),
+        ...(selectedHallIds.length > 0 ? { hall_ids: selectedHallIds } : {}),
       })
       if (b.payment_url) {
         window.location.assign(b.payment_url)
@@ -572,27 +551,66 @@ export default function VenueDetailPage() {
             {/* Services */}
             {venue.services && venue.services.length > 0 && (
               <div className="mb-8">
-                <h2 className="mb-4 text-xl font-semibold text-foreground">Услуги и цены</h2>
+                <h2 className="mb-2 text-xl font-semibold text-foreground">Услуги и цены</h2>
+                <p className="mb-4 text-sm text-muted-foreground">
+                  Нажмите на карточку, чтобы добавить услугу в бронь или убрать её. Можно выбрать несколько пакетов
+                  одновременно; время визита и стоимость справа подстроятся под выбор.
+                </p>
                 <div className="space-y-3">
-                  {venue.services.map((svc) => (
-                    <Card key={svc.id} className="border-border">
-                      <CardContent className="flex items-center justify-between p-4">
-                        <div>
-                          <p className="font-medium text-card-foreground">{svc.name}</p>
-                          {venueServiceDurationMinutes(svc) > 0 && (
-                            <p className="text-sm text-muted-foreground">
-                              {venueServiceDurationMinutes(svc)} мин
-                            </p>
-                          )}
-                        </div>
-                        {svc.price > 0 && (
-                          <span className="font-semibold text-primary">
-                            {svc.price.toLocaleString("ru-RU")} ₽
-                          </span>
+                  {venue.services.map((svc) => {
+                    const selected = selectedServiceIds.includes(svc.id)
+                    return (
+                      <Card
+                        key={svc.id}
+                        role="button"
+                        tabIndex={0}
+                        aria-pressed={selected}
+                        onClick={() =>
+                          setSelectedServiceIds((prev) =>
+                            prev.includes(svc.id) ? prev.filter((x) => x !== svc.id) : [...prev, svc.id],
+                          )
+                        }
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" || e.key === " ") {
+                            e.preventDefault()
+                            setSelectedServiceIds((prev) =>
+                              prev.includes(svc.id) ? prev.filter((x) => x !== svc.id) : [...prev, svc.id],
+                            )
+                          }
+                        }}
+                        className={cn(
+                          "cursor-pointer border-2 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                          selected ? "border-primary bg-primary/5" : "border-border hover:border-primary/40",
                         )}
-                      </CardContent>
-                    </Card>
-                  ))}
+                      >
+                        <CardContent className="relative flex items-center justify-between gap-4 p-4 pr-14">
+                          {selected ? (
+                            <div
+                              className="absolute right-3 top-1/2 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-full bg-primary text-primary-foreground"
+                              aria-hidden
+                            >
+                              <Check className="h-4 w-4" />
+                            </div>
+                          ) : null}
+                          <div className="min-w-0">
+                            <p className="font-medium text-card-foreground">{svc.name}</p>
+                            {venueServiceDurationMinutes(svc) > 0 && (
+                              <p className="text-sm text-muted-foreground">
+                                {venueServiceDurationMinutes(svc)} мин
+                              </p>
+                            )}
+                          </div>
+                          {svc.price > 0 ? (
+                            <span className="shrink-0 font-semibold text-primary">
+                              {svc.price.toLocaleString("ru-RU")} ₽
+                            </span>
+                          ) : (
+                            <span className="shrink-0 text-sm text-muted-foreground">Почасово</span>
+                          )}
+                        </CardContent>
+                      </Card>
+                    )
+                  })}
                 </div>
               </div>
             )}
@@ -600,16 +618,57 @@ export default function VenueDetailPage() {
             {/* Залы */}
             {venue.halls && venue.halls.length > 0 ? (
               <div className="mb-8">
-                <h2 className="mb-4 text-xl font-semibold text-foreground">Залы</h2>
+                <h2 className="mb-2 text-xl font-semibold text-foreground">Залы</h2>
+                <p className="mb-4 text-sm text-muted-foreground">
+                  Нажмите на карточку зала, чтобы добавить его в бронь или убрать. Можно выбрать несколько залов;
+                  почасовая часть стоимости справа считается по максимальной ставке среди заведения и выбранных залов.
+                </p>
                 <div className="space-y-6">
                   {venue.halls.map((hall) => {
                     const hPhotos = [...(hall.photos ?? [])].sort(
                       (a, b) =>
                         (a.sort_order ?? 0) - (b.sort_order ?? 0),
                     )
+                    const hallSelected = selectedHallIds.includes(hall.id)
                     return (
-                      <Card key={hall.id} className="border-border overflow-hidden">
-                        <CardContent className="p-0">
+                      <Card
+                        key={hall.id}
+                        role="button"
+                        tabIndex={0}
+                        aria-pressed={hallSelected}
+                        onClick={() =>
+                          setSelectedHallIds((prev) =>
+                            prev.includes(hall.id)
+                              ? prev.filter((x) => x !== hall.id)
+                              : [...prev, hall.id],
+                          )
+                        }
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" || e.key === " ") {
+                            e.preventDefault()
+                            setSelectedHallIds((prev) =>
+                              prev.includes(hall.id)
+                                ? prev.filter((x) => x !== hall.id)
+                                : [...prev, hall.id],
+                            )
+                          }
+                        }}
+                        className={cn(
+                          "cursor-pointer overflow-hidden border-2 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                          hallSelected
+                            ? "border-primary bg-primary/5"
+                            : "border-border hover:border-primary/40",
+                        )}
+                      >
+                        <CardContent className="relative p-0">
+                          {hallSelected ? (
+                            <div
+                              className="absolute right-3 top-3 z-10 flex h-8 w-8 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-sm"
+                              aria-hidden
+                            >
+                              <Check className="h-4 w-4" />
+                            </div>
+                          ) : null}
                           {hPhotos.length > 0 ? (
                             <div className="grid grid-cols-2 gap-0.5 sm:grid-cols-3 md:grid-cols-4">
                               {hPhotos.slice(0, 8).map((p) => (
@@ -626,7 +685,7 @@ export default function VenueDetailPage() {
                               ))}
                             </div>
                           ) : null}
-                          <div className="space-y-3 p-4 sm:p-5">
+                          <div className="space-y-3 p-4 pr-14 sm:p-5 sm:pr-16">
                             <h3 className="text-lg font-semibold text-foreground">
                               {hall.name}
                             </h3>
@@ -816,27 +875,85 @@ export default function VenueDetailPage() {
                   </Popover>
                 </div>
 
+                {venue.halls && venue.halls.length > 0 && (
+                  <div className="space-y-2">
+                    <Label className="text-card-foreground">Залы в брони</Label>
+                    {selectedHallIds.length === 0 ? (
+                      <p className="text-sm text-muted-foreground">
+                        Не выбрано — почасовая ставка по цене заведения. Выберите залы на карточках слева.
+                      </p>
+                    ) : (
+                      <ul className="max-h-40 space-y-1.5 overflow-y-auto rounded-md border border-border bg-muted/30 px-3 py-2 text-sm">
+                        {selectedHallIds.map((id) => {
+                          const h = venue.halls?.find((x) => x.id === id)
+                          if (!h) return null
+                          return (
+                            <li key={id} className="flex justify-between gap-2">
+                              <span className="line-clamp-2 text-card-foreground">{h.name}</span>
+                              {h.price_from > 0 ? (
+                                <span className="shrink-0 text-muted-foreground">
+                                  от {h.price_from.toLocaleString("ru-RU")} ₽/ч
+                                </span>
+                              ) : (
+                                <span className="shrink-0 text-muted-foreground">—</span>
+                              )}
+                            </li>
+                          )
+                        })}
+                      </ul>
+                    )}
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="w-full"
+                      disabled={selectedHallIds.length === 0}
+                      onClick={() => setSelectedHallIds([])}
+                    >
+                      Снять выбор залов
+                    </Button>
+                  </div>
+                )}
+
                 {venue.services && venue.services.length > 0 && (
                   <div className="space-y-2">
-                    <Label className="text-card-foreground">Услуга</Label>
-                    <Select value={serviceId} onValueChange={setServiceId}>
-                      <SelectTrigger>
-                        <SelectValue placeholder="Как бронируете" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="none">Почасово (без пакета)</SelectItem>
-                        {venue.services.map((s) => (
-                          <SelectItem key={s.id} value={s.id}>
-                            {s.name}
-                            {Number(s.price) > 0
-                              ? ` · ${Number(s.price).toLocaleString("ru-RU")} ₽`
-                              : ""}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
+                    <Label className="text-card-foreground">Услуги в брони</Label>
+                    {selectedServiceIds.length === 0 ? (
+                      <p className="text-sm text-muted-foreground">
+                        Почасовой тариф. Выберите пакеты на карточках слева — они появятся здесь.
+                      </p>
+                    ) : (
+                      <ul className="max-h-48 space-y-1.5 overflow-y-auto rounded-md border border-border bg-muted/30 px-3 py-2 text-sm">
+                        {selectedServiceIds.map((id) => {
+                          const s = venue.services?.find((x) => x.id === id)
+                          if (!s) return null
+                          return (
+                            <li key={id} className="flex justify-between gap-2">
+                              <span className="line-clamp-2 text-card-foreground">{s.name}</span>
+                              {Number(s.price) > 0 ? (
+                                <span className="shrink-0 font-medium text-primary">
+                                  {Number(s.price).toLocaleString("ru-RU")} ₽
+                                </span>
+                              ) : (
+                                <span className="shrink-0 text-muted-foreground">почасово</span>
+                              )}
+                            </li>
+                          )
+                        })}
+                      </ul>
+                    )}
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="w-full"
+                      disabled={selectedServiceIds.length === 0}
+                      onClick={() => setSelectedServiceIds([])}
+                    >
+                      Только почасово
+                    </Button>
                     <p className="text-xs text-muted-foreground">
-                      Пакет — фиксированная цена; почасово — по тарифу «от N ₽/час» за выбранную длительность.
+                      Фиксированные пакеты суммируются; не более одной услуги без цены (почасовой тариф) в одной брони.
                     </p>
                   </div>
                 )}

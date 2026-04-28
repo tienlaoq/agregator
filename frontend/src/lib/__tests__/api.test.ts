@@ -163,6 +163,60 @@ describe("formatApiErrorMessage", () => {
     expect(formatApiErrorMessage(err, "Свой текст")).toBe("Свой текст");
   });
 
+  it("shows Russian gateway detail for INVALID_ARGUMENT (e.g. password reset)", () => {
+    const err = new ApiError(
+      400,
+      JSON.stringify({
+        code: "GATEWAY.UPSTREAM.INVALID_ARGUMENT",
+        error: "Ссылка сброса недействительна или истекла",
+      }),
+      "GATEWAY.UPSTREAM.INVALID_ARGUMENT",
+      "Ссылка сброса недействительна или истекла",
+    );
+    expect(formatApiErrorMessage(err, "fallback")).toBe("Ссылка сброса недействительна или истекла");
+  });
+
+  it("maps English password hint from gateway detail", () => {
+    const err = new ApiError(
+      400,
+      JSON.stringify({
+        code: "GATEWAY.UPSTREAM.INVALID_ARGUMENT",
+        error: "password must be at least 8 characters",
+      }),
+      "GATEWAY.UPSTREAM.INVALID_ARGUMENT",
+      "password must be at least 8 characters",
+    );
+    expect(formatApiErrorMessage(err, "fallback")).toBe("Пароль: не менее 8 символов");
+  });
+
+  it("maps master submit English status message to Russian", () => {
+    const err = new ApiError(
+      400,
+      JSON.stringify({
+        code: "GATEWAY.UPSTREAM.INVALID_ARGUMENT",
+        error: "profile cannot be submitted in current status: active",
+      }),
+      "GATEWAY.UPSTREAM.INVALID_ARGUMENT",
+      "profile cannot be submitted in current status: active",
+    );
+    const msg = formatApiErrorMessage(err, "fallback");
+    expect(msg).toMatch(/статус профиля/i);
+    expect(msg).not.toBe("Проверьте введённые данные и попробуйте снова.");
+  });
+
+  it("shows other short English INVALID_ARGUMENT details from upstream", () => {
+    const err = new ApiError(
+      400,
+      JSON.stringify({
+        code: "GATEWAY.UPSTREAM.INVALID_ARGUMENT",
+        error: "display_name is required",
+      }),
+      "GATEWAY.UPSTREAM.INVALID_ARGUMENT",
+      "display_name is required",
+    );
+    expect(formatApiErrorMessage(err, "fallback")).toBe("display_name is required");
+  });
+
   it("detects network-style client errors", () => {
     expect(
       formatApiErrorMessage(new TypeError("Failed to fetch"), "другое"),

@@ -100,3 +100,17 @@ func (s *Server) Logout(ctx context.Context, req *authv1.LogoutRequest) (*authv1
 	}
 	return &authv1.LogoutResponse{}, nil
 }
+
+func (s *Server) RequestPasswordReset(ctx context.Context, req *authv1.RequestPasswordResetRequest) (*authv1.RequestPasswordResetResponse, error) {
+	if err := s.uc.RequestPasswordReset(ctx, req.GetEmail()); err != nil {
+		return nil, err
+	}
+	return &authv1.RequestPasswordResetResponse{}, nil
+}
+
+func (s *Server) CompletePasswordReset(ctx context.Context, req *authv1.CompletePasswordResetRequest) (*authv1.CompletePasswordResetResponse, error) {
+	if err := s.uc.CompletePasswordReset(ctx, req.GetToken(), req.GetNewPassword()); err != nil {
+		return nil, err
+	}
+	return &authv1.CompletePasswordResetResponse{}, nil
+}

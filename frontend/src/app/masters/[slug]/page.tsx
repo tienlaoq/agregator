@@ -1,13 +1,14 @@
 "use client";
 
-import { use, useState } from "react";
+import { use, useCallback, useEffect, useMemo, useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { format, isBefore, startOfDay } from "date-fns";
+import { ru } from "date-fns/locale";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import {
@@ -18,6 +19,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
+import { Calendar } from "@/components/ui/calendar";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useAuthStore } from "@/store/auth";
 import {
   getPublicMaster,
@@ -27,8 +30,24 @@ import {
   masterCardPriceLabel,
   venueMediaUrl,
 } from "@/lib/api";
-import type { MasterPhoto } from "@/lib/types";
-import { ArrowLeft } from "lucide-react";
+import { MasterTravelBaseMap } from "@/components/banya/master-travel-base-map";
+import type { MasterPhoto, MasterTravelExcludeZone } from "@/lib/types";
+import {
+  defaultEndTimeForDuration,
+  endTimeOptionsThirtyMinutes,
+  slotLengthMinutes,
+  thirtyMinuteStartGridFrom10To22,
+} from "@/lib/booking-slot-time";
+import {
+  ArrowLeft,
+  CalendarIcon,
+  ImageIcon,
+  MapPin,
+  Minus,
+  Phone,
+  Plus,
+  Users,
+} from "lucide-react";
 
 function sortMasterPhotosPublic(photos?: MasterPhoto[]): MasterPhoto[] {
   if (!photos?.length) return [];
@@ -41,6 +60,11 @@ function kopecksToRub(k: number) {
   return (k / 100).toFixed(0);
 }
 
+function masterServiceDurationMin(s: { duration_min: number }): number {
+  const d = s.duration_min;
+  return d > 0 ? d : 120;
+}
+
 export default function MasterPublicPage({
   params,
 }: {
@@ -49,12 +73,13 @@ export default function MasterPublicPage({
   const { slug } = use(params);
   const router = useRouter();
   const qc = useQueryClient();
-  const { token, hydrated } = useAuthStore();
-  const [date, setDate] = useState("");
-  const [timeFrom, setTimeFrom] = useState("10:00");
-  const [timeTo, setTimeTo] = useState("12:00");
+  const { token, user, hydrated } = useAuthStore();
+  const [date, setDate] = useState<Date>();
+  const [time, setTime] = useState("");
+  const [timeTo, setTimeTo] = useState("");
+  const [serviceId, setServiceId] = useState<string>("none");
+  const [guests] = useState(1);
   const [comment, setComment] = useState("");
-  const [serviceId, setServiceId] = useState<string>("");
   const [msg, setMsg] = useState("");
 
   const { data: master, isLoading, error } = useQuery({
@@ -62,14 +87,48 @@ export default function MasterPublicPage({
     queryFn: () => getPublicMaster(slug),
   });
 
+  const showPublicTravelZone = useMemo(() => {
+    if (!master) return false;
+    const wf = (master.work_format || "").toLowerCase();
+    if (wf !== "mobile" && wf !== "both") return false;
+    const r = Number(master.travel_radius_km);
+    const lat = master.travel_base_latitude;
+    const lon = master.travel_base_longitude;
+    if (!Number.isFinite(r) || r <= 0) return false;
+    if (lat == null || lon == null || !Number.isFinite(lat) || !Number.isFinite(lon)) return false;
+    return true;
+  }, [master]);
+
+  const publicTravelMapVersion = useMemo(() => {
+    if (!master || !showPublicTravelZone) return "0";
+    const z = (master.travel_exclude_zones ?? [])
+      .map((x) => `${x.id}:${x.latitude}:${x.longitude}:${x.radius_km}`)
+      .join("|");
+    return `${master.slug}-${master.travel_radius_km}-${master.travel_base_latitude}-${master.travel_base_longitude}-${z}`;
+  }, [master, showPublicTravelZone]);
+
+  const publicExcludeZones: MasterTravelExcludeZone[] = useMemo(() => {
+    if (!master?.travel_exclude_zones?.length) return [];
+    return master.travel_exclude_zones.map((z, i) => ({
+      id: z.id?.trim() ? z.id : `ex-${i}`,
+      latitude: z.latitude,
+      longitude: z.longitude,
+      radius_km: z.radius_km,
+      label: typeof z.label === "string" ? z.label : "",
+    }));
+  }, [master]);
+
+  const noopTravelPosition = useCallback(() => {}, []);
+  const yandexMapsApiKey = process.env.NEXT_PUBLIC_YANDEX_MAPS_API_KEY;
+
   const bookMut = useMutation({
     mutationFn: () =>
       createMasterBooking(slug, {
-        date,
-        time_from: timeFrom,
+        date: format(date!, "yyyy-MM-dd"),
+        time_from: time,
         time_to: timeTo,
         comment: comment.trim(),
-        ...(serviceId ? { master_service_id: serviceId } : {}),
+        ...(serviceId !== "none" ? { master_service_id: serviceId } : {}),
       }),
     onSuccess: () => {
       setMsg("Заявка отправлена. Мастер свяжется с вами.");
@@ -78,6 +137,81 @@ export default function MasterPublicPage({
     onError: (e) => setMsg(formatApiErrorMessage(e, "Ошибка")),
   });
 
+  const slotDurationMin = useMemo(() => {
+    if (time && timeTo) {
+      const m = slotLengthMinutes(time, timeTo);
+      if (m != null && m >= 30 && m <= 720) return m;
+    }
+    if (serviceId !== "none" && master) {
+      const s = master.services?.find((x) => x.id === serviceId);
+      if (s) return Math.min(720, Math.max(30, masterServiceDurationMin(s)));
+    }
+    return 120;
+  }, [time, timeTo, serviceId, master]);
+
+  const slotValid = useMemo(() => {
+    if (!time || !timeTo) return false;
+    const m = slotLengthMinutes(time, timeTo);
+    return m != null && m >= 30 && m <= 720 && m % 30 === 0;
+  }, [time, timeTo]);
+
+  const visitEndOptions = useMemo(() => endTimeOptionsThirtyMinutes(time), [time]);
+  const startTimeGrid = useMemo(() => thirtyMinuteStartGridFrom10To22(), []);
+
+  const priceHint = useMemo(() => {
+    if (!master) return null;
+    if (serviceId !== "none") {
+      const s = master.services?.find((x) => x.id === serviceId);
+      if (s && Number(s.price) > 0) {
+        return `${kopecksToRub(Number(s.price))} ₽`;
+      }
+    }
+    if (typeof master.hourly_rate === "number" && master.hourly_rate > 0 && slotValid) {
+      const mins = slotLengthMinutes(time, timeTo);
+      if (mins != null) {
+        const hours = Math.ceil(mins / 60);
+        const rub = new Intl.NumberFormat("ru-RU", {
+          minimumFractionDigits: 0,
+          maximumFractionDigits: 0,
+        }).format((master.hourly_rate / 100) * hours);
+        return `≈ ${rub} ₽`;
+      }
+    }
+    return null;
+  }, [master, serviceId, time, timeTo, slotValid]);
+
+  useEffect(() => {
+    if (!time || !master) {
+      if (!time) setTimeTo("");
+      return;
+    }
+    let addMin = 120;
+    if (serviceId !== "none") {
+      const s = master.services?.find((x) => x.id === serviceId);
+      if (s) addMin = Math.max(30, masterServiceDurationMin(s));
+    }
+    setTimeTo(defaultEndTimeForDuration(time, addMin));
+  }, [time, serviceId, master]);
+
+  useEffect(() => {
+    if (!date) {
+      setTime("");
+      setTimeTo("");
+    }
+  }, [date]);
+
+  useEffect(() => {
+    if (!time || !timeTo || !master) return;
+    const opts = endTimeOptionsThirtyMinutes(time);
+    if (opts.length === 0 || opts.includes(timeTo)) return;
+    let addMin = 120;
+    if (serviceId !== "none") {
+      const s = master.services?.find((x) => x.id === serviceId);
+      if (s) addMin = Math.max(30, masterServiceDurationMin(s));
+    }
+    setTimeTo(defaultEndTimeForDuration(time, addMin));
+  }, [time, timeTo, serviceId, master]);
+
   const onBook = () => {
     setMsg("");
     if (!hydrated || !token) {
@@ -85,7 +219,15 @@ export default function MasterPublicPage({
       return;
     }
     if (!date) {
-      setMsg("Укажите дату");
+      setMsg("Выберите дату");
+      return;
+    }
+    if (!time || !timeTo || !slotValid) {
+      setMsg("Выберите время начала и окончания визита");
+      return;
+    }
+    if (isBefore(startOfDay(date), startOfDay(new Date()))) {
+      setMsg("Нельзя выбрать прошедшую дату.");
       return;
     }
     bookMut.mutate();
@@ -93,7 +235,16 @@ export default function MasterPublicPage({
 
   if (isLoading) {
     return (
-      <div className="container mx-auto px-4 py-16 text-muted-foreground">Загрузка...</div>
+      <div className="container mx-auto px-4 py-16">
+        <div className="grid gap-8 lg:grid-cols-3">
+          <div className="lg:col-span-2 space-y-6">
+            <div className="h-80 animate-pulse rounded-xl bg-muted" />
+            <div className="h-8 w-2/3 animate-pulse rounded bg-muted" />
+            <div className="h-4 w-1/2 animate-pulse rounded bg-muted" />
+          </div>
+          <div className="h-96 animate-pulse rounded-xl bg-muted" />
+        </div>
+      </div>
     );
   }
 
@@ -113,160 +264,339 @@ export default function MasterPublicPage({
   const priceLine = masterCardPriceLabel(master);
 
   return (
-    <div className="container mx-auto max-w-3xl px-4 py-10">
-      <Button variant="ghost" asChild className="mb-6 gap-2">
-        <Link href="/masters">
+    <section className="bg-background py-10 md:py-16">
+      <div className="container mx-auto max-w-6xl px-4">
+        <Link
+          href="/masters"
+          className="mb-6 inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
+        >
           <ArrowLeft className="h-4 w-4" />
-          Все мастера
+          Назад к каталогу
         </Link>
-      </Button>
 
-      {coverSrc ? (
-        <div className="relative mb-8 aspect-[16/10] w-full overflow-hidden rounded-xl border border-border bg-muted">
-          <Image
-            src={coverSrc}
-            alt=""
-            fill
-            className="object-cover"
-            sizes="(max-width: 768px) 100vw, 42rem"
-            priority
-            unoptimized
-          />
-        </div>
-      ) : null}
-
-      {gallery.length > 1 ? (
-        <div className="mb-8 grid grid-cols-3 gap-2 sm:grid-cols-4 md:grid-cols-5">
-          {gallery.map((p) => (
-            <div
-              key={p.id}
-              className="relative aspect-square overflow-hidden rounded-lg border border-border bg-muted"
-            >
-              <Image
-                src={venueMediaUrl(p.url)}
-                alt=""
-                fill
-                className="object-cover"
-                sizes="120px"
-                unoptimized
-              />
-            </div>
-          ))}
-        </div>
-      ) : null}
-
-      <div className="mb-8">
-        <h1 className="text-3xl font-bold mb-2">{master.display_name}</h1>
-        <div className="flex flex-wrap gap-2 text-sm text-muted-foreground">
-          <span>{master.city}</span>
-          {master.experience_years > 0 && (
-            <Badge variant="outline">Опыт {master.experience_years} лет</Badge>
-          )}
-          <Badge variant="secondary">
-            {master.work_format === "mobile"
-              ? "Выезд"
-              : master.work_format === "venue"
-                ? "У заведения"
-                : "Выезд и у заведения"}
-          </Badge>
-        </div>
-        {priceLine ? <p className="mt-2 text-lg">{priceLine}</p> : null}
-      </div>
-
-      <Card className="mb-8">
-        <CardHeader>
-          <CardTitle className="text-lg">О мастере</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4 whitespace-pre-wrap text-muted-foreground">
-          <p>{master.bio}</p>
-          {master.specializations?.length > 0 && (
-            <div className="flex flex-wrap gap-2">
-              {master.specializations.map((s) => (
-                <Badge key={s} variant="outline">
-                  {s}
-                </Badge>
-              ))}
-            </div>
-          )}
-          {master.phone && (
-            <p className="text-foreground">
-              Телефон: <a href={`tel:${master.phone}`} className="underline">{master.phone}</a>
-            </p>
-          )}
-        </CardContent>
-      </Card>
-
-      {master.services?.length > 0 && (
-        <Card className="mb-8">
-          <CardHeader>
-            <CardTitle className="text-lg">Услуги</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            {master.services.map((s) => (
-              <div key={s.id} className="flex justify-between gap-4 border-b border-border pb-3 last:border-0">
-                <div>
-                  <p className="font-medium">{s.name}</p>
-                  <p className="text-sm text-muted-foreground">{s.description}</p>
-                  <p className="text-xs text-muted-foreground mt-1">{s.duration_min} мин</p>
+        <div className="grid gap-8 lg:grid-cols-3">
+          <div className="lg:col-span-2">
+            <div className="mb-8">
+              {coverSrc ? (
+                <div className="relative aspect-[16/9] w-full overflow-hidden rounded-xl border border-border bg-muted">
+                  <Image
+                    src={coverSrc}
+                    alt=""
+                    fill
+                    className="object-cover"
+                    sizes="(max-width: 1024px) 100vw, 66vw"
+                    priority
+                    unoptimized
+                  />
                 </div>
-                <p className="shrink-0 font-medium">{kopecksToRub(s.price)} ₽</p>
-              </div>
-            ))}
-          </CardContent>
-        </Card>
-      )}
-
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-lg">Оставить заявку</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          {master.services?.length > 0 && (
-            <div className="space-y-2">
-              <Label>Услуга (необязательно)</Label>
-              <Select value={serviceId || "none"} onValueChange={(v) => setServiceId(v === "none" ? "" : v)}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Любая" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="none">Не указывать</SelectItem>
-                  {master.services.map((s) => (
-                    <SelectItem key={s.id} value={s.id}>
-                      {s.name}
-                    </SelectItem>
+              ) : (
+                <div className="flex aspect-[16/9] items-center justify-center rounded-xl border border-border bg-muted">
+                  <div className="flex flex-col items-center gap-2 text-muted-foreground/40">
+                    <ImageIcon className="h-16 w-16" />
+                    <span className="text-sm">Фото ещё не добавлены</span>
+                  </div>
+                </div>
+              )}
+              {gallery.length > 1 ? (
+                <div className="mt-3 flex gap-2 overflow-x-auto pb-1 pt-0.5 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                  {gallery.map((p) => (
+                    <div
+                      key={p.id}
+                      className="relative h-16 w-16 shrink-0 overflow-hidden rounded-md border border-border bg-muted"
+                    >
+                      <Image
+                        src={venueMediaUrl(p.url)}
+                        alt=""
+                        fill
+                        className="object-cover"
+                        sizes="64px"
+                        unoptimized
+                      />
+                    </div>
                   ))}
-                </SelectContent>
-              </Select>
+                </div>
+              ) : null}
             </div>
-          )}
-          <div className="grid gap-4 sm:grid-cols-3">
-            <div className="space-y-2">
-              <Label>Дата</Label>
-              <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} />
+
+            <div className="mb-8">
+              <div className="mb-4 flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+                {master.experience_years > 0 && (
+                  <Badge variant="outline">Опыт {master.experience_years} лет</Badge>
+                )}
+                <Badge variant="secondary">
+                  {master.work_format === "mobile"
+                    ? "Выезд к клиенту"
+                    : master.work_format === "venue"
+                      ? "В бане / у заведения"
+                      : "И то и другое"}
+                </Badge>
+              </div>
+              <h1 className="mb-4 text-3xl font-bold text-foreground md:text-4xl">{master.display_name}</h1>
+              <div className="flex flex-col gap-2 text-muted-foreground">
+                <div className="flex items-center gap-2">
+                  <MapPin className="h-5 w-5 shrink-0" />
+                  {master.city}
+                </div>
+                {master.phone && (
+                  <div className="flex items-center gap-2">
+                    <Phone className="h-5 w-5 shrink-0" />
+                    <a href={`tel:${master.phone}`} className="hover:underline">
+                      {master.phone}
+                    </a>
+                  </div>
+                )}
+              </div>
             </div>
-            <div className="space-y-2">
-              <Label>С</Label>
-              <Input type="time" value={timeFrom} onChange={(e) => setTimeFrom(e.target.value)} />
-            </div>
-            <div className="space-y-2">
-              <Label>До</Label>
-              <Input type="time" value={timeTo} onChange={(e) => setTimeTo(e.target.value)} />
+
+            {priceLine ? (
+              <div className="mb-8">
+                <span className="text-2xl font-bold text-primary">{priceLine}</span>
+              </div>
+            ) : null}
+
+            {master.bio?.trim() ? (
+              <div className="mb-8">
+                <h2 className="mb-4 text-xl font-semibold text-foreground">Описание</h2>
+                <p className="whitespace-pre-wrap leading-relaxed text-muted-foreground">{master.bio}</p>
+                {master.specializations?.length ? (
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    {master.specializations.map((s) => (
+                      <Badge key={s} variant="outline">
+                        {s}
+                      </Badge>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+
+            {master.services && master.services.length > 0 ? (
+              <div className="mb-8">
+                <h2 className="mb-4 text-xl font-semibold text-foreground">Услуги и цены</h2>
+                <div className="space-y-3">
+                  {master.services.map((svc) => (
+                    <Card key={svc.id} className="border-border">
+                      <CardContent className="flex items-center justify-between p-4">
+                        <div>
+                          <p className="font-medium text-card-foreground">{svc.name}</p>
+                          {svc.description ? (
+                            <p className="text-sm text-muted-foreground">{svc.description}</p>
+                          ) : null}
+                          <p className="mt-1 text-xs text-muted-foreground">{svc.duration_min} мин</p>
+                        </div>
+                        {Number(svc.price) > 0 ? (
+                          <span className="shrink-0 font-semibold text-primary">
+                            {kopecksToRub(Number(svc.price))} ₽
+                          </span>
+                        ) : null}
+                      </CardContent>
+                    </Card>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+
+            {showPublicTravelZone && master ? (
+              <div className="mb-8">
+                <h2 className="mb-2 text-xl font-semibold text-foreground">Зона выезда</h2>
+                <p className="mb-4 text-sm text-muted-foreground">
+                  На карте — ориентир по прямой: до {master.travel_radius_km} км от точки отсчёта.
+                  Синяя область — куда мастер готов выезжать; красные круги — исключения внутри зоны.
+                </p>
+                <MasterTravelBaseMap
+                  readOnly
+                  apiKey={yandexMapsApiKey}
+                  mapVersion={publicTravelMapVersion}
+                  cityHint={master.city}
+                  seedLat={master.travel_base_latitude ?? null}
+                  seedLon={master.travel_base_longitude ?? null}
+                  onPositionChange={noopTravelPosition}
+                  travelRadiusKm={master.travel_radius_km}
+                  excludeZones={publicExcludeZones}
+                />
+              </div>
+            ) : null}
+
+            <div>
+              <h2 className="mb-6 text-xl font-semibold text-foreground">Отзывы</h2>
+              <Card className="border-border">
+                <CardContent className="py-10 text-center text-muted-foreground">
+                  Пока нет отзывов. Будьте первым!
+                </CardContent>
+              </Card>
             </div>
           </div>
-          <div className="space-y-2">
-            <Label>Комментарий</Label>
-            <Textarea value={comment} onChange={(e) => setComment(e.target.value)} rows={3} />
+
+          <div className="lg:col-span-1">
+            <Card className="sticky top-24 border-border">
+              <CardHeader>
+                <CardTitle className="text-xl text-card-foreground">Забронировать</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                {!user && (
+                  <p className="text-sm text-muted-foreground">
+                    <Link href="/auth/login" className="text-primary underline">
+                      Войдите
+                    </Link>
+                    , чтобы оставить заявку
+                  </p>
+                )}
+
+                <div>
+                  <label className="mb-2 block text-sm font-medium text-card-foreground">Дата</label>
+                  <Popover>
+                    <PopoverTrigger asChild>
+                      <Button variant="outline" className="w-full justify-start gap-2 text-left font-normal">
+                        <CalendarIcon className="h-4 w-4 shrink-0" />
+                        {date ? format(date, "d MMMM yyyy", { locale: ru }) : "Выберите дату"}
+                      </Button>
+                    </PopoverTrigger>
+                    <PopoverContent className="w-auto p-0" align="start">
+                      <Calendar
+                        mode="single"
+                        selected={date}
+                        onSelect={setDate}
+                        initialFocus
+                        disabled={(d) => isBefore(startOfDay(d), startOfDay(new Date()))}
+                      />
+                    </PopoverContent>
+                  </Popover>
+                </div>
+
+                {master.services && master.services.length > 0 ? (
+                  <div className="space-y-2">
+                    <Label className="text-card-foreground">Услуга</Label>
+                    <Select value={serviceId} onValueChange={setServiceId}>
+                      <SelectTrigger>
+                        <SelectValue placeholder="Как бронируете" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="none">Без пакета (по длительности)</SelectItem>
+                        {master.services.map((s) => (
+                          <SelectItem key={s.id} value={s.id}>
+                            {s.name}
+                            {Number(s.price) > 0 ? ` · ${kopecksToRub(Number(s.price))} ₽` : ""}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <p className="text-xs text-muted-foreground">
+                      Пакет — фиксированная цена; без пакета — ориентир по ставке за время визита.
+                    </p>
+                  </div>
+                ) : null}
+
+                <div className="space-y-2">
+                  <Label className="text-card-foreground">Время начала</Label>
+                  <Select value={time} onValueChange={setTime} disabled={!date}>
+                    <SelectTrigger className="w-full font-normal">
+                      <SelectValue
+                        placeholder={!date ? "Сначала выберите дату" : "Выберите время"}
+                      />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {startTimeGrid.map((t) => (
+                        <SelectItem key={t} value={t}>
+                          {t}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="space-y-2">
+                  <Label className="text-card-foreground">Окончание визита</Label>
+                  <Select
+                    value={timeTo}
+                    onValueChange={setTimeTo}
+                    disabled={!time || visitEndOptions.length === 0}
+                  >
+                    <SelectTrigger className="w-full font-normal">
+                      <SelectValue
+                        placeholder={
+                          !time ? "Сначала выберите начало" : "Выберите время окончания"
+                        }
+                      />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {visitEndOptions.map((t) => (
+                        <SelectItem key={t} value={t}>
+                          {t}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  {Boolean(time && timeTo && !slotValid) && (
+                    <p className="text-xs text-destructive">
+                      Проверьте интервал: длительность от 30 мин до 12 ч, шаг 30 минут.
+                    </p>
+                  )}
+                </div>
+
+                <div>
+                  <label className="mb-2 block text-sm font-medium text-card-foreground">Гости</label>
+                  <div className="flex items-center gap-3">
+                    <Button type="button" variant="outline" size="icon" disabled aria-disabled>
+                      <Minus className="h-4 w-4" />
+                    </Button>
+                    <div className="flex items-center gap-2">
+                      <Users className="h-4 w-4 text-muted-foreground" />
+                      <span className="w-8 text-center font-medium">{guests}</span>
+                    </div>
+                    <Button type="button" variant="outline" size="icon" disabled aria-disabled>
+                      <Plus className="h-4 w-4" />
+                    </Button>
+                  </div>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Заявка оформляется на одного клиента.
+                  </p>
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="master-book-comment">Комментарий</Label>
+                  <Textarea
+                    id="master-book-comment"
+                    value={comment}
+                    onChange={(e) => setComment(e.target.value)}
+                    rows={3}
+                    placeholder="Пожелания по визиту (необязательно)"
+                  />
+                </div>
+
+                <div className="border-t border-border pt-4">
+                  {priceHint ? (
+                    <div className="mb-4 flex items-center justify-between gap-2">
+                      <span className="text-muted-foreground">Ориентир</span>
+                      <span className="text-2xl font-bold text-foreground">{priceHint}</span>
+                    </div>
+                  ) : (
+                    <p className="mb-4 text-sm text-muted-foreground">
+                      Стоимость появится после выбора услуги или длительности.
+                    </p>
+                  )}
+                  <Button
+                    className="w-full"
+                    size="lg"
+                    disabled={!user || !date || !time || !slotValid || bookMut.isPending}
+                    onClick={onBook}
+                  >
+                    {bookMut.isPending ? "Отправка…" : token ? "Забронировать" : "Войти и забронировать"}
+                  </Button>
+                  {msg && (
+                    <p
+                      className={`mt-2 text-center text-sm ${
+                        msg.startsWith("Заявка") ? "text-green-600" : "text-destructive"
+                      }`}
+                    >
+                      {msg}
+                    </p>
+                  )}
+                </div>
+              </CardContent>
+            </Card>
           </div>
-          {msg && (
-            <p className={msg.startsWith("Заявка") ? "text-green-600 text-sm" : "text-destructive text-sm"}>
-              {msg}
-            </p>
-          )}
-          <Button onClick={onBook} disabled={bookMut.isPending}>
-            {bookMut.isPending ? "Отправка..." : token ? "Отправить заявку" : "Войти и отправить"}
-          </Button>
-        </CardContent>
-      </Card>
-    </div>
+        </div>
+      </div>
+    </section>
   );
 }

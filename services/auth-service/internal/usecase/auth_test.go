@@ -21,7 +21,12 @@ import (
 const testJWTSecret = "test-jwt-secret-key"
 
 func testAuthUC(creds *mockCredRepo, tokens *mockTokenRepo, users *mockUserClient) *AuthUseCase {
-	return NewAuthUseCase(creds, tokens, users, testJWTSecret, time.Hour, 24*time.Hour, nil, "", zerolog.Nop())
+	return NewAuthUseCase(
+		creds, tokens,
+		noopPasswordResetRepo{}, noopPasswordMail{},
+		time.Hour,
+		users, testJWTSecret, time.Hour, 24*time.Hour, nil, "", zerolog.Nop(),
+	)
 }
 
 func TestRegister_Success(t *testing.T) {

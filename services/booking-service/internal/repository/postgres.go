@@ -2,8 +2,10 @@ package repository
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strconv"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -26,14 +28,16 @@ func (r *BookingRepo) Delete(ctx context.Context, id string) error {
 }
 
 func (r *BookingRepo) Create(ctx context.Context, b *domain.Booking) error {
+	pkgCol := packageServiceIDsForInsert(b.PackageServiceIDs)
+	hallCol := bookingHallIDsForInsert(b.HallIDs)
 	const q = `
-		INSERT INTO bookings (user_id, venue_id, venue_name, service_id, date, time_from, time_to, guests, comment, status, total_price)
-		VALUES ($1, $2, $3, NULLIF($4, '')::UUID, $5, $6, $7, $8, $9, $10, $11)
+		INSERT INTO bookings (user_id, venue_id, venue_name, service_id, date, time_from, time_to, guests, comment, status, total_price, package_service_ids, booking_hall_ids)
+		VALUES ($1, $2, $3, NULLIF($4, '')::UUID, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 		RETURNING id, created_at, updated_at`
 	return r.pool.QueryRow(ctx, q,
 		b.UserID, b.VenueID, b.VenueName, b.ServiceID, b.Date,
 		b.TimeFrom, b.TimeTo, b.Guests, b.Comment,
-		b.Status, b.TotalPrice,
+		b.Status, b.TotalPrice, pkgCol, hallCol,
 	).Scan(&b.ID, &b.CreatedAt, &b.UpdatedAt)
 }
 
@@ -41,14 +45,16 @@ func (r *BookingRepo) GetByID(ctx context.Context, id string) (*domain.Booking, 
 	const q = `
 		SELECT id, user_id, venue_id, COALESCE(venue_name, ''), COALESCE(service_id::TEXT, ''), date, time_from::TEXT, time_to::TEXT,
 		       guests, COALESCE(comment, ''), status, total_price, COALESCE(payment_id::TEXT, ''),
-		       created_at, updated_at
+		       created_at, updated_at, package_service_ids, booking_hall_ids
 		FROM bookings WHERE id = $1`
 	b := &domain.Booking{}
+	var pkg *string
+	var halls *string
 	err := r.pool.QueryRow(ctx, q, id).Scan(
 		&b.ID, &b.UserID, &b.VenueID, &b.VenueName, &b.ServiceID, &b.Date,
 		&b.TimeFrom, &b.TimeTo, &b.Guests, &b.Comment,
 		&b.Status, &b.TotalPrice, &b.PaymentID,
-		&b.CreatedAt, &b.UpdatedAt,
+		&b.CreatedAt, &b.UpdatedAt, &pkg, &halls,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, pkgerr.NotFound("booking not found")
@@ -56,6 +62,8 @@ func (r *BookingRepo) GetByID(ctx context.Context, id string) (*domain.Booking, 
 	if err != nil {
 		return nil, err
 	}
+	mergePackageServiceIDs(b, pkg)
+	mergeBookingHallIDs(b, halls)
 	return b, nil
 }
 
@@ -64,7 +72,7 @@ func (r *BookingRepo) ListByUser(ctx context.Context, userID, status string, off
 	dataQ := `
 		SELECT id, user_id, venue_id, COALESCE(venue_name, ''), COALESCE(service_id::TEXT, ''), date, time_from::TEXT, time_to::TEXT,
 		       guests, COALESCE(comment, ''), status, total_price, COALESCE(payment_id::TEXT, ''),
-		       created_at, updated_at
+		       created_at, updated_at, package_service_ids, booking_hall_ids
 		FROM bookings WHERE user_id = $1`
 	args := []any{userID}
 
@@ -91,14 +99,18 @@ func (r *BookingRepo) ListByUser(ctx context.Context, userID, status string, off
 	var bookings []*domain.Booking
 	for rows.Next() {
 		b := &domain.Booking{}
+		var pkg *string
+		var halls *string
 		if err := rows.Scan(
 			&b.ID, &b.UserID, &b.VenueID, &b.VenueName, &b.ServiceID, &b.Date,
 			&b.TimeFrom, &b.TimeTo, &b.Guests, &b.Comment,
 			&b.Status, &b.TotalPrice, &b.PaymentID,
-			&b.CreatedAt, &b.UpdatedAt,
+			&b.CreatedAt, &b.UpdatedAt, &pkg, &halls,
 		); err != nil {
 			return nil, 0, err
 		}
+		mergePackageServiceIDs(b, pkg)
+		mergeBookingHallIDs(b, halls)
 		bookings = append(bookings, b)
 	}
 	return bookings, total, rows.Err()
@@ -109,7 +121,7 @@ func (r *BookingRepo) ListByVenue(ctx context.Context, venueID, status, date str
 	dataQ := `
 		SELECT id, user_id, venue_id, COALESCE(venue_name, ''), COALESCE(service_id::TEXT, ''), date, time_from::TEXT, time_to::TEXT,
 		       guests, COALESCE(comment, ''), status, total_price, COALESCE(payment_id::TEXT, ''),
-		       created_at, updated_at
+		       created_at, updated_at, package_service_ids, booking_hall_ids
 		FROM bookings WHERE venue_id = $1`
 	args := []any{venueID}
 	n := 1
@@ -144,14 +156,18 @@ func (r *BookingRepo) ListByVenue(ctx context.Context, venueID, status, date str
 	var bookings []*domain.Booking
 	for rows.Next() {
 		b := &domain.Booking{}
+		var pkg *string
+		var halls *string
 		if err := rows.Scan(
 			&b.ID, &b.UserID, &b.VenueID, &b.VenueName, &b.ServiceID, &b.Date,
 			&b.TimeFrom, &b.TimeTo, &b.Guests, &b.Comment,
 			&b.Status, &b.TotalPrice, &b.PaymentID,
-			&b.CreatedAt, &b.UpdatedAt,
+			&b.CreatedAt, &b.UpdatedAt, &pkg, &halls,
 		); err != nil {
 			return nil, 0, err
 		}
+		mergePackageServiceIDs(b, pkg)
+		mergeBookingHallIDs(b, halls)
 		bookings = append(bookings, b)
 	}
 	return bookings, total, rows.Err()
@@ -241,4 +257,60 @@ func (r *BookingRepo) AutoCompleteVisitEnded(ctx context.Context, visitTimeZone 
 
 func pgArgN(n int) string {
 	return strconv.Itoa(n)
+}
+
+func packageServiceIDsForInsert(ids []string) any {
+	if len(ids) <= 1 {
+		return nil
+	}
+	b, err := json.Marshal(ids)
+	if err != nil {
+		return nil
+	}
+	return string(b)
+}
+
+func mergePackageServiceIDs(b *domain.Booking, pkg *string) {
+	b.PackageServiceIDs = nil
+	if pkg == nil || strings.TrimSpace(*pkg) == "" {
+		return
+	}
+	var parsed []string
+	if err := json.Unmarshal([]byte(strings.TrimSpace(*pkg)), &parsed); err != nil {
+		return
+	}
+	for _, id := range parsed {
+		id = strings.TrimSpace(id)
+		if id != "" {
+			b.PackageServiceIDs = append(b.PackageServiceIDs, id)
+		}
+	}
+}
+
+func bookingHallIDsForInsert(ids []string) any {
+	if len(ids) == 0 {
+		return nil
+	}
+	b, err := json.Marshal(ids)
+	if err != nil {
+		return nil
+	}
+	return string(b)
+}
+
+func mergeBookingHallIDs(b *domain.Booking, raw *string) {
+	b.HallIDs = nil
+	if raw == nil || strings.TrimSpace(*raw) == "" {
+		return
+	}
+	var parsed []string
+	if err := json.Unmarshal([]byte(strings.TrimSpace(*raw)), &parsed); err != nil {
+		return
+	}
+	for _, id := range parsed {
+		id = strings.TrimSpace(id)
+		if id != "" {
+			b.HallIDs = append(b.HallIDs, id)
+		}
+	}
 }

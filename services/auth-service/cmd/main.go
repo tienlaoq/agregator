@@ -4,8 +4,8 @@ import (
 	"context"
 	"net"
 	"os"
-	"strings"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"google.golang.org/grpc"
@@ -14,12 +14,14 @@ import (
 	userv1 "github.com/tienlao/agregator/gen/go/user/v1"
 	"github.com/tienlao/agregator/pkg/grpcutil"
 	"github.com/tienlao/agregator/pkg/logger"
+	pkgmail "github.com/tienlao/agregator/pkg/mail"
 	"github.com/tienlao/agregator/pkg/postgres"
 	pkgredis "github.com/tienlao/agregator/pkg/redis"
 	pkgtelegram "github.com/tienlao/agregator/pkg/telegram"
 
 	"github.com/tienlao/agregator/services/auth-service/config"
 	delivery "github.com/tienlao/agregator/services/auth-service/internal/delivery/grpc"
+	"github.com/tienlao/agregator/services/auth-service/internal/passwordmail"
 	"github.com/tienlao/agregator/services/auth-service/internal/repository"
 	"github.com/tienlao/agregator/services/auth-service/internal/usecase"
 )
@@ -62,9 +64,16 @@ func main() {
 
 	credRepo := repository.NewCredentialRepo(pgPool)
 	tokenRepo := repository.NewRefreshTokenRepo(pgPool)
+	resetRepo := repository.NewPasswordResetRepo(pgPool)
+
+	smtpSender := pkgmail.NewSenderFromEnv()
+	frontendURL := strings.TrimSpace(os.Getenv("FRONTEND_URL"))
+	resetMail := passwordmail.New(smtpSender, frontendURL)
+	if !smtpSender.Enabled() {
+		log.Warn().Msg("SMTP not configured: password reset emails will not be sent (set SMTP_HOST, SMTP_FROM, SMTP_USER, SMTP_PASSWORD)")
+	}
 
 	tgClient := pkgtelegram.NewClient(os.Getenv("TELEGRAM_BOT_TOKEN"), os.Getenv("TELEGRAM_CHAT_ID"))
-	frontendURL := strings.TrimSpace(os.Getenv("FRONTEND_URL"))
 	if !tgClient.Enabled() {
 		log.Warn().Msg("Telegram registration notify disabled: set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID (e.g. deploy/.env)")
 	} else {
@@ -72,7 +81,9 @@ func main() {
 	}
 
 	uc := usecase.NewAuthUseCase(
-		credRepo, tokenRepo, userClient,
+		credRepo, tokenRepo,
+		resetRepo, resetMail, cfg.PasswordResetTTL,
+		userClient,
 		cfg.JWTSecret, cfg.JWTAccessTTL, cfg.JWTRefreshTTL,
 		tgClient, frontendURL, log,
 	)

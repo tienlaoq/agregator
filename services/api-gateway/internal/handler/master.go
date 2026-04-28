@@ -11,6 +11,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	masterv1 "github.com/tienlao/agregator/gen/go/master/v1"
+	pkgcities "github.com/tienlao/agregator/pkg/cities"
 	"github.com/tienlao/agregator/services/api-gateway/internal/apicatalog"
 	"github.com/tienlao/agregator/services/api-gateway/internal/middleware"
 	"google.golang.org/grpc/codes"
@@ -60,8 +61,8 @@ func masterProtoToJSON(m *masterv1.Master) map[string]any {
 		"phone":              m.GetPhone(),
 		"city":               m.GetCity(),
 		"work_format":        m.GetWorkFormat(),
-		"travel_radius_km":   m.GetTravelRadiusKm(),
-		"experience_years":   m.GetExperienceYears(),
+		"travel_radius_km": m.GetTravelRadiusKm(),
+		"experience_years": m.GetExperienceYears(),
 		"specializations":    m.GetSpecializations(),
 		"hourly_rate":        m.GetHourlyRate(),
 		"availability_json":  m.GetAvailabilityJson(),
@@ -83,6 +84,23 @@ func masterProtoToJSON(m *masterv1.Master) map[string]any {
 	if m.ModeratedAt != nil {
 		out["moderated_at"] = m.GetModeratedAt().AsTime().Format("2006-01-02T15:04:05Z07:00")
 	}
+	if m.TravelBaseLatitude != nil {
+		out["travel_base_latitude"] = *m.TravelBaseLatitude
+	}
+	if m.TravelBaseLongitude != nil {
+		out["travel_base_longitude"] = *m.TravelBaseLongitude
+	}
+	zones := make([]map[string]any, 0, len(m.GetTravelExcludeZones()))
+	for _, z := range m.GetTravelExcludeZones() {
+		zones = append(zones, map[string]any{
+			"id":         z.GetId(),
+			"latitude":   z.GetLatitude(),
+			"longitude":  z.GetLongitude(),
+			"radius_km":  z.GetRadiusKm(),
+			"label":      z.GetLabel(),
+		})
+	}
+	out["travel_exclude_zones"] = zones
 	return out
 }
 
@@ -95,12 +113,68 @@ func masterProtoToJSONPublic(m *masterv1.Master) map[string]any {
 // ListPublic GET /api/v1/masters
 func (h *MasterHandler) ListPublic(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
+	page, _ := strconv.Atoi(q.Get("page"))
+	pageSize, _ := strconv.Atoi(q.Get("page_size"))
 	limit, _ := strconv.Atoi(q.Get("limit"))
 	off, _ := strconv.Atoi(q.Get("offset"))
+	limit32 := int32(limit)
+	off32 := int32(off)
+	if pageSize > 0 {
+		limit32 = int32(pageSize)
+		if page < 1 {
+			page = 1
+		}
+		off32 = int32((page - 1) * pageSize)
+	} else if limit32 <= 0 {
+		limit32 = 50
+	}
+
+	query := strings.TrimSpace(q.Get("q"))
+	var cityList []string
+	if packed := strings.TrimSpace(q.Get("cities")); packed != "" {
+		if strings.Contains(packed, pkgcities.Sep) {
+			cityList = pkgcities.Split(packed)
+		} else {
+			for _, p := range strings.Split(packed, "|") {
+				if t := strings.TrimSpace(p); t != "" {
+					cityList = append(cityList, t)
+				}
+			}
+		}
+	} else {
+		for _, c := range q["city"] {
+			if t := strings.TrimSpace(c); t != "" {
+				cityList = append(cityList, t)
+			}
+		}
+	}
+	if len(cityList) == 0 {
+		if c := strings.TrimSpace(q.Get("city")); c != "" {
+			cityList = []string{c}
+		}
+	}
+
+	priceMinRub, _ := strconv.ParseInt(q.Get("price_min"), 10, 64)
+	priceMaxRub, _ := strconv.ParseInt(q.Get("price_max"), 10, 64)
+	var priceMinKop, priceMaxKop int64
+	if priceMinRub > 0 {
+		priceMinKop = priceMinRub * 100
+	}
+	if priceMaxRub > 0 {
+		priceMaxKop = priceMaxRub * 100
+	}
+
+	workFormat := strings.TrimSpace(q.Get("work_format"))
+
 	resp, err := h.client.ListPublicMasters(r.Context(), &masterv1.ListPublicMastersRequest{
-		City:   q.Get("city"),
-		Limit:  int32(limit),
-		Offset: int32(off),
+		City:            "",
+		Limit:           limit32,
+		Offset:          off32,
+		Q:               query,
+		Cities:          cityList,
+		WorkFormat:      workFormat,
+		PriceMinKopecks: priceMinKop,
+		PriceMaxKopecks: priceMaxKop,
 	})
 	if err != nil {
 		grpcErrorToHTTP(w, err)
@@ -206,9 +280,18 @@ func (h *MasterHandler) updateReqFromRaw(uid string, raw map[string]json.RawMess
 			}
 		}
 	}
+	setFloat64 := func(key string, field **float64) {
+		if v, ok := raw[key]; ok {
+			var n float64
+			if err := json.Unmarshal(v, &n); err == nil {
+				*field = proto.Float64(n)
+			}
+		}
+	}
 	var dn, bio, phone, city, wf, avj, plf *string
 	var tr, ex *int32
 	var hr *int64
+	var tblat, tblon *float64
 	setString("display_name", &dn)
 	setString("bio", &bio)
 	setString("phone", &phone)
@@ -219,6 +302,8 @@ func (h *MasterHandler) updateReqFromRaw(uid string, raw map[string]json.RawMess
 	setInt32("travel_radius_km", &tr)
 	setInt32("experience_years", &ex)
 	setInt64("hourly_rate", &hr)
+	setFloat64("travel_base_latitude", &tblat)
+	setFloat64("travel_base_longitude", &tblon)
 	req.DisplayName = dn
 	req.Bio = bio
 	req.Phone = phone
@@ -228,6 +313,8 @@ func (h *MasterHandler) updateReqFromRaw(uid string, raw map[string]json.RawMess
 	req.TravelRadiusKm = tr
 	req.ExperienceYears = ex
 	req.HourlyRate = hr
+	req.TravelBaseLatitude = tblat
+	req.TravelBaseLongitude = tblon
 	req.PayoutLegalForm = plf
 
 	if _, ok := raw["specializations"]; ok {
@@ -235,6 +322,28 @@ func (h *MasterHandler) updateReqFromRaw(uid string, raw map[string]json.RawMess
 		var specs []string
 		_ = json.Unmarshal(raw["specializations"], &specs)
 		req.Specializations = specs
+	}
+	if _, ok := raw["travel_exclude_zones"]; ok {
+		var zones []struct {
+			ID        string  `json:"id"`
+			Latitude  float64 `json:"latitude"`
+			Longitude float64 `json:"longitude"`
+			RadiusKm  float64 `json:"radius_km"`
+			Label     string  `json:"label"`
+		}
+		if err := json.Unmarshal(raw["travel_exclude_zones"], &zones); err != nil {
+			return nil, errors.New("invalid travel_exclude_zones")
+		}
+		req.ApplyTravelExcludeZones = true
+		for _, z := range zones {
+			req.TravelExcludeZones = append(req.TravelExcludeZones, &masterv1.MasterTravelExcludeZone{
+				Id:        z.ID,
+				Latitude:  z.Latitude,
+				Longitude: z.Longitude,
+				RadiusKm:  z.RadiusKm,
+				Label:     z.Label,
+			})
+		}
 	}
 	if v, ok := raw["services"]; ok {
 		var items []masterServicePatch

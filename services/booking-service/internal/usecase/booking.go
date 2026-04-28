@@ -51,15 +51,17 @@ func NewBookingUseCase(
 }
 
 type CreateBookingInput struct {
-	UserID    string
-	VenueID   string
-	VenueName string
-	ServiceID string
-	Date      string
-	TimeFrom  string
-	TimeTo    string
-	Guests    int32
-	Comment   string
+	UserID     string
+	VenueID    string
+	VenueName  string
+	ServiceID  string
+	ServiceIDs []string
+	HallIDs    []string
+	Date       string
+	TimeFrom   string
+	TimeTo     string
+	Guests     int32
+	Comment    string
 }
 
 func (uc *BookingUseCase) CreateBooking(ctx context.Context, in CreateBookingInput) (*domain.Booking, error) {
@@ -86,7 +88,12 @@ func (uc *BookingUseCase) CreateBooking(ctx context.Context, in CreateBookingInp
 		return nil, pkgerr.InvalidArgument("максимальная длительность брони 12 часов")
 	}
 
-	totalPrice, err := computeBookingTotalPrice(vResp, in.ServiceID, minutes)
+	effectiveIDs := normalizeBookingServiceIDs(in.ServiceIDs, in.ServiceID)
+	hallIDs := normalizeBookingHallIDs(in.HallIDs)
+	if err := validateHallIDs(vResp, hallIDs); err != nil {
+		return nil, err
+	}
+	totalPrice, err := computeBookingTotalPriceMulti(vResp, effectiveIDs, hallIDs, minutes)
 	if err != nil {
 		return nil, err
 	}
@@ -123,18 +130,21 @@ func (uc *BookingUseCase) CreateBooking(ctx context.Context, in CreateBookingInp
 		return nil, pkgerr.InvalidArgument("дата визита не может быть в прошлом")
 	}
 
+	svcID, pkgIDs := persistServiceFields(effectiveIDs)
 	b := &domain.Booking{
-		UserID:     in.UserID,
-		VenueID:    in.VenueID,
-		VenueName:  in.VenueName,
-		ServiceID:  in.ServiceID,
-		Date:       dateParsed,
-		TimeFrom:   in.TimeFrom,
-		TimeTo:     in.TimeTo,
-		Guests:     in.Guests,
-		Comment:    in.Comment,
-		Status:     "pending",
-		TotalPrice: totalPrice,
+		UserID:              in.UserID,
+		VenueID:             in.VenueID,
+		VenueName:           in.VenueName,
+		ServiceID:           svcID,
+		PackageServiceIDs:   pkgIDs,
+		HallIDs:             hallIDs,
+		Date:                dateParsed,
+		TimeFrom:            in.TimeFrom,
+		TimeTo:              in.TimeTo,
+		Guests:              in.Guests,
+		Comment:             in.Comment,
+		Status:              "pending",
+		TotalPrice:          totalPrice,
 	}
 	if err := uc.repo.Create(ctx, b); err != nil {
 		return nil, fmt.Errorf("create booking: %w", err)
@@ -408,21 +418,127 @@ func hourlyTotal(priceFrom int64, minutes int) int64 {
 	return priceFrom * int64(h)
 }
 
-func computeBookingTotalPrice(v *venuev1.VenueResponse, serviceID string, minutes int) (int64, error) {
-	sid := strings.TrimSpace(serviceID)
-	if sid != "" {
+func normalizeBookingHallIDs(fromList []string) []string {
+	seen := make(map[string]struct{})
+	var out []string
+	for _, raw := range fromList {
+		id := strings.TrimSpace(raw)
+		if id == "" {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	return out
+}
+
+func validateHallIDs(v *venuev1.VenueResponse, ids []string) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	known := make(map[string]struct{}, len(v.GetHalls()))
+	for _, h := range v.GetHalls() {
+		known[h.GetId()] = struct{}{}
+	}
+	for _, id := range ids {
+		if _, ok := known[id]; !ok {
+			return pkgerr.InvalidArgument("выбранный зал не найден в этом заведении")
+		}
+	}
+	return nil
+}
+
+func effectiveHourlyPriceFromVenueAndHalls(v *venuev1.VenueResponse, hallIDs []string) int64 {
+	base := v.GetPriceFrom()
+	for _, hid := range hallIDs {
+		hid = strings.TrimSpace(hid)
+		if hid == "" {
+			continue
+		}
+		for _, h := range v.GetHalls() {
+			if h.GetId() != hid {
+				continue
+			}
+			if pf := h.GetPriceFrom(); pf > base {
+				base = pf
+			}
+			break
+		}
+	}
+	return base
+}
+
+func normalizeBookingServiceIDs(fromList []string, legacy string) []string {
+	seen := make(map[string]struct{})
+	var out []string
+	for _, raw := range fromList {
+		id := strings.TrimSpace(raw)
+		if id == "" {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	if len(out) > 0 {
+		return out
+	}
+	if id := strings.TrimSpace(legacy); id != "" {
+		return []string{id}
+	}
+	return nil
+}
+
+func persistServiceFields(ids []string) (serviceID string, packageIDs []string) {
+	switch len(ids) {
+	case 0:
+		return "", nil
+	case 1:
+		return ids[0], nil
+	default:
+		return "", ids
+	}
+}
+
+func computeBookingTotalPriceMulti(v *venuev1.VenueResponse, serviceIDs []string, hallIDs []string, minutes int) (int64, error) {
+	hourlyBase := effectiveHourlyPriceFromVenueAndHalls(v, hallIDs)
+	if len(serviceIDs) == 0 {
+		return hourlyTotal(hourlyBase, minutes), nil
+	}
+	var sum int64
+	hourlyParts := 0
+	for _, sid := range serviceIDs {
+		sid = strings.TrimSpace(sid)
+		if sid == "" {
+			continue
+		}
+		var found bool
 		for _, s := range v.GetServices() {
 			if s.GetId() != sid {
 				continue
 			}
+			found = true
 			if p := s.GetPrice(); p > 0 {
-				return p, nil
+				sum += p
+			} else {
+				hourlyParts++
+				sum += hourlyTotal(hourlyBase, minutes)
 			}
-			return hourlyTotal(v.GetPriceFrom(), minutes), nil
+			break
 		}
-		return 0, pkgerr.InvalidArgument("выбранная услуга не найдена у этого заведения")
+		if !found {
+			return 0, pkgerr.InvalidArgument("выбранная услуга не найдена у этого заведения")
+		}
 	}
-	return hourlyTotal(v.GetPriceFrom(), minutes), nil
+	if hourlyParts > 1 {
+		return 0, pkgerr.InvalidArgument("в одной брони можно не более одной услуги без фиксированной цены — выберите пакеты с ценой или только почасовой тариф")
+	}
+	return sum, nil
 }
 
 // AutoCompletePastVisits переводит confirmed → completed после окончания слота (date+time_to) в visitTimeZone.

@@ -69,6 +69,30 @@ func validateVenueVerificationCore(v *domain.Venue) error {
 	return nil
 }
 
+// ValidateVenueDraftReadyForReview проверяет карточку и блок проверки перед переводом черновика в очередь модерации.
+func ValidateVenueDraftReadyForReview(v *domain.Venue) error {
+	if err := validateVenueVerificationCore(v); err != nil {
+		return err
+	}
+	if len(v.Photos) == 0 {
+		return pkgerr.InvalidArgument("добавьте хотя бы одно фото карточки заведения")
+	}
+	var hallOk bool
+	for _, h := range v.Halls {
+		if strings.TrimSpace(h.Name) != "" && h.PriceFrom > 0 {
+			hallOk = true
+			break
+		}
+	}
+	if !hallOk {
+		return pkgerr.InvalidArgument("укажите название и цену за час хотя бы для одного зала")
+	}
+	if utf8.RuneCountInString(strings.TrimSpace(v.Description)) < 40 {
+		return pkgerr.InvalidArgument("опишите заведение: не менее 40 символов (примерно 2–3 предложения)")
+	}
+	return nil
+}
+
 // ValidateVenueVerificationForCreate — обязательные поля при создании заведения.
 func ValidateVenueVerificationForCreate(v *domain.Venue) error {
 	return validateVenueVerificationCore(v)

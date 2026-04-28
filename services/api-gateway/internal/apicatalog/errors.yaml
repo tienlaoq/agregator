@@ -30,6 +30,10 @@ errors:
     code: GATEWAY.REQUEST.EMAIL_REQUIRED
     message: "Укажите email"
 
+  - http_status: 429
+    code: GATEWAY.REQUEST.RATE_LIMITED
+    message: "Слишком много запросов. Повторите через несколько минут."
+
   - http_status: 404
     code: GATEWAY.VENUE.NOT_FOUND
     message: "Заведение не найдено"

@@ -43,6 +43,9 @@ var defaultParams = argon2Params{
 type AuthUseCase struct {
 	creds       domain.CredentialRepository
 	tokens      domain.RefreshTokenRepository
+	resetTokens domain.PasswordResetRepository
+	resetMail   PasswordResetMailer
+	resetTTL    time.Duration
 	userClient  userv1.UserServiceClient
 	jwtSecret   string
 	accessTTL   time.Duration
@@ -55,6 +58,9 @@ type AuthUseCase struct {
 func NewAuthUseCase(
 	creds domain.CredentialRepository,
 	tokens domain.RefreshTokenRepository,
+	resetTokens domain.PasswordResetRepository,
+	resetMail PasswordResetMailer,
+	resetTTL time.Duration,
 	userClient userv1.UserServiceClient,
 	jwtSecret string,
 	accessTTL, refreshTTL time.Duration,
@@ -62,9 +68,15 @@ func NewAuthUseCase(
 	frontendURL string,
 	appLog zerolog.Logger,
 ) *AuthUseCase {
+	if resetTTL <= 0 {
+		resetTTL = time.Hour
+	}
 	return &AuthUseCase{
 		creds:       creds,
 		tokens:      tokens,
+		resetTokens: resetTokens,
+		resetMail:   resetMail,
+		resetTTL:    resetTTL,
 		userClient:  userClient,
 		jwtSecret:   jwtSecret,
 		accessTTL:   accessTTL,
@@ -369,6 +381,7 @@ func generateRefreshToken() (string, error) {
 	return base64.RawURLEncoding.EncodeToString(b), nil
 }
 
+// hashRefreshToken hashes an opaque raw secret for storage (refresh tokens and password-reset links).
 func hashRefreshToken(token string) string {
 	h := sha256.Sum256([]byte(token))
 	return base64.RawURLEncoding.EncodeToString(h[:])

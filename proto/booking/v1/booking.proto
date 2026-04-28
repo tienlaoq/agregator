@@ -29,6 +29,10 @@ message CreateBookingRequest {
   int32 guests = 7;
   string comment = 8;
   string venue_name = 9;
+  // Несколько пакетных услуг; если не пусто — имеет приоритет над service_id.
+  repeated string service_ids = 10;
+  // Выбранные залы заведения (влияют на почасовую ставку: max с ценой заведения).
+  repeated string hall_ids = 11;
 }
 
 message BookingResponse {
@@ -46,6 +50,8 @@ message BookingResponse {
   string payment_url = 12;
   google.protobuf.Timestamp created_at = 13;
   string venue_name = 14;
+  repeated string package_service_ids = 15;
+  repeated string hall_ids = 16;
 }
 
 message GetBookingRequest {

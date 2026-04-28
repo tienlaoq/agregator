@@ -45,6 +45,14 @@ func (m *mockAuthClient) Logout(ctx context.Context, in *authv1.LogoutRequest, o
 	return nil, nil
 }
 
+func (m *mockAuthClient) RequestPasswordReset(ctx context.Context, in *authv1.RequestPasswordResetRequest, opts ...grpc.CallOption) (*authv1.RequestPasswordResetResponse, error) {
+	return &authv1.RequestPasswordResetResponse{}, nil
+}
+
+func (m *mockAuthClient) CompletePasswordReset(ctx context.Context, in *authv1.CompletePasswordResetRequest, opts ...grpc.CallOption) (*authv1.CompletePasswordResetResponse, error) {
+	return &authv1.CompletePasswordResetResponse{}, nil
+}
+
 func TestAuth_MissingHeader(t *testing.T) {
 	client := &mockAuthClient{}
 	h := Auth(client)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

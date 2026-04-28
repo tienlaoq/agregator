@@ -2,17 +2,14 @@ package suspendnotify
 
 import (
 	"context"
-	"encoding/base64"
 	"fmt"
-	"net/smtp"
-	"os"
 	"strings"
 	"time"
 
 	"github.com/rs/zerolog"
 	userv1 "github.com/tienlao/agregator/gen/go/user/v1"
 	venuev1 "github.com/tienlao/agregator/gen/go/venue/v1"
-	"github.com/tienlao/agregator/pkg/config"
+	pkgmail "github.com/tienlao/agregator/pkg/mail"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -22,12 +19,7 @@ type Sender struct {
 	venue      venuev1.VenueServiceClient
 	userClient userv1.UserServiceClient
 	log        zerolog.Logger
-
-	host     string
-	port     string
-	smtpUser string
-	smtpPass string
-	from     string
+	mail       *pkgmail.Sender
 }
 
 func NewSender(log zerolog.Logger, venue venuev1.VenueServiceClient, userClient userv1.UserServiceClient) *Sender {
@@ -35,16 +27,12 @@ func NewSender(log zerolog.Logger, venue venuev1.VenueServiceClient, userClient 
 		venue:      venue,
 		userClient: userClient,
 		log:        log.With().Str("component", "suspendnotify").Logger(),
-		host:       strings.TrimSpace(os.Getenv("SMTP_HOST")),
-		port:       strings.TrimSpace(config.GetEnv("SMTP_PORT", "587")),
-		smtpUser:   strings.TrimSpace(os.Getenv("SMTP_USER")),
-		smtpPass:   strings.TrimSpace(os.Getenv("SMTP_PASSWORD")),
-		from:       strings.TrimSpace(os.Getenv("SMTP_FROM")),
+		mail:       pkgmail.NewSenderFromEnv(),
 	}
 }
 
 func (s *Sender) Enabled() bool {
-	return s.host != "" && s.from != "" && s.smtpUser != "" && s.smtpPass != ""
+	return s.mail != nil && s.mail.Enabled()
 }
 
 // NotifyVenueSuspended не блокирует HTTP-ответ: письма уходят в фоне.
@@ -120,15 +108,11 @@ func (s *Sender) recipientEmails(ctx context.Context, venueID, ownerID string) (
 	return emails, nil
 }
 
-func (s *Sender) deliver(emails []string, subjectLine, body string) error {
+func (s *Sender) deliver(ctx context.Context, emails []string, subjectLine, body string) error {
 	if len(emails) == 0 {
 		return nil
 	}
-	subject := encodeRFC2047Word(subjectLine)
-	addr := fmt.Sprintf("%s:%s", s.host, s.port)
-	auth := smtp.PlainAuth("", s.smtpUser, s.smtpPass, s.host)
-	msg := buildRFC822(s.from, emails, subject, body)
-	return smtp.SendMail(addr, auth, s.from, emails, msg)
+	return s.mail.SendPlain(ctx, emails, subjectLine, body)
 }
 
 func (s *Sender) sendSuspended(ctx context.Context, venueID, ownerID, venueName, moderationComment string) error {
@@ -145,7 +129,7 @@ func (s *Sender) sendSuspended(ctx context.Context, venueID, ownerID, venueName,
 		venueName,
 		strings.TrimSpace(moderationComment),
 	)
-	return s.deliver(emails, subject, body)
+	return s.deliver(ctx, emails, subject, body)
 }
 
 func (s *Sender) sendResumed(ctx context.Context, venueID, ownerID, venueName, moderatorNote string) error {
@@ -163,7 +147,7 @@ func (s *Sender) sendResumed(ctx context.Context, venueID, ownerID, venueName, m
 		body += fmt.Sprintf("\nКомментарий модератора:\n%s\n", note)
 	}
 	body += "\nСпасибо, что вы с нами.\n"
-	return s.deliver(emails, subject, body)
+	return s.deliver(ctx, emails, subject, body)
 }
 
 func contains(sl []string, v string) bool {
@@ -173,18 +157,4 @@ func contains(sl []string, v string) bool {
 		}
 	}
 	return false
-}
-
-func encodeRFC2047Word(s string) string {
-	return fmt.Sprintf("=?UTF-8?B?%s?=", base64.StdEncoding.EncodeToString([]byte(s)))
-}
-
-func buildRFC822(from string, to []string, subject, body string) []byte {
-	headers := fmt.Sprintf(
-		"From: %s\r\nTo: %s\r\nSubject: %s\r\nMIME-Version: 1.0\r\nContent-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: 8bit\r\n\r\n",
-		from,
-		strings.Join(to, ", "),
-		subject,
-	)
-	return []byte(headers + body + "\r\n")
 }

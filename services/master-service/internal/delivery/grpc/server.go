@@ -2,6 +2,7 @@ package grpc
 
 import (
 	"context"
+	"strings"
 
 	"github.com/google/uuid"
 	masterv1 "github.com/tienlao/agregator/gen/go/master/v1"
@@ -82,6 +83,14 @@ func (s *Server) UpdateMyProfile(ctx context.Context, req *masterv1.UpdateMyProf
 		v := req.GetTravelRadiusKm()
 		in.TravelRadiusKm = &v
 	}
+	if req.TravelBaseLatitude != nil {
+		v := req.GetTravelBaseLatitude()
+		in.TravelBaseLatitude = &v
+	}
+	if req.TravelBaseLongitude != nil {
+		v := req.GetTravelBaseLongitude()
+		in.TravelBaseLongitude = &v
+	}
 	if req.ExperienceYears != nil {
 		v := req.GetExperienceYears()
 		in.ExperienceYears = &v
@@ -101,6 +110,18 @@ func (s *Server) UpdateMyProfile(ctx context.Context, req *masterv1.UpdateMyProf
 	if req.PayoutLegalForm != nil {
 		v := *req.PayoutLegalForm
 		in.PayoutLegalForm = &v
+	}
+	if req.GetApplyTravelExcludeZones() {
+		in.ApplyTravelExcludeZones = true
+		for _, z := range req.GetTravelExcludeZones() {
+			in.TravelExcludeZones = append(in.TravelExcludeZones, domain.MasterTravelExcludeZone{
+				ID:        z.GetId(),
+				Latitude:  z.GetLatitude(),
+				Longitude: z.GetLongitude(),
+				RadiusKm:  z.GetRadiusKm(),
+				Label:     z.GetLabel(),
+			})
+		}
 	}
 	if req.GetApplyServicesReplace() {
 		in.ApplyServicesReplace = true
@@ -142,7 +163,22 @@ func (s *Server) SubmitForReview(ctx context.Context, req *masterv1.SubmitMaster
 }
 
 func (s *Server) ListPublicMasters(ctx context.Context, req *masterv1.ListPublicMastersRequest) (*masterv1.ListMastersResponse, error) {
-	list, total, err := s.uc.ListPublic(ctx, req.GetCity(), req.GetLimit(), req.GetOffset())
+	cities := append([]string(nil), req.GetCities()...)
+	if len(cities) == 0 {
+		if c := strings.TrimSpace(req.GetCity()); c != "" {
+			cities = []string{c}
+		}
+	}
+	params := domain.ListPublicMastersParams{
+		Query:           strings.TrimSpace(req.GetQ()),
+		Cities:          cities,
+		WorkFormat:      strings.TrimSpace(req.GetWorkFormat()),
+		PriceMinKopecks: req.GetPriceMinKopecks(),
+		PriceMaxKopecks: req.GetPriceMaxKopecks(),
+		Limit:           req.GetLimit(),
+		Offset:          req.GetOffset(),
+	}
+	list, total, err := s.uc.ListPublic(ctx, params)
 	if err != nil {
 		return nil, err
 	}
@@ -321,16 +357,16 @@ func masterToProto(m *domain.Master) *masterv1.Master {
 		})
 	}
 	pb := &masterv1.Master{
-		Id:                 m.ID.String(),
-		UserId:             m.UserID.String(),
-		Slug:               m.Slug,
-		DisplayName:        m.DisplayName,
-		Bio:                m.Bio,
-		Phone:              m.Phone,
-		City:               m.City,
-		WorkFormat:         m.WorkFormat,
-		TravelRadiusKm:     m.TravelRadiusKm,
-		ExperienceYears:    m.ExperienceYears,
+		Id:              m.ID.String(),
+		UserId:          m.UserID.String(),
+		Slug:            m.Slug,
+		DisplayName:     m.DisplayName,
+		Bio:             m.Bio,
+		Phone:           m.Phone,
+		City:            m.City,
+		WorkFormat:      m.WorkFormat,
+		TravelRadiusKm:  m.TravelRadiusKm,
+		ExperienceYears: m.ExperienceYears,
 		Specializations:    m.Specializations,
 		HourlyRate:         m.HourlyRate,
 		AvailabilityJson:   m.AvailabilityJSON,
@@ -348,6 +384,24 @@ func masterToProto(m *domain.Master) *masterv1.Master {
 	}
 	if m.ModeratedAt != nil {
 		pb.ModeratedAt = timestamppb.New(*m.ModeratedAt)
+	}
+	if m.TravelBaseLatitude != nil {
+		lat := *m.TravelBaseLatitude
+		pb.TravelBaseLatitude = &lat
+	}
+	if m.TravelBaseLongitude != nil {
+		lon := *m.TravelBaseLongitude
+		pb.TravelBaseLongitude = &lon
+	}
+	for i := range m.TravelExcludeZones {
+		z := &m.TravelExcludeZones[i]
+		pb.TravelExcludeZones = append(pb.TravelExcludeZones, &masterv1.MasterTravelExcludeZone{
+			Id:        z.ID,
+			Latitude:  z.Latitude,
+			Longitude: z.Longitude,
+			RadiusKm:  z.RadiusKm,
+			Label:     z.Label,
+		})
 	}
 	return pb
 }

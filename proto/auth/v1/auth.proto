@@ -13,6 +13,8 @@ service AuthService {
   rpc RefreshToken(RefreshTokenRequest) returns (RefreshTokenResponse);
   rpc ValidateToken(ValidateTokenRequest) returns (ValidateTokenResponse);
   rpc Logout(LogoutRequest) returns (LogoutResponse);
+  rpc RequestPasswordReset(RequestPasswordResetRequest) returns (RequestPasswordResetResponse);
+  rpc CompletePasswordReset(CompletePasswordResetRequest) returns (CompletePasswordResetResponse);
 }
 
 message RegisterRequest {
@@ -80,3 +82,16 @@ message OAuthLoginResponse {
 }
 
 message LogoutResponse {}
+
+message RequestPasswordResetRequest {
+  string email = 1;
+}
+
+message RequestPasswordResetResponse {}
+
+message CompletePasswordResetRequest {
+  string token = 1;
+  string new_password = 2;
+}
+
+message CompletePasswordResetResponse {}

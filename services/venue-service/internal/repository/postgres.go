@@ -1126,6 +1126,10 @@ func (r *venueRepo) ReplaceVenueHalls(ctx context.Context, venueID uuid.UUID, it
 		if name == "" {
 			return fmt.Errorf("hall name is required")
 		}
+		amenities := it.Amenities
+		if amenities == nil {
+			amenities = []string{}
+		}
 		if it.ID != nil {
 			var vid uuid.UUID
 			err := tx.QueryRow(ctx, `SELECT venue_id FROM venue_halls WHERE id = $1`, *it.ID).Scan(&vid)
@@ -1141,7 +1145,7 @@ func (r *venueRepo) ReplaceVenueHalls(ctx context.Context, venueID uuid.UUID, it
 			if _, err := tx.Exec(ctx, `
 				UPDATE venue_halls SET name = $1, price_from = $2, capacity = $3, amenities = $4, sort_order = $5, updated_at = now()
 				WHERE id = $6 AND venue_id = $7`,
-				name, it.PriceFrom, it.Capacity, it.Amenities, int32(i), *it.ID, venueID,
+				name, it.PriceFrom, it.Capacity, amenities, int32(i), *it.ID, venueID,
 			); err != nil {
 				return fmt.Errorf("update venue_hall: %w", err)
 			}
@@ -1151,7 +1155,7 @@ func (r *venueRepo) ReplaceVenueHalls(ctx context.Context, venueID uuid.UUID, it
 			err := tx.QueryRow(ctx, `
 				INSERT INTO venue_halls (venue_id, name, price_from, capacity, amenities, sort_order)
 				VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
-				venueID, name, it.PriceFrom, it.Capacity, it.Amenities, int32(i),
+				venueID, name, it.PriceFrom, it.Capacity, amenities, int32(i),
 			).Scan(&newID)
 			if err != nil {
 				return fmt.Errorf("insert venue_hall: %w", err)

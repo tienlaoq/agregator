@@ -270,6 +270,19 @@ func (uc *VenueUseCase) ListByStatus(ctx context.Context, status string, page, p
 }
 
 func (uc *VenueUseCase) SubmitVenueForReview(ctx context.Context, venueID, ownerID uuid.UUID) (*domain.Venue, error) {
+	v, err := uc.repo.GetByID(ctx, venueID)
+	if err != nil {
+		return nil, err
+	}
+	if v == nil {
+		return nil, pkgerrors.NotFound("venue not found")
+	}
+	if v.OwnerID != ownerID || v.Status != domain.StatusDraft {
+		return nil, pkgerrors.NotFound("venue not found or not a draft")
+	}
+	if err := ValidateVenueDraftReadyForReview(v); err != nil {
+		return nil, err
+	}
 	ok, err := uc.repo.SubmitDraftForReview(ctx, venueID, ownerID)
 	if err != nil {
 		return nil, err
@@ -277,7 +290,7 @@ func (uc *VenueUseCase) SubmitVenueForReview(ctx context.Context, venueID, owner
 	if !ok {
 		return nil, pkgerrors.NotFound("venue not found or not a draft")
 	}
-	v, err := uc.repo.GetByID(ctx, venueID)
+	v, err = uc.repo.GetByID(ctx, venueID)
 	if err != nil {
 		return nil, err
 	}

@@ -105,15 +105,15 @@ function LoginForm() {
         <CardContent className="space-y-6">
           {/* OAuth Buttons */}
           <div className="grid grid-cols-2 gap-3">
-            <Button variant="outline" className="gap-2" type="button" asChild>
+            <Button variant="outline" className="min-w-0 gap-2" type="button" asChild>
               <a href={`${API_URL}/api/v1/auth/vk`}>
-                <VKIcon className="h-5 w-5" />
+                <VKIcon className="h-5 w-5 shrink-0" />
                 ВКонтакте
               </a>
             </Button>
-            <Button variant="outline" className="gap-2" type="button" asChild>
+            <Button variant="outline" className="min-w-0 gap-2" type="button" asChild>
               <a href={`${API_URL}/api/v1/auth/google`}>
-                <GoogleIcon className="h-5 w-5" />
+                <GoogleIcon className="h-5 w-5 shrink-0" />
                 Google
               </a>
             </Button>
@@ -158,12 +158,19 @@ function LoginForm() {
             </Button>
           </form>
 
-          <p className="text-center text-sm text-muted-foreground">
-            Нет аккаунта?{" "}
-            <Link href="/auth/register" className="font-medium text-primary hover:underline">
-              Зарегистрироваться
-            </Link>
-          </p>
+          <div className="space-y-2 text-center text-sm text-muted-foreground">
+            <p>
+              Нет аккаунта?{" "}
+              <Link href="/auth/register" className="font-medium text-primary hover:underline">
+                Зарегистрироваться
+              </Link>
+            </p>
+            <p>
+              <Link href="/auth/forgot-password" className="font-medium text-primary hover:underline">
+                Забыли пароль?
+              </Link>
+            </p>
+          </div>
         </CardContent>
       </Card>
     </div>

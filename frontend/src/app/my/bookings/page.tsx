@@ -4,22 +4,14 @@ import { useEffect } from "react"
 import { useRouter } from "next/navigation"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import Link from "next/link"
-import { Card, CardContent } from "@/components/ui/card"
-import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { Badge } from "@/components/ui/badge"
+import { BookingCardLayout } from "@/components/banya/booking-card-layout"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { getMyBookings, cancelBooking } from "@/lib/api"
 import { useAuthStore } from "@/store/auth"
 import type { Booking } from "@/lib/types"
 import { CalendarDays, Users, Clock, X } from "lucide-react"
-
-const statusConfig: Record<string, { label: string; className: string }> = {
-  pending: { label: "Ожидает", className: "bg-accent text-accent-foreground" },
-  payment_pending: { label: "Ожидает оплаты", className: "bg-yellow-100 text-yellow-800" },
-  confirmed: { label: "Подтверждено", className: "bg-primary/10 text-primary" },
-  completed: { label: "Завершено", className: "bg-muted text-muted-foreground" },
-  cancelled: { label: "Отменено", className: "bg-destructive/10 text-destructive" },
-}
 
 function formatTime(b: Booking): string {
   if (b.time_from && b.time_to) return `${b.time_from}–${b.time_to}`
@@ -28,52 +20,46 @@ function formatTime(b: Booking): string {
 }
 
 function BookingCard({ booking, onCancel, cancelling }: { booking: Booking; onCancel: (id: string) => void; cancelling: boolean }) {
-  const status = statusConfig[booking.status] ?? statusConfig.pending
-
   return (
-    <Card className="border-border">
-      <CardContent className="p-5">
-        <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-          <div className="space-y-2">
-            <div className="flex items-center gap-3">
-              <h3 className="font-semibold text-card-foreground">{booking.venue_name || "Без названия"}</h3>
-              <Badge className={status.className}>{status.label}</Badge>
-            </div>
-            <div className="flex flex-wrap gap-4 text-sm text-muted-foreground">
-              <div className="flex items-center gap-1">
-                <CalendarDays className="h-4 w-4" />
-                {new Date(booking.date).toLocaleDateString("ru-RU")}
-              </div>
-              <div className="flex items-center gap-1">
-                <Clock className="h-4 w-4" />
-                {formatTime(booking)}
-              </div>
-              <div className="flex items-center gap-1">
-                <Users className="h-4 w-4" />
-                {booking.guests} гостей
-              </div>
-            </div>
+    <BookingCardLayout
+      title={booking.venue_name || "Без названия"}
+      status={booking.status}
+      meta={
+        <div className="flex flex-wrap gap-4 text-sm text-muted-foreground">
+          <div className="flex items-center gap-1">
+            <CalendarDays className="h-4 w-4 shrink-0" />
+            {new Date(booking.date).toLocaleDateString("ru-RU")}
           </div>
-          <div className="flex items-center gap-4">
-            <span className="text-lg font-bold text-foreground">
-              {booking.total_price.toLocaleString("ru-RU")} ₽
-            </span>
-            {(booking.status === "pending" || booking.status === "confirmed") && (
-              <Button
-                variant="outline"
-                size="sm"
-                className="gap-1 text-destructive hover:text-destructive"
-                onClick={() => onCancel(booking.id)}
-                disabled={cancelling}
-              >
-                <X className="h-4 w-4" />
-                Отменить
-              </Button>
-            )}
+          <div className="flex items-center gap-1">
+            <Clock className="h-4 w-4 shrink-0" />
+            {formatTime(booking)}
+          </div>
+          <div className="flex items-center gap-1">
+            <Users className="h-4 w-4 shrink-0" />
+            {booking.guests} гостей
           </div>
         </div>
-      </CardContent>
-    </Card>
+      }
+      aside={
+        <>
+          <span className="text-lg font-bold text-foreground">
+            {booking.total_price.toLocaleString("ru-RU")} ₽
+          </span>
+          {(booking.status === "pending" || booking.status === "confirmed") && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="gap-1 text-destructive hover:text-destructive"
+              onClick={() => onCancel(booking.id)}
+              disabled={cancelling}
+            >
+              <X className="h-4 w-4" />
+              Отменить
+            </Button>
+          )}
+        </>
+      }
+    />
   )
 }
 

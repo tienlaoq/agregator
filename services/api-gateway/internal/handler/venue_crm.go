@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"net/http"
 	"strings"
 
@@ -12,6 +13,46 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
+
+type venueStaffUserDisplay struct {
+	name  string
+	email string
+}
+
+func uniqueNonEmptyUserIDs(ids []string) []string {
+	seen := make(map[string]struct{}, len(ids))
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	return out
+}
+
+func venueStaffLoadUserDisplays(ctx context.Context, c userv1.UserServiceClient, userIDs []string) map[string]venueStaffUserDisplay {
+	out := make(map[string]venueStaffUserDisplay, len(userIDs))
+	if c == nil || len(userIDs) == 0 {
+		return out
+	}
+	for _, id := range userIDs {
+		u, err := c.GetUser(ctx, &userv1.GetUserRequest{Id: id})
+		if err != nil || u == nil {
+			continue
+		}
+		out[id] = venueStaffUserDisplay{
+			name:  strings.TrimSpace(u.GetName()),
+			email: strings.TrimSpace(u.GetEmail()),
+		}
+	}
+	return out
+}
 
 func (h *VenueHandler) ListVenueStaff(w http.ResponseWriter, r *http.Request) {
 	actorID := middleware.UserIDFromCtx(r.Context())
@@ -28,14 +69,42 @@ func (h *VenueHandler) ListVenueStaff(w http.ResponseWriter, r *http.Request) {
 		grpcErrorToHTTP(w, err)
 		return
 	}
-	out := make([]map[string]any, 0, len(resp.GetMembers()))
-	for _, m := range resp.GetMembers() {
-		out = append(out, map[string]any{
-			"user_id":    m.GetUserId(),
+	members := resp.GetMembers()
+	idList := make([]string, 0, len(members)*2)
+	for _, m := range members {
+		idList = append(idList, m.GetUserId(), m.GetInvitedBy())
+	}
+	uniq := uniqueNonEmptyUserIDs(idList)
+	profiles := venueStaffLoadUserDisplays(r.Context(), h.userClient, uniq)
+
+	out := make([]map[string]any, 0, len(members))
+	for _, m := range members {
+		uid := strings.TrimSpace(m.GetUserId())
+		inv := strings.TrimSpace(m.GetInvitedBy())
+		up := profiles[uid]
+		ip := profiles[inv]
+		row := map[string]any{
+			"user_id":    uid,
 			"role":       m.GetRole(),
-			"invited_by": m.GetInvitedBy(),
+			"invited_by": inv,
 			"created_at": m.GetCreatedAt().AsTime(),
-		})
+		}
+		if up.name != "" {
+			row["user_name"] = up.name
+		}
+		if up.email != "" {
+			row["user_email"] = up.email
+		}
+		if ip.name != "" {
+			row["inviter_name"] = ip.name
+		}
+		if ip.email != "" {
+			row["inviter_email"] = ip.email
+		}
+		if inv != "" && inv == actorID {
+			row["inviter_is_you"] = true
+		}
+		out = append(out, row)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"staff": out})
 }

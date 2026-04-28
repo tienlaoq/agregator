@@ -645,11 +645,15 @@ type venueHallItemReq struct {
 func venueHallItemsToProto(items []venueHallItemReq) []*venuev1.VenueHallInput {
 	out := make([]*venuev1.VenueHallInput, 0, len(items))
 	for _, h := range items {
+		am := h.Amenities
+		if am == nil {
+			am = []string{}
+		}
 		hi := &venuev1.VenueHallInput{
 			Name:      strings.TrimSpace(h.Name),
 			PriceFrom: h.PriceFrom,
 			Capacity:  h.Capacity,
-			Amenities: h.Amenities,
+			Amenities: am,
 			SortOrder: h.SortOrder,
 		}
 		if h.ID != nil {

@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -14,6 +15,44 @@ import (
 
 	"github.com/tienlao/agregator/services/master-service/internal/domain"
 )
+
+func float64PtrFromNull(n sql.NullFloat64) *float64 {
+	if !n.Valid {
+		return nil
+	}
+	f := n.Float64
+	return &f
+}
+
+func float64PtrArg(p *float64) any {
+	if p == nil {
+		return nil
+	}
+	return *p
+}
+
+func marshalTravelExcludeZonesJSON(z []domain.MasterTravelExcludeZone) (string, error) {
+	if len(z) == 0 {
+		return "[]", nil
+	}
+	b, err := json.Marshal(z)
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
+}
+
+func unmarshalTravelExcludeZonesJSON(s string) ([]domain.MasterTravelExcludeZone, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return nil, nil
+	}
+	var z []domain.MasterTravelExcludeZone
+	if err := json.Unmarshal([]byte(s), &z); err != nil {
+		return nil, err
+	}
+	return z, nil
+}
 
 type MasterRepo struct {
 	pool *pgxpool.Pool
@@ -27,14 +66,20 @@ func (r *MasterRepo) Insert(ctx context.Context, m *domain.Master) error {
 	const q = `
 INSERT INTO masters (
   id, user_id, slug, display_name, bio, phone, city, work_format,
-  travel_radius_km, experience_years, specializations, hourly_rate, availability_json,
+  travel_radius_km, travel_base_latitude, travel_base_longitude, travel_exclude_zones_json,
+  experience_years, specializations, hourly_rate, availability_json,
   payout_legal_form,
   status, moderation_comment, moderated_by, moderated_at
-) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
+) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
 `
-	_, err := r.pool.Exec(ctx, q,
+	zj, err := marshalTravelExcludeZonesJSON(m.TravelExcludeZones)
+	if err != nil {
+		return err
+	}
+	_, err = r.pool.Exec(ctx, q,
 		m.ID, m.UserID, m.Slug, m.DisplayName, m.Bio, m.Phone, m.City, m.WorkFormat,
-		m.TravelRadiusKm, m.ExperienceYears, m.Specializations, m.HourlyRate, m.AvailabilityJSON,
+		m.TravelRadiusKm, float64PtrArg(m.TravelBaseLatitude), float64PtrArg(m.TravelBaseLongitude), zj,
+		m.ExperienceYears, m.Specializations, m.HourlyRate, m.AvailabilityJSON,
 		m.PayoutLegalForm,
 		m.Status, m.ModerationComment, m.ModeratedBy, m.ModeratedAt,
 	)
@@ -44,7 +89,8 @@ INSERT INTO masters (
 func (r *MasterRepo) GetByUserID(ctx context.Context, userID uuid.UUID) (*domain.Master, error) {
 	const q = `
 SELECT id, user_id, slug, display_name, bio, phone, city, work_format,
-  travel_radius_km, experience_years, specializations, hourly_rate, availability_json,
+  travel_radius_km, travel_base_latitude, travel_base_longitude, travel_exclude_zones_json,
+  experience_years, specializations, hourly_rate, availability_json,
   payout_legal_form,
   status, moderation_comment, moderated_by, moderated_at, created_at, updated_at
 FROM masters WHERE user_id = $1
@@ -55,7 +101,8 @@ FROM masters WHERE user_id = $1
 func (r *MasterRepo) GetByID(ctx context.Context, id uuid.UUID) (*domain.Master, error) {
 	const q = `
 SELECT id, user_id, slug, display_name, bio, phone, city, work_format,
-  travel_radius_km, experience_years, specializations, hourly_rate, availability_json,
+  travel_radius_km, travel_base_latitude, travel_base_longitude, travel_exclude_zones_json,
+  experience_years, specializations, hourly_rate, availability_json,
   payout_legal_form,
   status, moderation_comment, moderated_by, moderated_at, created_at, updated_at
 FROM masters WHERE id = $1
@@ -66,7 +113,8 @@ FROM masters WHERE id = $1
 func (r *MasterRepo) GetBySlug(ctx context.Context, s string) (*domain.Master, error) {
 	const q = `
 SELECT id, user_id, slug, display_name, bio, phone, city, work_format,
-  travel_radius_km, experience_years, specializations, hourly_rate, availability_json,
+  travel_radius_km, travel_base_latitude, travel_base_longitude, travel_exclude_zones_json,
+  experience_years, specializations, hourly_rate, availability_json,
   payout_legal_form,
   status, moderation_comment, moderated_by, moderated_at, created_at, updated_at
 FROM masters WHERE slug = $1
@@ -78,9 +126,11 @@ func (r *MasterRepo) scanMaster(ctx context.Context, row pgx.Row) (*domain.Maste
 	var m domain.Master
 	var modBy *uuid.UUID
 	var modAt sql.NullTime
+	var lat, lon sql.NullFloat64
+	var zonesJSON string
 	err := row.Scan(
 		&m.ID, &m.UserID, &m.Slug, &m.DisplayName, &m.Bio, &m.Phone, &m.City, &m.WorkFormat,
-		&m.TravelRadiusKm, &m.ExperienceYears, &m.Specializations, &m.HourlyRate, &m.AvailabilityJSON,
+		&m.TravelRadiusKm, &lat, &lon, &zonesJSON, &m.ExperienceYears, &m.Specializations, &m.HourlyRate, &m.AvailabilityJSON,
 		&m.PayoutLegalForm,
 		&m.Status, &m.ModerationComment, &modBy, &modAt, &m.CreatedAt, &m.UpdatedAt,
 	)
@@ -94,6 +144,14 @@ func (r *MasterRepo) scanMaster(ctx context.Context, row pgx.Row) (*domain.Maste
 	if modAt.Valid {
 		t := modAt.Time
 		m.ModeratedAt = &t
+	}
+	m.TravelBaseLatitude = float64PtrFromNull(lat)
+	m.TravelBaseLongitude = float64PtrFromNull(lon)
+	zones, zerr := unmarshalTravelExcludeZonesJSON(zonesJSON)
+	if zerr != nil {
+		m.TravelExcludeZones = nil
+	} else {
+		m.TravelExcludeZones = zones
 	}
 	svcs, err := r.loadServices(ctx, m.ID)
 	if err != nil {
@@ -131,15 +189,22 @@ func (r *MasterRepo) UpdateProfile(ctx context.Context, m *domain.Master) error 
 	const q = `
 UPDATE masters SET
   display_name = $2, bio = $3, phone = $4, city = $5, work_format = $6,
-  travel_radius_km = $7, experience_years = $8, specializations = $9,
-  hourly_rate = $10, availability_json = $11, payout_legal_form = $12, status = $13,
-  moderation_comment = $14, moderated_by = $15, moderated_at = $16,
+  travel_radius_km = $7, travel_base_latitude = $8, travel_base_longitude = $9,
+  travel_exclude_zones_json = $10,
+  experience_years = $11, specializations = $12,
+  hourly_rate = $13, availability_json = $14, payout_legal_form = $15, status = $16,
+  moderation_comment = $17, moderated_by = $18, moderated_at = $19,
   updated_at = now()
 WHERE id = $1
 `
+	zj, err := marshalTravelExcludeZonesJSON(m.TravelExcludeZones)
+	if err != nil {
+		return err
+	}
 	ct, err := r.pool.Exec(ctx, q,
 		m.ID, m.DisplayName, m.Bio, m.Phone, m.City, m.WorkFormat,
-		m.TravelRadiusKm, m.ExperienceYears, m.Specializations, m.HourlyRate, m.AvailabilityJSON,
+		m.TravelRadiusKm, float64PtrArg(m.TravelBaseLatitude), float64PtrArg(m.TravelBaseLongitude), zj,
+		m.ExperienceYears, m.Specializations, m.HourlyRate, m.AvailabilityJSON,
 		m.PayoutLegalForm,
 		m.Status, m.ModerationComment, m.ModeratedBy, m.ModeratedAt,
 	)
@@ -174,7 +239,8 @@ func (r *MasterRepo) ListByStatus(ctx context.Context, statusFilter string, limi
 	countQ := `SELECT COUNT(*) FROM masters`
 	dataQ := `
 SELECT id, user_id, slug, display_name, bio, phone, city, work_format,
-  travel_radius_km, experience_years, specializations, hourly_rate, availability_json,
+  travel_radius_km, travel_base_latitude, travel_base_longitude, travel_exclude_zones_json,
+  experience_years, specializations, hourly_rate, availability_json,
   payout_legal_form,
   status, moderation_comment, moderated_by, moderated_at, created_at, updated_at
 FROM masters`
@@ -201,9 +267,11 @@ FROM masters`
 		var m domain.Master
 		var modBy *uuid.UUID
 		var modAt sql.NullTime
+		var lat, lon sql.NullFloat64
+		var zonesJSON string
 		if err := rows.Scan(
 			&m.ID, &m.UserID, &m.Slug, &m.DisplayName, &m.Bio, &m.Phone, &m.City, &m.WorkFormat,
-			&m.TravelRadiusKm, &m.ExperienceYears, &m.Specializations, &m.HourlyRate, &m.AvailabilityJSON,
+			&m.TravelRadiusKm, &lat, &lon, &zonesJSON, &m.ExperienceYears, &m.Specializations, &m.HourlyRate, &m.AvailabilityJSON,
 			&m.PayoutLegalForm,
 			&m.Status, &m.ModerationComment, &modBy, &modAt, &m.CreatedAt, &m.UpdatedAt,
 		); err != nil {
@@ -213,6 +281,14 @@ FROM masters`
 		if modAt.Valid {
 			t := modAt.Time
 			m.ModeratedAt = &t
+		}
+		m.TravelBaseLatitude = float64PtrFromNull(lat)
+		m.TravelBaseLongitude = float64PtrFromNull(lon)
+		zones, zerr := unmarshalTravelExcludeZonesJSON(zonesJSON)
+		if zerr != nil {
+			m.TravelExcludeZones = nil
+		} else {
+			m.TravelExcludeZones = zones
 		}
 		svcs, err := r.loadServices(ctx, m.ID)
 		if err != nil {
@@ -229,32 +305,93 @@ FROM masters`
 	return list, total, rows.Err()
 }
 
-func (r *MasterRepo) ListPublic(ctx context.Context, city string, limit, offset int32) ([]domain.Master, int32, error) {
+func (r *MasterRepo) ListPublic(ctx context.Context, p domain.ListPublicMastersParams) ([]domain.Master, int32, error) {
+	limit := p.Limit
 	if limit <= 0 || limit > 200 {
 		limit = 50
 	}
-	var total int32
-	baseWhere := ` WHERE status = 'active'`
-	args := []any{}
-	if strings.TrimSpace(city) != "" {
-		baseWhere += ` AND LOWER(city) = LOWER($1)`
-		args = append(args, strings.TrimSpace(city))
+	offset := p.Offset
+	if offset < 0 {
+		offset = 0
 	}
-	countQ := `SELECT COUNT(*) FROM masters` + baseWhere
-	dataQ := `
-SELECT id, user_id, slug, display_name, bio, phone, city, work_format,
-  travel_radius_km, experience_years, specializations, hourly_rate, availability_json,
-  payout_legal_form,
-  status, moderation_comment, moderated_by, moderated_at, created_at, updated_at
-FROM masters` + baseWhere
-	if err := r.pool.QueryRow(ctx, countQ, args...).Scan(&total); err != nil {
+
+	where := []string{"m.status = 'active'"}
+	args := []any{}
+	argPos := 1
+
+	q := strings.TrimSpace(p.Query)
+	if q != "" {
+		pat := "%" + q + "%"
+		// Имя, био, город, slug, телефон, специализации (TEXT[]), название/описание услуг.
+		ph := argPos
+		where = append(where, fmt.Sprintf(
+			"(m.display_name ILIKE $%[1]d OR m.bio ILIKE $%[1]d OR m.city ILIKE $%[1]d OR m.slug ILIKE $%[1]d OR m.phone ILIKE $%[1]d OR COALESCE(array_to_string(m.specializations, ' '), '') ILIKE $%[1]d OR EXISTS (SELECT 1 FROM master_services ms WHERE ms.master_id = m.id AND (ms.name ILIKE $%[1]d OR ms.description ILIKE $%[1]d)))",
+			ph,
+		))
+		args = append(args, pat)
+		argPos++
+	}
+
+	var cityArgs []string
+	for _, c := range p.Cities {
+		t := strings.TrimSpace(c)
+		if t == "" {
+			continue
+		}
+		cityArgs = append(cityArgs, strings.ToLower(t))
+	}
+	if len(cityArgs) > 0 {
+		where = append(where, fmt.Sprintf("LOWER(TRIM(m.city)) = ANY($%d::text[])", argPos))
+		args = append(args, cityArgs)
+		argPos++
+	}
+
+	wf := strings.TrimSpace(p.WorkFormat)
+	if wf != "" && strings.EqualFold(wf, "all") {
+		wf = ""
+	}
+	if wf != "" {
+		where = append(where, fmt.Sprintf("m.work_format = $%d", argPos))
+		args = append(args, wf)
+		argPos++
+	}
+
+	effKop := `COALESCE((SELECT MIN(ms.price) FROM master_services ms WHERE ms.master_id = m.id AND ms.price > 0), m.hourly_rate)`
+	if p.PriceMinKopecks > 0 {
+		where = append(where, fmt.Sprintf("(%s) >= $%d", effKop, argPos))
+		args = append(args, p.PriceMinKopecks)
+		argPos++
+	}
+	if p.PriceMaxKopecks > 0 {
+		where = append(where, fmt.Sprintf("(%s) <= $%d", effKop, argPos))
+		args = append(args, p.PriceMaxKopecks)
+		argPos++
+	}
+
+	whereSQL := "WHERE " + strings.Join(where, " AND ")
+	countQ := "SELECT COUNT(*) FROM masters m " + whereSQL
+
+	filterArgs := append([]any{}, args...)
+	var total int32
+	if err := r.pool.QueryRow(ctx, countQ, filterArgs...).Scan(&total); err != nil {
 		return nil, 0, err
 	}
-	limitArg := len(args) + 1
-	offsetArg := len(args) + 2
-	args = append(args, limit, offset)
-	dataQ += fmt.Sprintf(" ORDER BY display_name ASC LIMIT $%d OFFSET $%d", limitArg, offsetArg)
-	rows, err := r.pool.Query(ctx, dataQ, args...)
+
+	limIdx := len(filterArgs) + 1
+	offIdx := len(filterArgs) + 2
+	dataQ := fmt.Sprintf(`
+SELECT m.id, m.user_id, m.slug, m.display_name, m.bio, m.phone, m.city, m.work_format,
+  m.travel_radius_km, m.travel_base_latitude, m.travel_base_longitude, m.travel_exclude_zones_json,
+  m.experience_years, m.specializations, m.hourly_rate, m.availability_json,
+  m.payout_legal_form,
+  m.status, m.moderation_comment, m.moderated_by, m.moderated_at, m.created_at, m.updated_at
+FROM masters m
+%s
+ORDER BY m.display_name ASC
+LIMIT $%d OFFSET $%d`, whereSQL, limIdx, offIdx)
+
+	dataArgs := append(filterArgs, limit, offset)
+	rows, err := r.pool.Query(ctx, dataQ, dataArgs...)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -264,9 +401,11 @@ FROM masters` + baseWhere
 		var m domain.Master
 		var modBy *uuid.UUID
 		var modAt sql.NullTime
+		var lat, lon sql.NullFloat64
+		var zonesJSON string
 		if err := rows.Scan(
 			&m.ID, &m.UserID, &m.Slug, &m.DisplayName, &m.Bio, &m.Phone, &m.City, &m.WorkFormat,
-			&m.TravelRadiusKm, &m.ExperienceYears, &m.Specializations, &m.HourlyRate, &m.AvailabilityJSON,
+			&m.TravelRadiusKm, &lat, &lon, &zonesJSON, &m.ExperienceYears, &m.Specializations, &m.HourlyRate, &m.AvailabilityJSON,
 			&m.PayoutLegalForm,
 			&m.Status, &m.ModerationComment, &modBy, &modAt, &m.CreatedAt, &m.UpdatedAt,
 		); err != nil {
@@ -276,6 +415,14 @@ FROM masters` + baseWhere
 		if modAt.Valid {
 			t := modAt.Time
 			m.ModeratedAt = &t
+		}
+		m.TravelBaseLatitude = float64PtrFromNull(lat)
+		m.TravelBaseLongitude = float64PtrFromNull(lon)
+		zones, zerr := unmarshalTravelExcludeZonesJSON(zonesJSON)
+		if zerr != nil {
+			m.TravelExcludeZones = nil
+		} else {
+			m.TravelExcludeZones = zones
 		}
 		svcs, err := r.loadServices(ctx, m.ID)
 		if err != nil {

@@ -8,6 +8,10 @@ type Booking struct {
 	VenueID    string
 	VenueName  string
 	ServiceID  string
+	// PackageServiceIDs — несколько пакетов (из package_service_ids JSON); иначе пусто, см. ServiceID.
+	PackageServiceIDs []string
+	// HallIDs — выбранные залы (из booking_hall_ids JSON).
+	HallIDs []string
 	Date       time.Time
 	TimeFrom   string
 	TimeTo     string

@@ -1,0 +1,69 @@
+package handler
+
+import (
+	"context"
+	"net/http"
+	"strings"
+	"time"
+
+	authv1 "github.com/tienlao/agregator/gen/go/auth/v1"
+	"github.com/tienlao/agregator/services/api-gateway/internal/apicatalog"
+)
+
+const forgotPasswordSuccessMessageRU = "Если указанный адрес зарегистрирован и для него задан пароль, мы отправили на него ссылку для сброса."
+
+type forgotPasswordRequest struct {
+	Email string `json:"email"`
+}
+
+type completePasswordResetRequest struct {
+	Token       string `json:"token"`
+	NewPassword string `json:"new_password"`
+}
+
+func (h *AuthHandler) ForgotPassword(w http.ResponseWriter, r *http.Request) {
+	var req forgotPasswordRequest
+	if err := readJSON(r, &req); err != nil {
+		writeCatalog(w, apicatalog.GatewayRequestInvalidBody)
+		return
+	}
+	if strings.TrimSpace(req.Email) == "" {
+		writeCatalog(w, apicatalog.GatewayRequestEmailRequired)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 55*time.Second)
+	defer cancel()
+	_, err := h.client.RequestPasswordReset(ctx, &authv1.RequestPasswordResetRequest{
+		Email: strings.TrimSpace(req.Email),
+	})
+	if err != nil {
+		grpcErrorToHTTP(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"message": forgotPasswordSuccessMessageRU})
+}
+
+func (h *AuthHandler) ResetPassword(w http.ResponseWriter, r *http.Request) {
+	var req completePasswordResetRequest
+	if err := readJSON(r, &req); err != nil {
+		writeCatalog(w, apicatalog.GatewayRequestInvalidBody)
+		return
+	}
+	if strings.TrimSpace(req.Token) == "" || strings.TrimSpace(req.NewPassword) == "" {
+		writeCatalog(w, apicatalog.GatewayRequestInvalidBody)
+		return
+	}
+
+	_, err := h.client.CompletePasswordReset(r.Context(), &authv1.CompletePasswordResetRequest{
+		Token:       strings.TrimSpace(req.Token),
+		NewPassword: strings.TrimSpace(req.NewPassword),
+	})
+	if err != nil {
+		grpcErrorToHTTP(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "password_updated"})
+}

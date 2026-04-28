@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	pkgerrors "github.com/tienlao/agregator/pkg/errors"
+	"github.com/tienlao/agregator/pkg/geo"
 	"github.com/tienlao/agregator/services/master-service/internal/domain"
 )
 
@@ -21,7 +22,7 @@ type MasterRepo interface {
 	UpdateProfile(ctx context.Context, m *domain.Master) error
 	UpdateStatus(ctx context.Context, masterID uuid.UUID, status, comment string, moderatedBy *uuid.UUID) error
 	ListByStatus(ctx context.Context, statusFilter string, limit, offset int32) ([]domain.Master, int32, error)
-	ListPublic(ctx context.Context, city string, limit, offset int32) ([]domain.Master, int32, error)
+	ListPublic(ctx context.Context, params domain.ListPublicMastersParams) ([]domain.Master, int32, error)
 	ReplaceServices(ctx context.Context, masterID uuid.UUID, items []domain.MasterServiceUpsert) error
 	InsertModerationHistory(ctx context.Context, e *domain.ModerationHistoryEntry) error
 	ListModerationHistory(ctx context.Context, masterID uuid.UUID, limit int32) ([]domain.ModerationHistoryEntry, error)
@@ -107,6 +108,8 @@ type UpdateMasterInput struct {
 	City             *string
 	WorkFormat       *string
 	TravelRadiusKm         *int32
+	TravelBaseLatitude     *float64
+	TravelBaseLongitude    *float64
 	ExperienceYears        *int32
 	HourlyRate             *int64
 	AvailabilityJSON       *string
@@ -115,6 +118,8 @@ type UpdateMasterInput struct {
 	ApplySpecializations   bool
 	Specializations        []string
 	PayoutLegalForm        *string
+	ApplyTravelExcludeZones bool
+	TravelExcludeZones      []domain.MasterTravelExcludeZone
 }
 
 func (uc *MasterUseCase) UpdateMyProfile(ctx context.Context, userID uuid.UUID, in UpdateMasterInput) (*domain.Master, error) {
@@ -147,6 +152,13 @@ func (uc *MasterUseCase) UpdateMyProfile(ctx context.Context, userID uuid.UUID, 
 	if in.TravelRadiusKm != nil {
 		m.TravelRadiusKm = *in.TravelRadiusKm
 	}
+	if in.TravelBaseLatitude != nil || in.TravelBaseLongitude != nil {
+		if in.TravelBaseLatitude == nil || in.TravelBaseLongitude == nil {
+			return nil, pkgerrors.InvalidArgument("укажите широту и долготу метки на карте вместе")
+		}
+		m.TravelBaseLatitude = in.TravelBaseLatitude
+		m.TravelBaseLongitude = in.TravelBaseLongitude
+	}
 	if in.ExperienceYears != nil {
 		m.ExperienceYears = *in.ExperienceYears
 	}
@@ -165,6 +177,10 @@ func (uc *MasterUseCase) UpdateMyProfile(ctx context.Context, userID uuid.UUID, 
 	}
 	if in.PayoutLegalForm != nil {
 		v := strings.TrimSpace(strings.ToLower(*in.PayoutLegalForm))
+		// До миграции 005 в БД было «gph»; в UI и proto — «individual».
+		if v == "gph" {
+			v = domain.PayoutLegalFormIndividual
+		}
 		switch v {
 		case "", domain.PayoutLegalFormIP, domain.PayoutLegalFormOOO, domain.PayoutLegalFormIndividual, domain.PayoutLegalFormSelfEmployed:
 			m.PayoutLegalForm = v
@@ -172,12 +188,29 @@ func (uc *MasterUseCase) UpdateMyProfile(ctx context.Context, userID uuid.UUID, 
 			return nil, pkgerrors.InvalidArgument("invalid payout_legal_form")
 		}
 	}
+	if in.ApplyTravelExcludeZones {
+		m.TravelExcludeZones = in.TravelExcludeZones
+	}
 
 	if m.Status == domain.StatusActive {
 		m.Status = domain.StatusPendingReview
 		m.ModerationComment = ""
 		m.ModeratedBy = nil
 		m.ModeratedAt = nil
+	}
+
+	if m.WorkFormat == domain.WorkFormatVenue {
+		m.TravelBaseLatitude = nil
+		m.TravelBaseLongitude = nil
+		m.TravelRadiusKm = 0
+		m.TravelExcludeZones = nil
+	}
+
+	if err := validateTravelBaseForProfile(m); err != nil {
+		return nil, pkgerrors.InvalidArgument(err.Error())
+	}
+	if err := validateTravelExcludeZonesForProfile(m); err != nil {
+		return nil, pkgerrors.InvalidArgument(err.Error())
 	}
 
 	if err := uc.repo.UpdateProfile(ctx, m); err != nil {
@@ -266,6 +299,91 @@ func normalizeRussianMobileDigits(phone string) string {
 	}
 }
 
+func needsTravelBaseForFormat(wf string) bool {
+	switch strings.TrimSpace(strings.ToLower(wf)) {
+	case domain.WorkFormatMobile, domain.WorkFormatBoth:
+		return true
+	default:
+		return false
+	}
+}
+
+func validateTravelBaseForProfile(m *domain.Master) error {
+	if !needsTravelBaseForFormat(m.WorkFormat) {
+		return nil
+	}
+	if m.TravelRadiusKm <= 0 {
+		return fmt.Errorf("укажите расстояние в километрах от метки на карте")
+	}
+	if m.TravelBaseLatitude == nil || m.TravelBaseLongitude == nil {
+		return fmt.Errorf("поставьте метку на карте (точка отсчёта километража)")
+	}
+	lat := *m.TravelBaseLatitude
+	lon := *m.TravelBaseLongitude
+	if lat < -90 || lat > 90 || lon < -180 || lon > 180 {
+		return fmt.Errorf("некорректные координаты метки на карте")
+	}
+	return nil
+}
+
+const (
+	maxTravelExcludeZones = 20
+	minExcludeRadiusKm    = 0.1
+	maxExcludeRadiusKm    = 50.0
+)
+
+func validateTravelExcludeZones(zones []domain.MasterTravelExcludeZone) error {
+	if len(zones) > maxTravelExcludeZones {
+		return fmt.Errorf("не более %d зон, куда не выезжаете", maxTravelExcludeZones)
+	}
+	for i, z := range zones {
+		if strings.TrimSpace(z.ID) == "" {
+			return fmt.Errorf("зона %d: отсутствует id", i+1)
+		}
+		if z.Latitude < -90 || z.Latitude > 90 || z.Longitude < -180 || z.Longitude > 180 {
+			return fmt.Errorf("зона %d: некорректные координаты", i+1)
+		}
+		if z.RadiusKm < minExcludeRadiusKm || z.RadiusKm > maxExcludeRadiusKm {
+			return fmt.Errorf("зона %d: радиус от %.1f до %.0f км", i+1, minExcludeRadiusKm, maxExcludeRadiusKm)
+		}
+	}
+	return nil
+}
+
+func validateTravelExcludeZonesForProfile(m *domain.Master) error {
+	if !needsTravelBaseForFormat(m.WorkFormat) {
+		return nil
+	}
+	if err := validateTravelExcludeZones(m.TravelExcludeZones); err != nil {
+		return err
+	}
+	return validateTravelExcludeZonesInsideTravelRadius(m)
+}
+
+// Исключения — круги внутри зоны выезда: центр_исключения + радиус_исключения не дальше travel_radius_km от метки.
+func validateTravelExcludeZonesInsideTravelRadius(m *domain.Master) error {
+	if len(m.TravelExcludeZones) == 0 {
+		return nil
+	}
+	if m.TravelBaseLatitude == nil || m.TravelBaseLongitude == nil || m.TravelRadiusKm <= 0 {
+		return nil
+	}
+	blat, blon := *m.TravelBaseLatitude, *m.TravelBaseLongitude
+	R := float64(m.TravelRadiusKm)
+	// Небольшой допуск: карта / ввод км дают погрешность относительно формулы на сфере.
+	const epsKm = 0.05
+	for i, z := range m.TravelExcludeZones {
+		d := geo.HaversineKm(blat, blon, z.Latitude, z.Longitude)
+		if d+z.RadiusKm > R+epsKm {
+			return fmt.Errorf(
+				"зона «куда не выезжаю» %d: круг должен целиком помещаться в зону выезда от метки (%d км по карте); уменьшите радиус зоны или перенесите центр ближе к метке",
+				i+1, m.TravelRadiusKm,
+			)
+		}
+	}
+	return nil
+}
+
 func validateReadyForReview(m *domain.Master) error {
 	if strings.TrimSpace(m.DisplayName) == "" {
 		return fmt.Errorf("укажите имя или отображаемое имя")
@@ -283,16 +401,26 @@ func validateReadyForReview(m *domain.Master) error {
 	if len(m.Services) == 0 {
 		return fmt.Errorf("добавьте хотя бы одну услугу")
 	}
-	switch strings.TrimSpace(strings.ToLower(m.PayoutLegalForm)) {
+	plf := strings.TrimSpace(strings.ToLower(m.PayoutLegalForm))
+	if plf == "gph" {
+		plf = domain.PayoutLegalFormIndividual
+	}
+	switch plf {
 	case domain.PayoutLegalFormIP, domain.PayoutLegalFormOOO, domain.PayoutLegalFormIndividual, domain.PayoutLegalFormSelfEmployed:
 	default:
 		return fmt.Errorf("укажите форму получения выплат: ИП, ООО, физическое лицо или самозанятость")
 	}
+	if err := validateTravelBaseForProfile(m); err != nil {
+		return err
+	}
+	if err := validateTravelExcludeZonesForProfile(m); err != nil {
+		return err
+	}
 	return nil
 }
 
-func (uc *MasterUseCase) ListPublic(ctx context.Context, city string, limit, offset int32) ([]domain.Master, int32, error) {
-	return uc.repo.ListPublic(ctx, city, limit, offset)
+func (uc *MasterUseCase) ListPublic(ctx context.Context, params domain.ListPublicMastersParams) ([]domain.Master, int32, error) {
+	return uc.repo.ListPublic(ctx, params)
 }
 
 func (uc *MasterUseCase) GetPublicBySlug(ctx context.Context, slug string) (*domain.Master, error) {

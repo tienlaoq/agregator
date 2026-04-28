@@ -34,27 +34,34 @@ function apiUrlForFetch(): string {
 export class ApiError extends Error {
   /** Machine code from JSON `code` when gateway returned a catalog error. */
   public readonly code?: string;
+  /** Human-readable `error` from gateway JSON when present (safe subset shown in UI). */
+  public readonly gatewayDetail?: string;
 
   constructor(
     public status: number,
     /** Raw response body (for tests/logs; do not show in UI). */
     message: string,
     code?: string,
+    gatewayDetail?: string,
   ) {
     super(message);
     this.name = "ApiError";
     this.code = code;
+    this.gatewayDetail = gatewayDetail;
   }
 }
 
-function parseGatewayErrorCode(text: string): string | undefined {
+function parseGatewayError(text: string): { code?: string; detail?: string } {
   const t = text.trim();
-  if (!t.startsWith("{")) return undefined;
+  if (!t.startsWith("{")) return {};
   try {
-    const j = JSON.parse(t) as { code?: string };
-    return typeof j.code === "string" && j.code ? j.code : undefined;
+    const j = JSON.parse(t) as { code?: string; error?: string };
+    const code = typeof j.code === "string" && j.code ? j.code : undefined;
+    const detail =
+      typeof j.error === "string" && j.error.trim() ? j.error.trim() : undefined;
+    return { code, detail };
   } catch {
-    return undefined;
+    return {};
   }
 }
 
@@ -135,7 +142,8 @@ async function fetchAPI<T>(path: string, options?: RequestInit): Promise<T> {
 
       if (!retryRes.ok) {
         const text = await retryRes.text().catch(() => "");
-        throw new ApiError(retryRes.status, text, parseGatewayErrorCode(text));
+        const g = parseGatewayError(text);
+        throw new ApiError(retryRes.status, text, g.code, g.detail);
       }
 
       if (retryRes.status === 204) return undefined as T;
@@ -151,7 +159,8 @@ async function fetchAPI<T>(path: string, options?: RequestInit): Promise<T> {
 
   if (!res.ok) {
     const text = await res.text().catch(() => "");
-    throw new ApiError(res.status, text, parseGatewayErrorCode(text));
+    const g = parseGatewayError(text);
+    throw new ApiError(res.status, text, g.code, g.detail);
   }
 
   if (res.status === 204) return undefined as T;
@@ -162,6 +171,23 @@ export async function login(data: LoginRequest): Promise<AuthResponse> {
   return fetchAPI<AuthResponse>("/api/v1/auth/login", {
     method: "POST",
     body: JSON.stringify(data),
+  });
+}
+
+export async function requestPasswordReset(email: string): Promise<{ message: string }> {
+  return fetchAPI<{ message: string }>("/api/v1/auth/forgot-password", {
+    method: "POST",
+    body: JSON.stringify({ email }),
+  });
+}
+
+export async function completePasswordReset(
+  token: string,
+  newPassword: string,
+): Promise<{ status: string }> {
+  return fetchAPI<{ status: string }>("/api/v1/auth/reset-password", {
+    method: "POST",
+    body: JSON.stringify({ token, new_password: newPassword }),
   });
 }
 
@@ -400,11 +426,50 @@ export async function getOwnerVenues(): Promise<Venue[]> {
   return data.venues ?? [];
 }
 
+function venueStaffStr(v: unknown): string {
+  return typeof v === "string" ? v.trim() : "";
+}
+
+function venueStaffPick(
+  raw: Record<string, unknown>,
+  snake: string,
+  camel: string,
+): string | undefined {
+  const a = venueStaffStr(raw[snake]);
+  if (a) return a;
+  const b = venueStaffStr(raw[camel]);
+  return b || undefined;
+}
+
+function mapVenueStaffFromApi(raw: Record<string, unknown>): VenueStaffRow {
+  const user_id =
+    venueStaffStr(raw.user_id) || venueStaffStr(raw.userId);
+  const invited_by =
+    venueStaffStr(raw.invited_by) || venueStaffStr(raw.invitedBy);
+  const created_at = venueStaffStr(raw.created_at);
+  return {
+    user_id,
+    role: venueStaffStr(raw.role),
+    invited_by,
+    created_at,
+    user_name: venueStaffPick(raw, "user_name", "userName"),
+    user_email: venueStaffPick(raw, "user_email", "userEmail"),
+    inviter_name: venueStaffPick(raw, "inviter_name", "inviterName"),
+    inviter_email: venueStaffPick(raw, "inviter_email", "inviterEmail"),
+    inviter_is_you: Boolean(raw.inviter_is_you ?? raw.inviterIsYou),
+  };
+}
+
 export async function listVenueStaff(venueId: string): Promise<VenueStaffRow[]> {
-  const data = await fetchAPI<{ staff: VenueStaffRow[] }>(
+  const data = await fetchAPI<{ staff: unknown[] }>(
     `/api/v1/owner/venues/${encodeURIComponent(venueId)}/staff`,
   );
-  return data.staff ?? [];
+  const rows = data.staff ?? [];
+  return rows.map((r) =>
+    mapVenueStaffFromApi(
+      r && typeof r === "object" ? (r as Record<string, unknown>) : {},
+    ),
+  );
 }
 
 export async function inviteVenueStaffByEmail(
@@ -601,19 +666,73 @@ export async function setVenueHallCoverPhoto(
   );
 }
 
-// Masters (public)
-export async function listPublicMasters(params?: {
-  city?: string;
-  limit?: number;
-  offset?: number;
-}): Promise<{ masters: MasterProfile[]; total: number }> {
+// Masters (public) — сборка query как у searchVenues (q + city/cities, один город дублируется в q).
+export async function listPublicMasters(
+  params?: {
+    q?: string;
+    /** Один город или несколько (в URL: `city=` или упакованный `cities=`) */
+    city?: string | string[];
+    work_format?: string;
+    price_min?: number;
+    price_max?: number;
+    page?: number;
+    page_size?: number;
+    limit?: number;
+    offset?: number;
+  },
+  init?: RequestInit,
+): Promise<{ masters: MasterProfile[]; total: number }> {
+  const q = (params?.q ?? "").trim();
+  const cities = normalizeCityParamsSafe(params?.city);
+  const qOut = q || (cities.length === 1 ? cities[0] : "");
+
   const search = new URLSearchParams();
-  if (params?.city) search.set("city", params.city);
+  if (qOut) search.set("q", qOut);
+  if (cities.length === 1) {
+    search.set("city", cities[0]);
+  } else if (cities.length > 1) {
+    const packed = packCitiesForQuery(cities);
+    if (packed) search.set("cities", packed);
+  }
+  if (params?.work_format) search.set("work_format", params.work_format);
+  if (params?.price_min != null && params.price_min !== 0) {
+    search.set("price_min", String(params.price_min));
+  }
+  if (params?.price_max != null && params.price_max !== 0) {
+    search.set("price_max", String(params.price_max));
+  }
+  if (params?.page != null && params.page !== 0) {
+    search.set("page", String(params.page));
+  }
+  if (params?.page_size != null && params.page_size !== 0) {
+    search.set("page_size", String(params.page_size));
+  }
   if (params?.limit != null) search.set("limit", String(params.limit));
   if (params?.offset != null) search.set("offset", String(params.offset));
   const qs = search.toString();
   return fetchAPI<{ masters: MasterProfile[]; total: number }>(
     `/api/v1/masters${qs ? `?${qs}` : ""}`,
+    init,
+  );
+}
+
+/** Как getVenues: список мастеров без фильтров поиска (только пагинация). */
+export async function getPublicMastersCatalog(
+  params?: { page?: number; page_size?: number },
+  init?: RequestInit,
+): Promise<{ masters: MasterProfile[]; total: number }> {
+  const search = new URLSearchParams();
+  if (params) {
+    Object.entries(params).forEach(([k, v]) => {
+      if (v === undefined || v === null) return
+      if (typeof v === "string" && v === "") return
+      search.set(k, String(v));
+    });
+  }
+  const qs = search.toString();
+  return fetchAPI<{ masters: MasterProfile[]; total: number }>(
+    `/api/v1/masters${qs ? `?${qs}` : ""}`,
+    init,
   );
 }
 
@@ -828,9 +947,51 @@ export async function getMasterModerationHistory(
   );
 }
 
-/** Short Russian text for UI; never exposes raw API/gRPC bodies. */
+function looksSafeInvalidArgumentDetail(detail: string): boolean {
+  const t = detail.trim();
+  if (t.length === 0 || t.length > 800) return false;
+  if (/^rpc error:/i.test(t) || /connection refused|ECONNRESET/i.test(t)) return false;
+  return true;
+}
+
+/** Текст для UI из поля `error` шлюза при INVALID_ARGUMENT (gRPC message). */
+function messageForInvalidArgumentDetail(detail: string): string | undefined {
+  const t = detail.trim();
+  if (!t) return undefined;
+  if (/[а-яёА-ЯЁ]/.test(t)) {
+    return t;
+  }
+  const lower = t.toLowerCase();
+  if (lower.includes("password must be at least")) {
+    return "Пароль: не менее 8 символов";
+  }
+  if (lower.includes("token and new_password")) {
+    return "Укажите ссылку из письма и новый пароль";
+  }
+  if (lower.includes("profile cannot be submitted in current status")) {
+    return "Отправить на модерацию сейчас нельзя (статус профиля не подходит). Обновите страницу: возможно, профиль уже на проверке или опубликован.";
+  }
+  if (lower.includes("invalid travel_exclude_zones")) {
+    return "Некорректный формат зон «куда не выезжаю». Сохраните профиль ещё раз с этой страницы.";
+  }
+  if (lower.includes("invalid service id")) {
+    return "Некорректный идентификатор услуги. Обновите страницу и заново сохраните список услуг.";
+  }
+  if (lower === "invalid payout_legal_form" || lower.includes("invalid payout_legal_form")) {
+    return "Некорректная форма выплат. Выберите в профиле: ИП, ООО, физическое лицо или самозанятость и сохраните снова.";
+  }
+  if (looksSafeInvalidArgumentDetail(t)) {
+    return t;
+  }
+  return undefined;
+}
+
 export function formatApiErrorMessage(e: unknown, fallback: string): string {
   if (e instanceof ApiError) {
+    if (e.code === "GATEWAY.UPSTREAM.INVALID_ARGUMENT" && e.gatewayDetail) {
+      const mapped = messageForInvalidArgumentDetail(e.gatewayDetail);
+      if (mapped) return mapped;
+    }
     return userMessageForGatewayError(e.status, e.code, fallback);
   }
   if (e instanceof Error && e.message) {

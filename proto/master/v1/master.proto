@@ -52,6 +52,15 @@ message MasterPhoto {
   bool is_cover = 4;
 }
 
+// Круг на карте: центр + радиус в км — «сюда не выезжаю» внутри общей зоны.
+message MasterTravelExcludeZone {
+  string id = 1;
+  double latitude = 2;
+  double longitude = 3;
+  double radius_km = 4;
+  string label = 5;
+}
+
 message Master {
   string id = 1;
   string user_id = 2;
@@ -62,6 +71,10 @@ message Master {
   string city = 7;
   string work_format = 8;
   int32 travel_radius_km = 9;
+  // Точка отсчёта радиуса выезда (широта/долгота), если мастер принимает выезд.
+  optional double travel_base_latitude = 23;
+  optional double travel_base_longitude = 24;
+  repeated MasterTravelExcludeZone travel_exclude_zones = 25;
   int32 experience_years = 10;
   repeated string specializations = 11;
   int64 hourly_rate = 12;
@@ -99,6 +112,8 @@ message UpdateMyProfileRequest {
   optional string city = 5;
   optional string work_format = 6;
   optional int32 travel_radius_km = 7;
+  optional double travel_base_latitude = 16;
+  optional double travel_base_longitude = 17;
   optional int32 experience_years = 8;
   repeated string specializations = 9;
   optional int64 hourly_rate = 10;
@@ -109,6 +124,9 @@ message UpdateMyProfileRequest {
   // When true, replace specializations with the repeated field (empty clears).
   bool apply_specializations = 14;
   optional string payout_legal_form = 15;
+  // При true заменить travel_exclude_zones на переданный список (пустой — очистить).
+  bool apply_travel_exclude_zones = 18;
+  repeated MasterTravelExcludeZone travel_exclude_zones = 19;
 }
 
 message SubmitMasterForReviewRequest {
@@ -116,9 +134,16 @@ message SubmitMasterForReviewRequest {
 }
 
 message ListPublicMastersRequest {
+  // Устарело: используйте cities; gateway может дублировать один город сюда для совместимости.
   string city = 1;
   int32 limit = 2;
   int32 offset = 3;
+  string q = 4;
+  repeated string cities = 5;
+  // Пусто или "all" — без фильтра; иначе mobile | venue | both.
+  string work_format = 6;
+  int64 price_min_kopecks = 7;
+  int64 price_max_kopecks = 8;
 }
 
 message ListMastersResponse {

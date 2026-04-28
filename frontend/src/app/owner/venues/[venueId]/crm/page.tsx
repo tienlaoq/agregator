@@ -90,6 +90,45 @@ function formatDt(iso: string | undefined): string {
   });
 }
 
+const VENUE_CRM_ROLE_LABELS: Record<string, string> = {
+  manager: "Менеджер",
+  staff: "Сотрудник",
+};
+
+function venueCrmRoleLabel(role: string): string {
+  return VENUE_CRM_ROLE_LABELS[role] ?? role;
+}
+
+/** Имя из профиля пользователя; иначе email; иначе подсказка (не нейтральная «команда»). */
+function venueStaffMemberPrimary(s: VenueStaffRow): string {
+  const n = s.user_name?.trim();
+  if (n) return n;
+  const e = s.user_email?.trim();
+  if (e) return e;
+  return "Имя не указано в профиле";
+}
+
+function venueStaffMemberSubtitle(s: VenueStaffRow): string | null {
+  const n = s.user_name?.trim();
+  const e = s.user_email?.trim();
+  if (n && e) return e;
+  return null;
+}
+
+function venueStaffInviterLabel(
+  s: VenueStaffRow,
+  currentUserId: string | undefined,
+): string {
+  if (s.inviter_is_you || (currentUserId && s.invited_by === currentUserId)) {
+    return "Вы";
+  }
+  const n = s.inviter_name?.trim();
+  if (n) return n;
+  const e = s.inviter_email?.trim();
+  if (e) return e;
+  return "—";
+}
+
 export default function OwnerVenueCrmPage() {
   const params = useParams<{ venueId: string }>();
   const venueId = params.venueId;
@@ -453,7 +492,7 @@ export default function OwnerVenueCrmPage() {
               <CardTitle>Команда</CardTitle>
               <CardDescription>
                 {staffManage
-                  ? "Приглашайте по email зарегистрированных пользователей. Роли: manager, staff."
+                  ? "Приглашайте по email зарегистрированных пользователей. Роли: сотрудник (операции по заведению), менеджер (расширенные права)."
                   : "Список сотрудников с доступом к операциям по заведению."}
               </CardDescription>
             </CardHeader>
@@ -477,8 +516,8 @@ export default function OwnerVenueCrmPage() {
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="staff">staff</SelectItem>
-                        <SelectItem value="manager">manager</SelectItem>
+                        <SelectItem value="staff">Сотрудник</SelectItem>
+                        <SelectItem value="manager">Менеджер</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>
@@ -515,10 +554,10 @@ export default function OwnerVenueCrmPage() {
                   <Table>
                     <TableHeader>
                       <TableRow>
-                        <TableHead>User ID</TableHead>
+                        <TableHead>Сотрудник</TableHead>
                         <TableHead>Роль</TableHead>
                         <TableHead>Пригласил</TableHead>
-                        <TableHead>Дата</TableHead>
+                        <TableHead>Дата приглашения</TableHead>
                         {staffManage ? (
                           <TableHead className="text-right">Действия</TableHead>
                         ) : null}
@@ -527,12 +566,23 @@ export default function OwnerVenueCrmPage() {
                     <TableBody>
                       {staff.map((s: VenueStaffRow) => (
                         <TableRow key={s.user_id}>
-                          <TableCell className="font-mono text-xs">
-                            {s.user_id}
+                          <TableCell>
+                            <div className="font-medium text-foreground">
+                              {venueStaffMemberPrimary(s)}
+                            </div>
+                            {venueStaffMemberSubtitle(s) ? (
+                              <div className="mt-0.5 text-xs text-muted-foreground">
+                                {venueStaffMemberSubtitle(s)}
+                              </div>
+                            ) : null}
                           </TableCell>
-                          <TableCell>{s.role}</TableCell>
-                          <TableCell className="font-mono text-xs">
-                            {s.invited_by}
+                          <TableCell>
+                            <Badge variant="secondary" className="font-normal">
+                              {venueCrmRoleLabel(s.role)}
+                            </Badge>
+                          </TableCell>
+                          <TableCell className="text-sm text-foreground">
+                            {venueStaffInviterLabel(s, user?.id)}
                           </TableCell>
                           <TableCell className="text-sm text-muted-foreground">
                             {formatDt(s.created_at)}

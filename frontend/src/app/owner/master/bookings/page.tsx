@@ -5,17 +5,65 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
+import { Card, CardContent } from "@/components/ui/card";
 import { useAuthStore } from "@/store/auth";
 import { listMyMasterBookings, ApiError } from "@/lib/api";
-import { ArrowLeft } from "lucide-react";
+import { BookingCardLayout } from "@/components/banya/booking-card-layout";
+import type { MasterBooking } from "@/lib/types";
+import { ArrowLeft, CalendarDays, Clock, Tag, Users } from "lucide-react";
 
-const STATUS_RU: Record<string, string> = {
-  pending: "Новая",
-  confirmed: "Подтверждена",
-  cancelled: "Отменена",
-};
+function formatMasterTime(b: MasterBooking): string {
+  if (b.time_from && b.time_to) return `${b.time_from}–${b.time_to}`;
+  if (b.time_from) return b.time_from;
+  return "—";
+}
+
+function MasterBookingCard({ booking: b }: { booking: MasterBooking }) {
+  const clientRef =
+    b.client_user_id.length > 10
+      ? `Клиент · ${b.client_user_id.slice(0, 8)}…`
+      : `Клиент · ${b.client_user_id}`;
+
+  return (
+    <BookingCardLayout
+      title="Заявка на выезд"
+      status={b.status}
+      meta={
+        <div className="flex flex-wrap gap-4 text-sm text-muted-foreground">
+          <div className="flex items-center gap-1">
+            <CalendarDays className="h-4 w-4 shrink-0" />
+            {new Date(b.date).toLocaleDateString("ru-RU")}
+          </div>
+          <div className="flex items-center gap-1">
+            <Clock className="h-4 w-4 shrink-0" />
+            {formatMasterTime(b)}
+          </div>
+          <div className="flex min-w-0 items-center gap-1">
+            <Users className="h-4 w-4 shrink-0" />
+            <span className="truncate">{clientRef}</span>
+          </div>
+          {b.master_service_id ? (
+            <div className="flex min-w-0 items-center gap-1">
+              <Tag className="h-4 w-4 shrink-0" />
+              <span className="truncate">
+                Услуга · {b.master_service_id.slice(0, 8)}
+                {b.master_service_id.length > 8 ? "…" : ""}
+              </span>
+            </div>
+          ) : null}
+        </div>
+      }
+      subMeta={
+        b.comment ? (
+          <p className="line-clamp-2 text-foreground/90">
+            <span className="text-muted-foreground">Комментарий: </span>
+            {b.comment}
+          </p>
+        ) : null
+      }
+    />
+  );
+}
 
 export default function MasterBookingsPage() {
   const router = useRouter();
@@ -55,7 +103,13 @@ export default function MasterBookingsPage() {
         написать).
       </p>
 
-      {isLoading && <p className="text-muted-foreground">Загрузка...</p>}
+      {isLoading && (
+        <div className="space-y-4">
+          {Array.from({ length: 3 }).map((_, i) => (
+            <div key={i} className="h-32 animate-pulse rounded-xl bg-muted" />
+          ))}
+        </div>
+      )}
       {noProfile && (
         <p className="text-muted-foreground mb-4">
           Сначала{" "}
@@ -79,19 +133,7 @@ export default function MasterBookingsPage() {
 
       <div className="space-y-4">
         {bookings.map((b) => (
-          <Card key={b.id}>
-            <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2 pb-2">
-              <CardTitle className="text-base">
-                {b.date} {b.time_from}–{b.time_to}
-              </CardTitle>
-              <Badge variant="secondary">{STATUS_RU[b.status] ?? b.status}</Badge>
-            </CardHeader>
-            <CardContent className="text-sm text-muted-foreground space-y-1">
-              {b.master_service_id && <p>Услуга ID: {b.master_service_id}</p>}
-              {b.comment && <p className="text-foreground">Комментарий: {b.comment}</p>}
-              <p className="text-xs">Клиент (user id): {b.client_user_id}</p>
-            </CardContent>
-          </Card>
+          <MasterBookingCard key={b.id} booking={b} />
         ))}
       </div>
     </div>

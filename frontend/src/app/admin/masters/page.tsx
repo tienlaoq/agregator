@@ -153,7 +153,7 @@ function MasterModerationFullProfile({ m }: { m: MasterProfile }) {
               <dd className="mt-0.5">{wf || "—"}</dd>
             </div>
             <div>
-              <dt className="text-xs text-muted-foreground">Радиус выезда, км</dt>
+              <dt className="text-xs text-muted-foreground">Зона от метки, км</dt>
               <dd className="mt-0.5">{m.travel_radius_km ?? "—"}</dd>
             </div>
             <div>

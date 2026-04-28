@@ -196,6 +196,35 @@ function getWorkingHoursDraft(raw: string): WorkingHoursDraft {
   };
 }
 
+/** Соответствует venue-service validateVenueVerificationCore (кнопка «На проверку»). */
+function draftVerificationOkForSubmit(
+  form: Pick<
+    UpdateVenueRequest,
+    "legal_entity_name" | "inn" | "ogrn" | "public_listing_url"
+  >,
+): boolean {
+  const legal = form.legal_entity_name.trim();
+  const legalLen = [...legal].length;
+  if (legalLen < 3 || legalLen > 500) return false;
+  const inn = form.inn.replace(/\D/g, "");
+  if (inn.length !== 10 && inn.length !== 12) return false;
+  const ogrn = form.ogrn.replace(/\D/g, "");
+  if (inn.length === 10 && ogrn.length !== 13) return false;
+  if (inn.length === 12 && ogrn.length !== 15) return false;
+  const raw = form.public_listing_url.trim();
+  try {
+    const u = new URL(raw);
+    if (u.protocol !== "http:" && u.protocol !== "https:") return false;
+    const host = u.hostname.toLowerCase();
+    if (!host || host.includes("localhost") || host.startsWith("127.")) {
+      return false;
+    }
+  } catch {
+    return false;
+  }
+  return true;
+}
+
 function venueHallsToForm(v: Venue): VenueHallFormLine[] {
   const list = v.halls && v.halls.length > 0 ? v.halls : [];
   if (list.length === 0) return [newVenueHallLine()];
@@ -720,7 +749,13 @@ export default function EditOwnerVenuePage() {
   const draftHallsPriced = form.halls.some(
     (h) => h.name.trim() !== "" && Number(h.price_from) > 0,
   );
-  const draftDescOk = (form.description?.trim().length ?? 0) >= 40;
+  const draftDescOk = [...(form.description?.trim() ?? "")].length >= 40;
+  const draftVerificationOk = draftVerificationOkForSubmit(form);
+  const draftReadyForReview =
+    draftHasPhotos &&
+    draftHallsPriced &&
+    draftDescOk &&
+    draftVerificationOk;
 
   const baseline = baselineSerializedRef.current;
   const isDirty = Boolean(baseline && serializeForm(form) !== baseline);
@@ -840,6 +875,16 @@ export default function EditOwnerVenuePage() {
                   >
                     Описание заведения (от ~2–3 предложений)
                   </li>
+                  <li
+                    className={
+                      draftVerificationOk
+                        ? "text-green-700 dark:text-green-400"
+                        : ""
+                    }
+                  >
+                    Данные для модерации: наименование юрлица/ИП, ИНН, ОГРН,
+                    ссылка на карточку в картах
+                  </li>
                 </ul>
                 {submitReviewError ? (
                   <p className="text-sm text-destructive" role="alert">
@@ -849,7 +894,12 @@ export default function EditOwnerVenuePage() {
                 <Button
                   type="button"
                   onClick={() => submitReviewMu.mutate()}
-                  disabled={submitReviewMu.isPending}
+                  disabled={!draftReadyForReview || submitReviewMu.isPending}
+                  title={
+                    !draftReadyForReview && !submitReviewMu.isPending
+                      ? "Выполните все пункты списка выше."
+                      : undefined
+                  }
                 >
                   {submitReviewMu.isPending
                     ? "Отправка…"
@@ -1498,6 +1548,8 @@ export default function EditOwnerVenuePage() {
               <CardHeader className="pb-4">
                 <CardTitle className="text-lg">Фотографии</CardTitle>
                 <CardDescription>
+                  Это общие фотографии заведения для карточки в каталоге (не фото
+                  отдельных залов — их можно добавить в блоке залов выше).
                   Рекомендуем не менее 3 снимков. JPEG, PNG или WebP, до 5 МБ каждый,
                   максимум {maxVenuePhotos}. Смена фото и обложки может отправить
                   карточку на повторную модерацию, если она была опубликована или

@@ -160,6 +160,7 @@ export type VenueSocialLinkKey =
   | "vk"
   | "telegram"
   | "instagram"
+  | "facebook"
   | "whatsapp"
   | "youtube"
   | "max"
@@ -171,27 +172,45 @@ export const DEFAULT_VENUE_SOCIAL_LINKS: VenueSocialLinks = {
   vk: "",
   telegram: "",
   instagram: "",
+  facebook: "",
   whatsapp: "",
   youtube: "",
   max: "",
   other: "",
 };
 
+/** Подсказка у полей (Meta-экосистема) — дисклеймер для публикации ссылки. */
+const META_EXTREMIST_DISCLAIMER_HINT =
+  "Организация признана экстремистской и запрещена на территории России";
+
 export const VENUE_SOCIAL_FIELD_DEFS: {
   key: VenueSocialLinkKey;
   label: string;
   placeholder: string;
+  hint?: string;
 }[] = [
   { key: "vk", label: "ВКонтакте", placeholder: "https://vk.com/..." },
   { key: "telegram", label: "Telegram", placeholder: "https://t.me/..." },
   { key: "max", label: "MAX", placeholder: "https://..." },
   {
+    key: "whatsapp",
+    label: "WhatsApp",
+    placeholder: "https://wa.me/...",
+    hint: META_EXTREMIST_DISCLAIMER_HINT,
+  },
+  { key: "youtube", label: "YouTube", placeholder: "https://youtube.com/..." },
+  {
     key: "instagram",
     label: "Instagram",
-    placeholder: "https://instagram.com/...",
+    placeholder: "https://www.instagram.com/...",
+    hint: META_EXTREMIST_DISCLAIMER_HINT,
   },
-  { key: "whatsapp", label: "WhatsApp", placeholder: "https://wa.me/..." },
-  { key: "youtube", label: "YouTube", placeholder: "https://youtube.com/..." },
+  {
+    key: "facebook",
+    label: "Facebook",
+    placeholder: "https://www.facebook.com/...",
+    hint: META_EXTREMIST_DISCLAIMER_HINT,
+  },
   { key: "other", label: "Другая ссылка", placeholder: "https://..." },
 ];
 
@@ -201,6 +220,7 @@ export const VENUE_SOCIAL_PUBLIC_LABELS: Record<VenueSocialLinkKey, string> = {
   telegram: "Telegram",
   max: "MAX",
   instagram: "Instagram",
+  facebook: "Facebook",
   whatsapp: "WhatsApp",
   youtube: "YouTube",
   other: "Сайт или соцсеть",
@@ -295,6 +315,13 @@ export interface VenueStaffRow {
   role: string;
   invited_by: string;
   created_at: string;
+  /** Имя из user-service (если есть). */
+  user_name?: string;
+  user_email?: string;
+  inviter_name?: string;
+  inviter_email?: string;
+  /** true, если пригласивший — текущий пользователь (совпадает с invited_by). */
+  inviter_is_you?: boolean;
 }
 
 /** Задача CRM по заведению. */
@@ -327,6 +354,9 @@ export interface Booking {
   venue_id: string;
   venue_name: string;
   service_id?: string;
+  /** Несколько пакетов (ответ API после бронирования) */
+  package_service_ids?: string[];
+  hall_ids?: string[];
   date: string;
   time_from: string;
   time_to: string;
@@ -376,6 +406,10 @@ export interface CreateBookingRequest {
   time_to?: string;
   /** Услуга из карточки заведения (фиксированная цена) */
   service_id?: string;
+  /** Несколько пакетов; если передано — имеет приоритет над service_id */
+  service_ids?: string[];
+  /** Выбранные залы (почасовая ставка — max с ценой заведения) */
+  hall_ids?: string[];
   guests: number;
   comment?: string;
 }
@@ -495,6 +529,15 @@ export const BOOKING_STATUS_LABELS: Record<string, string> = {
   cancelled: "Отменено",
 };
 
+/** Круг на карте: «сюда не выезжаю», даже внутри общей зоны выезда. */
+export interface MasterTravelExcludeZone {
+  id: string;
+  latitude: number;
+  longitude: number;
+  radius_km: number;
+  label: string;
+}
+
 /** Пар-мастер: услуга в профиле */
 export interface MasterServiceItem {
   id: string;
@@ -532,7 +575,12 @@ export interface MasterProfile {
   /** ip | ooo | individual | self_employed — не отдаётся в публичном API каталога */
   payout_legal_form?: string;
   work_format: string;
+  /** Макс. расстояние от метки на карте до клиента, км (по прямой на карте; API: travel_radius_km). */
   travel_radius_km: number;
+  /** Координаты метки на карте (точка отсчёта километража). */
+  travel_base_latitude?: number;
+  travel_base_longitude?: number;
+  travel_exclude_zones?: MasterTravelExcludeZone[];
   experience_years: number;
   specializations: string[];
   hourly_rate: number;

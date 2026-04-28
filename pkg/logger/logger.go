@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mattn/go-isatty"
 	"github.com/rs/zerolog"
 )
 
@@ -20,6 +21,9 @@ func New(service string) zerolog.Logger {
 			Logger()
 	}
 	output := zerolog.ConsoleWriter{Out: out, TimeFormat: time.RFC3339}
+	if !isatty.IsTerminal(out.Fd()) {
+		output.NoColor = true
+	}
 	return zerolog.New(output).
 		With().
 		Timestamp().
