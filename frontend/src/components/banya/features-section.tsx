@@ -4,8 +4,8 @@ import { Building2, Search, MessageSquareText } from "lucide-react"
 const features = [
   {
     icon: Building2,
-    title: "500+ заведений",
-    description: "Широкий выбор бань, саун и хаммамов по всей России",
+    title: "Бронь без звонков",
+    description: "Выбор площадки, подтверждение и оплата в одном интерфейсе",
   },
   {
     icon: Search,

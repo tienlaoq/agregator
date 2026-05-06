@@ -110,6 +110,11 @@ function isoYearMonthLocal(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
 }
 
+/** Для выручки и «бронирований сегодня» считаем только оплаченные визиты. */
+function isBookingPaidForMetrics(b: Booking): boolean {
+  return b.status === "confirmed" || b.status === "completed";
+}
+
 export function mergeOwnerVenueBookings(
   results: { data?: { bookings: Booking[] } }[],
 ): Booking[] {
@@ -133,17 +138,11 @@ export function computeOwnerDashboardStats(
   const ym = isoYearMonthLocal(new Date());
 
   const bookingsToday = allBookings.filter(
-    (b) => b.date === today && b.status !== "cancelled",
+    (b) => b.date === today && isBookingPaidForMetrics(b),
   ).length;
 
   const revenueMonthRub = allBookings
-    .filter(
-      (b) =>
-        b.date.startsWith(ym) &&
-        (b.status === "confirmed" ||
-          b.status === "completed" ||
-          b.status === "payment_pending"),
-    )
+    .filter((b) => b.date.startsWith(ym) && isBookingPaidForMetrics(b))
     .reduce((s, b) => s + b.total_price, 0);
 
   const list = venues ?? [];
@@ -165,7 +164,7 @@ export function bookingsTodayByVenue(
   const counts = new Map<string, number>();
   for (const v of venues ?? []) counts.set(v.id, 0);
   for (const b of allBookings) {
-    if (b.date !== today || b.status === "cancelled") continue;
+    if (b.date !== today || !isBookingPaidForMetrics(b)) continue;
     counts.set(b.venue_id, (counts.get(b.venue_id) ?? 0) + 1);
   }
   return counts;
@@ -184,9 +183,7 @@ function formatBookingDate(dateStr: string): string {
   });
 }
 
-function guestLabel(b: Booking): string {
-  const uid = b.user_id?.replace(/-/g, "") ?? "";
-  if (uid.length >= 8) return `Клиент · ${uid.slice(0, 8)}…`;
+function guestLabel(_b: Booking): string {
   return "Клиент";
 }
 

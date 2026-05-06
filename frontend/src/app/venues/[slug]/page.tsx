@@ -16,7 +16,6 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { Progress } from "@/components/ui/progress"
-import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { format, isBefore, startOfDay } from "date-fns"
 import { ru } from "date-fns/locale"
 import {
@@ -60,6 +59,7 @@ import {
   slotLengthMinutes,
   thirtyMinuteStartGridFrom10To22,
 } from "@/lib/booking-slot-time"
+import { ReviewList } from "@/components/review-list"
 
 function socialHref(url: string): string {
   const u = url.trim()
@@ -217,6 +217,16 @@ export default function VenueDetailPage() {
       .catch(() => setError("Заведение не найдено"))
       .finally(() => setLoading(false))
   }, [slug])
+
+  const reloadReviews = async () => {
+    if (!venue?.id) return
+    try {
+      const r = await getVenueReviews(venue.id)
+      setReviews(r)
+    } catch {
+      // keep current state on refresh errors
+    }
+  }
 
   useEffect(() => {
     setGalleryIndex(0)
@@ -741,101 +751,7 @@ export default function VenueDetailPage() {
               <h2 className="mb-6 text-xl font-semibold text-foreground">
                 Отзывы {totalReviews > 0 && `(${totalReviews})`}
               </h2>
-
-              {totalReviews > 0 ? (
-                <>
-                  {/* Rating Summary */}
-                  <Card className="mb-6 border-border">
-                    <CardContent className="p-6">
-                      <div className="flex flex-col gap-6 md:flex-row md:items-center">
-                        <div className="text-center md:pr-8 md:border-r md:border-border">
-                          <div className="text-5xl font-bold text-foreground">{venue.rating.toFixed(1)}</div>
-                          <div className="mt-2 flex justify-center gap-1">
-                            {[1, 2, 3, 4, 5].map((star) => (
-                              <Star
-                                key={star}
-                                className={`h-5 w-5 ${
-                                  star <= Math.round(venue.rating)
-                                    ? "fill-amber-400 text-amber-400"
-                                    : "text-muted"
-                                }`}
-                              />
-                            ))}
-                          </div>
-                          <p className="mt-1 text-sm text-muted-foreground">{totalReviews} отзывов</p>
-                        </div>
-                        <div className="flex-1 space-y-2">
-                          {[5, 4, 3, 2, 1].map((stars) => (
-                            <div key={stars} className="flex items-center gap-3">
-                              <span className="w-3 text-sm text-muted-foreground">{stars}</span>
-                              <Star className="h-4 w-4 fill-amber-400 text-amber-400" />
-                              <Progress
-                                value={totalReviews > 0 ? (ratingBreakdown[stars] / totalReviews) * 100 : 0}
-                                className="h-2 flex-1"
-                              />
-                              <span className="w-8 text-sm text-muted-foreground">{ratingBreakdown[stars]}</span>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    </CardContent>
-                  </Card>
-
-                  {/* Review List */}
-                  <div className="space-y-4">
-                    {reviews.map((review) => (
-                      <Card key={review.id} className="border-border">
-                        <CardContent className="p-5">
-                          <div className="mb-3 flex items-center justify-between">
-                            <div className="flex items-center gap-3">
-                              <Avatar>
-                                <AvatarFallback className="bg-primary/10 text-primary">
-                                  {review.user_name.charAt(0)}
-                                </AvatarFallback>
-                              </Avatar>
-                              <div>
-                                <p className="font-medium text-card-foreground">{review.user_name}</p>
-                                <p className="text-sm text-muted-foreground">
-                                  {new Date(review.created_at).toLocaleDateString("ru-RU", {
-                                    day: "numeric",
-                                    month: "long",
-                                    year: "numeric",
-                                  })}
-                                </p>
-                              </div>
-                            </div>
-                            <div className="flex items-center gap-1">
-                              {[1, 2, 3, 4, 5].map((star) => (
-                                <Star
-                                  key={star}
-                                  className={`h-4 w-4 ${
-                                    star <= review.rating
-                                      ? "fill-amber-400 text-amber-400"
-                                      : "text-muted"
-                                  }`}
-                                />
-                              ))}
-                            </div>
-                          </div>
-                          <p className="text-muted-foreground">{review.text}</p>
-                          {review.verified && (
-                            <Badge variant="secondary" className="mt-3 gap-1">
-                              <ShieldCheck className="h-3 w-3" />
-                              Подтверждённый визит
-                            </Badge>
-                          )}
-                        </CardContent>
-                      </Card>
-                    ))}
-                  </div>
-                </>
-              ) : (
-                <Card className="border-border">
-                  <CardContent className="py-10 text-center text-muted-foreground">
-                    Пока нет отзывов. Будьте первым!
-                  </CardContent>
-                </Card>
-              )}
+              <ReviewList targetId={venue.id} targetType="venue" reviews={reviews} onReviewAdded={reloadReviews} />
             </div>
           </div>
 

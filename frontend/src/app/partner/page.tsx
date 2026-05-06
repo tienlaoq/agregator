@@ -6,14 +6,6 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { Textarea } from "@/components/ui/textarea"
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
 import { Badge } from "@/components/ui/badge"
 import {
   register,
@@ -23,10 +15,15 @@ import {
   formatApiErrorMessage,
 } from "@/lib/api"
 import { useAuthStore } from "@/store/auth"
-import { CityCombobox } from "@/components/banya/city-combobox"
-import { AddressSuggest } from "@/components/banya/address-suggest"
 import { PhoneInput, getRawPhone } from "@/components/banya/phone-input"
-import { DEFAULT_VENUE_SOCIAL_LINKS, type CreateVenueRequest } from "@/lib/types"
+import { PartnerVenueRegistrationCard } from "@/components/banya/partner-venue-registration-card"
+import {
+  buildPartnerStyleCreateVenueRequest,
+  emptyPartnerVenueForm,
+  partnerVenueStepCanProceed,
+  venueTypeBadgeLabel,
+  type PartnerVenueFormValues,
+} from "@/lib/partner-venue"
 import type { PartnerCabinetRole } from "@/lib/partner-roles"
 import Link from "next/link"
 import {
@@ -38,39 +35,12 @@ import {
   CalendarCheck,
   ShieldCheck,
   Building2,
-  FileText,
-  Link2,
   CheckCircle2,
   PartyPopper,
   Settings,
 } from "lucide-react"
 
 type Step = 1 | 2 | 3 | 4
-
-function isOwnerVerificationComplete(
-  legal: string,
-  innRaw: string,
-  ogrnRaw: string,
-  listingUrl: string,
-): boolean {
-  const legalTrim = legal.trim()
-  if (legalTrim.length < 3) return false
-  const innD = innRaw.replace(/\D/g, "")
-  if (innD.length !== 10 && innD.length !== 12) return false
-  const ogrnD = ogrnRaw.replace(/\D/g, "")
-  if (innD.length === 10 && ogrnD.length !== 13) return false
-  if (innD.length === 12 && ogrnD.length !== 15) return false
-  const u = listingUrl.trim()
-  try {
-    const parsed = new URL(u)
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return false
-    const h = parsed.hostname.toLowerCase()
-    if (h === "localhost" || h.startsWith("127.")) return false
-  } catch {
-    return false
-  }
-  return true
-}
 
 export default function PartnerPage() {
   const router = useRouter()
@@ -86,18 +56,9 @@ export default function PartnerPage() {
   const [error, setError] = useState("")
   const [loading, setLoading] = useState(false)
 
-  // Step 2: Venue data
-  const [venueName, setVenueName] = useState("")
-  const [venueType, setVenueType] = useState("")
-  const [venueCity, setVenueCity] = useState("")
-  const [venueAddress, setVenueAddress] = useState("")
-  const [venueDescription, setVenueDescription] = useState("")
-
-  const [legalEntityName, setLegalEntityName] = useState("")
-  const [inn, setInn] = useState("")
-  const [ogrn, setOgrn] = useState("")
-  const [publicListingUrl, setPublicListingUrl] = useState("")
-  const [verificationNote, setVerificationNote] = useState("")
+  const [venueFields, setVenueFields] = useState<PartnerVenueFormValues>(() => emptyPartnerVenueForm())
+  const patchVenue = (p: Partial<PartnerVenueFormValues>) =>
+    setVenueFields((prev) => ({ ...prev, ...p }))
 
   // Step 3: Contact data
   const [contactName, setContactName] = useState("")
@@ -137,27 +98,7 @@ export default function PartnerPage() {
         return
       }
 
-      const venueData: CreateVenueRequest = {
-        name: venueName,
-        type: venueType as CreateVenueRequest["type"],
-        city: venueCity,
-        address: venueAddress,
-        description: venueDescription,
-        phone: rawPhone,
-        price_from: 0,
-        capacity: 0,
-        amenities: [],
-        halls: [],
-        services: [],
-        legal_entity_name: legalEntityName.trim(),
-        inn: inn.replace(/\D/g, ""),
-        ogrn: ogrn.replace(/\D/g, ""),
-        public_listing_url: publicListingUrl.trim(),
-        verification_note: verificationNote.trim() || undefined,
-        social_links: { ...DEFAULT_VENUE_SOCIAL_LINKS },
-        start_as_draft: true,
-      }
-      const venue = await createVenue(venueData)
+      const venue = await createVenue(buildPartnerStyleCreateVenueRequest(venueFields, rawPhone))
       setCreatedVenueId(venue.id)
       setStep(4)
     } catch (err) {
@@ -327,169 +268,28 @@ export default function PartnerPage() {
           </div>
         )}
 
-        {/* Step 2: Venue Information */}
         {step === 2 && !isMasterTrack && (
-          <div className="mx-auto max-w-lg">
-            <Card className="border-border">
-              <CardHeader className="text-center">
-                <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-primary/10">
-                  <Building2 className="h-6 w-6 text-primary" />
-                </div>
-                <CardTitle className="text-2xl text-card-foreground">Расскажите о заведении</CardTitle>
-                <CardDescription>Эти данные помогут нам создать страницу вашей бани</CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="space-y-2">
-                  <Label htmlFor="venueName">Название заведения</Label>
-                  <Input
-                    id="venueName"
-                    placeholder="Например: Русская Банька на Дровах"
-                    value={venueName}
-                    onChange={(e) => setVenueName(e.target.value)}
-                    required
-                  />
-                </div>
-
-                <div className="space-y-2">
-                  <Label>Тип заведения</Label>
-                  <Select value={venueType} onValueChange={setVenueType}>
-                    <SelectTrigger>
-                      <SelectValue placeholder="Выберите тип" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="banya">Баня</SelectItem>
-                      <SelectItem value="sauna">Сауна</SelectItem>
-                      <SelectItem value="hammam">Хаммам</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="space-y-2">
-                    <Label>Город</Label>
-                    <CityCombobox value={venueCity} onChange={setVenueCity} />
-                  </div>
-                  <div className="space-y-2">
-                    <Label>Адрес</Label>
-                    <AddressSuggest
-                      value={venueAddress}
-                      onChange={setVenueAddress}
-                      city={venueCity}
-                      placeholder="ул. Банная, д. 15"
-                    />
-                  </div>
-                </div>
-
-                <div className="space-y-2">
-                  <Label htmlFor="venueDescription">Описание</Label>
-                  <Textarea
-                    id="venueDescription"
-                    placeholder="Расскажите, чем ваше заведение особенное..."
-                    value={venueDescription}
-                    onChange={(e) => setVenueDescription(e.target.value)}
-                    rows={3}
-                  />
-                </div>
-
-                <div className="rounded-lg border border-border bg-muted/30 p-4 space-y-3">
-                  <div className="flex items-center gap-2 text-sm font-medium text-foreground">
-                    <FileText className="h-4 w-4 text-primary" />
-                    Данные для проверки владельца
-                  </div>
-                  <p className="text-xs text-muted-foreground leading-relaxed">
-                    Чтобы отсечь фиктивные заявки, мы сверяем ИНН и ОГРН/ОГРНИП с открытыми реестрами (ЕГРЮЛ/ЕГРИП) и смотрим публичную карточку заведения на картах. Без этого модерация невозможна.
-                  </p>
-                  <div className="space-y-2">
-                    <Label htmlFor="legalEntityName">Полное наименование ИП или организации</Label>
-                    <Input
-                      id="legalEntityName"
-                      placeholder="Как в выписке ЕГРЮЛ / ЕГРИП"
-                      value={legalEntityName}
-                      onChange={(e) => setLegalEntityName(e.target.value)}
-                      required
-                    />
-                  </div>
-                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                    <div className="space-y-2">
-                      <Label htmlFor="inn">ИНН</Label>
-                      <Input
-                        id="inn"
-                        inputMode="numeric"
-                        placeholder="10 цифр (ООО) или 12 (ИП)"
-                        value={inn}
-                        onChange={(e) => setInn(e.target.value)}
-                        required
-                      />
-                    </div>
-                    <div className="space-y-2">
-                      <Label htmlFor="ogrn">ОГРН или ОГРНИП</Label>
-                      <Input
-                        id="ogrn"
-                        inputMode="numeric"
-                        placeholder="13 цифр (ОГРН) или 15 (ОГРНИП)"
-                        value={ogrn}
-                        onChange={(e) => setOgrn(e.target.value)}
-                        required
-                      />
-                    </div>
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="publicListingUrl" className="flex items-center gap-1.5">
-                      <Link2 className="h-3.5 w-3.5" />
-                      Ссылка на карточку на картах
-                    </Label>
-                    <Input
-                      id="publicListingUrl"
-                      type="url"
-                      placeholder="https://yandex.ru/maps/org/... или 2gis.ru/..."
-                      value={publicListingUrl}
-                      onChange={(e) => setPublicListingUrl(e.target.value)}
-                      required
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="verificationNote">Комментарий для модератора (необязательно)</Label>
-                    <Textarea
-                      id="verificationNote"
-                      placeholder="Например: торговая марка отличается от юр. названия, доступ к телефону организации..."
-                      value={verificationNote}
-                      onChange={(e) => setVerificationNote(e.target.value)}
-                      rows={2}
-                    />
-                  </div>
-                </div>
-
-                <div className="flex gap-3 pt-2">
-                  <Button variant="outline" className="gap-2" onClick={() => setStep(1)}>
-                    <ArrowLeft className="h-4 w-4" />
-                    Назад
-                  </Button>
-                  <Button
-                    className="flex-1 gap-2"
-                    onClick={() => setStep(3)}
-                    disabled={
-                      !venueName ||
-                      !venueType ||
-                      !venueCity ||
-                      !isOwnerVerificationComplete(
-                        legalEntityName,
-                        inn,
-                        ogrn,
-                        publicListingUrl,
-                      )
-                    }
-                  >
-                    Далее
-                    <ArrowRight className="h-4 w-4" />
-                  </Button>
-                </div>
-              </CardContent>
-            </Card>
-
-            <p className="mt-4 text-center text-sm text-muted-foreground">
-              Шаг 2 из 3 · Все данные можно изменить позже
-            </p>
-          </div>
+          <PartnerVenueRegistrationCard
+            values={venueFields}
+            onChange={patchVenue}
+            footer={
+              <div className="flex gap-3 pt-2">
+                <Button variant="outline" className="gap-2" onClick={() => setStep(1)}>
+                  <ArrowLeft className="h-4 w-4" />
+                  Назад
+                </Button>
+                <Button
+                  className="flex-1 gap-2"
+                  onClick={() => setStep(3)}
+                  disabled={!partnerVenueStepCanProceed(venueFields)}
+                >
+                  Далее
+                  <ArrowRight className="h-4 w-4" />
+                </Button>
+              </div>
+            }
+            caption="Шаг 2 из 3 · Все данные можно изменить позже"
+          />
         )}
 
         {/* Step 3: Contact Information & Account */}
@@ -512,12 +312,14 @@ export default function PartnerPage() {
                   <div className="rounded-lg bg-secondary/50 p-3">
                     <div className="flex items-center gap-2">
                       <Building2 className="h-4 w-4 text-primary" />
-                      <span className="font-medium text-card-foreground">{venueName}</span>
+                      <span className="font-medium text-card-foreground">{venueFields.venueName}</span>
                       <Badge variant="secondary" className="text-xs">
-                        {venueType === "banya" ? "Баня" : venueType === "sauna" ? "Сауна" : "Хаммам"}
+                        {venueTypeBadgeLabel(venueFields.venueType)}
                       </Badge>
                     </div>
-                    <p className="mt-1 text-sm text-muted-foreground">{venueCity}, {venueAddress}</p>
+                    <p className="mt-1 text-sm text-muted-foreground">
+                      {venueFields.venueCity}, {venueFields.venueAddress}
+                    </p>
                   </div>
                 )}
 
@@ -624,7 +426,7 @@ export default function PartnerPage() {
                   Добро пожаловать в БаняГид!
                 </h2>
                 <p className="mb-6 text-muted-foreground">
-                  Аккаунт создан. Карточка «{venueName}» сохранена как{" "}
+                  Аккаунт создан. Карточка «{venueFields.venueName}» сохранена как{" "}
                   <strong>черновик</strong>: модератор её не видит, пока вы не
                   заполните витрину и не отправите заявку на проверку из
                   редактирования карточки.
@@ -633,12 +435,14 @@ export default function PartnerPage() {
                 <div className="mb-6 rounded-lg bg-secondary/50 p-4 text-left">
                   <div className="flex items-center gap-2 mb-2">
                     <Building2 className="h-4 w-4 text-primary" />
-                    <span className="font-medium text-card-foreground">{venueName}</span>
+                    <span className="font-medium text-card-foreground">{venueFields.venueName}</span>
                     <Badge variant="secondary" className="text-xs">
-                      {venueType === "banya" ? "Баня" : venueType === "sauna" ? "Сауна" : "Хаммам"}
+                      {venueTypeBadgeLabel(venueFields.venueType)}
                     </Badge>
                   </div>
-                  <p className="text-sm text-muted-foreground">{venueCity}, {venueAddress}</p>
+                  <p className="text-sm text-muted-foreground">
+                    {venueFields.venueCity}, {venueFields.venueAddress}
+                  </p>
                 </div>
 
                 <div className="flex flex-col gap-3 sm:flex-row">

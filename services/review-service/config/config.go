@@ -11,6 +11,7 @@ type Config struct {
 	NATSURL            string
 	BookingServiceAddr string
 	VenueServiceAddr   string
+	MasterServiceAddr  string
 }
 
 func Load() Config {
@@ -24,5 +25,6 @@ func Load() Config {
 		NATSURL:            config.GetEnv("NATS_URL", "nats://localhost:4222"),
 		BookingServiceAddr: config.GetEnv("BOOKING_SERVICE_ADDR", "localhost:50054"),
 		VenueServiceAddr:   config.GetEnv("VENUE_SERVICE_ADDR", "localhost:50053"),
+		MasterServiceAddr:  config.GetEnv("MASTER_SERVICE_ADDR", "localhost:50057"),
 	}
 }

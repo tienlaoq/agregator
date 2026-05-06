@@ -94,6 +94,10 @@ errors:
     code: GATEWAY.REVIEW.VENUE_ID_REQUIRED
     message: "Параметр venue_id обязателен"
 
+  - http_status: 409
+    code: GATEWAY.REVIEW.BOOKING_NOT_VERIFIED
+    message: "Ваша бронь не подтверждена платформой"
+
   - http_status: 400
     code: GATEWAY.REQUEST.BODY_READ_FAILED
     message: "Не удалось прочитать тело запроса"

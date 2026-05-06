@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect } from "react"
+import { useEffect, useState } from "react"
 import { useRouter } from "next/navigation"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import Link from "next/link"
@@ -8,9 +8,10 @@ import { Button } from "@/components/ui/button"
 import { Badge } from "@/components/ui/badge"
 import { BookingCardLayout } from "@/components/banya/booking-card-layout"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { getMyBookings, cancelBooking } from "@/lib/api"
+import { getMyBookings, cancelBooking, getMyClientMasterBookings } from "@/lib/api"
+import { BookingChatPanel } from "@/components/banya/booking-chat-panel"
 import { useAuthStore } from "@/store/auth"
-import type { Booking } from "@/lib/types"
+import type { Booking, MasterBooking } from "@/lib/types"
 import { CalendarDays, Users, Clock, X } from "lucide-react"
 
 function formatTime(b: Booking): string {
@@ -19,47 +20,77 @@ function formatTime(b: Booking): string {
   return b.time || "—"
 }
 
-function BookingCard({ booking, onCancel, cancelling }: { booking: Booking; onCancel: (id: string) => void; cancelling: boolean }) {
+function BookingCard({
+  booking,
+  onCancel,
+  cancelling,
+}: {
+  booking: Booking;
+  onCancel: (id: string) => void;
+  cancelling: boolean;
+}) {
+  const [showChat, setShowChat] = useState(false)
   return (
-    <BookingCardLayout
-      title={booking.venue_name || "Без названия"}
-      status={booking.status}
-      meta={
-        <div className="flex flex-wrap gap-4 text-sm text-muted-foreground">
-          <div className="flex items-center gap-1">
-            <CalendarDays className="h-4 w-4 shrink-0" />
-            {new Date(booking.date).toLocaleDateString("ru-RU")}
+    <div className="space-y-3">
+      <BookingCardLayout
+        title={booking.venue_name || "Без названия"}
+        status={booking.status}
+        meta={
+          <div className="flex flex-wrap gap-4 text-sm text-muted-foreground">
+            <div className="flex items-center gap-1">
+              <CalendarDays className="h-4 w-4 shrink-0" />
+              {new Date(booking.date).toLocaleDateString("ru-RU")}
+            </div>
+            <div className="flex items-center gap-1">
+              <Clock className="h-4 w-4 shrink-0" />
+              {formatTime(booking)}
+            </div>
+            <div className="flex items-center gap-1">
+              <Users className="h-4 w-4 shrink-0" />
+              {booking.guests} гостей
+            </div>
           </div>
-          <div className="flex items-center gap-1">
-            <Clock className="h-4 w-4 shrink-0" />
-            {formatTime(booking)}
-          </div>
-          <div className="flex items-center gap-1">
-            <Users className="h-4 w-4 shrink-0" />
-            {booking.guests} гостей
-          </div>
-        </div>
-      }
-      aside={
-        <>
-          <span className="text-lg font-bold text-foreground">
-            {booking.total_price.toLocaleString("ru-RU")} ₽
-          </span>
-          {(booking.status === "pending" || booking.status === "confirmed") && (
+        }
+        aside={
+          <>
+            <span className="text-lg font-bold text-foreground">
+              {booking.total_price.toLocaleString("ru-RU")} ₽
+            </span>
+            <Button variant="ghost" size="sm" asChild>
+              <Link href={`/support?booking_id=${encodeURIComponent(booking.id)}&source=my_bookings`}>
+                Поддержка
+              </Link>
+            </Button>
             <Button
               variant="outline"
               size="sm"
-              className="gap-1 text-destructive hover:text-destructive"
-              onClick={() => onCancel(booking.id)}
-              disabled={cancelling}
+              onClick={() => setShowChat((v) => !v)}
             >
-              <X className="h-4 w-4" />
-              Отменить
+              {showChat ? "Скрыть чат" : "Чат по брони"}
             </Button>
-          )}
-        </>
-      }
-    />
+            {(booking.status === "pending" || booking.status === "confirmed") && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="gap-1 text-destructive hover:text-destructive"
+                onClick={() => onCancel(booking.id)}
+                disabled={cancelling}
+              >
+                <X className="h-4 w-4" />
+                Отменить
+              </Button>
+            )}
+          </>
+        }
+      />
+      {showChat ? (
+        <BookingChatPanel
+          kind="venue_booking"
+          refId={booking.id}
+          title={`Чат по брони: ${booking.venue_name || "заведение"}`}
+        />
+      ) : null}
+    </div>
   )
 }
 
@@ -78,6 +109,51 @@ function EmptyState({ title, description, showCatalogLink }: { title: string; de
   )
 }
 
+function MasterBookingCard({ booking }: { booking: MasterBooking }) {
+  const [showChat, setShowChat] = useState(false)
+  return (
+    <div className="space-y-3">
+      <BookingCardLayout
+        title="Пар-мастер"
+        status={booking.status}
+        meta={
+          <div className="flex flex-wrap gap-4 text-sm text-muted-foreground">
+            <div className="flex items-center gap-1">
+              <CalendarDays className="h-4 w-4 shrink-0" />
+              {new Date(booking.date).toLocaleDateString("ru-RU")}
+            </div>
+            <div className="flex items-center gap-1">
+              <Clock className="h-4 w-4 shrink-0" />
+              {booking.time_from}–{booking.time_to}
+            </div>
+          </div>
+        }
+        aside={
+          <>
+            <Button variant="ghost" size="sm" asChild>
+              <Link
+                href={`/support?booking_id=${encodeURIComponent(booking.id)}${booking.payment_id ? `&payment_id=${encodeURIComponent(booking.payment_id)}` : ""}&source=my_bookings`}
+              >
+                Поддержка
+              </Link>
+            </Button>
+            <Button variant="outline" size="sm" onClick={() => setShowChat((v) => !v)}>
+              {showChat ? "Скрыть чат" : "Чат по брони"}
+            </Button>
+          </>
+        }
+      />
+      {showChat ? (
+        <BookingChatPanel
+          kind="master_booking"
+          refId={booking.id}
+          title="Чат по брони: пар-мастер"
+        />
+      ) : null}
+    </div>
+  )
+}
+
 export default function MyBookingsPage() {
   const router = useRouter()
   const { token, hydrated } = useAuthStore()
@@ -90,6 +166,11 @@ export default function MyBookingsPage() {
   const { data: bookings, isLoading } = useQuery({
     queryKey: ["my-bookings"],
     queryFn: getMyBookings,
+    enabled: !!token,
+  })
+  const { data: masterBookingsResp, isLoading: isLoadingMasterBookings } = useQuery({
+    queryKey: ["my-master-bookings"],
+    queryFn: () => getMyClientMasterBookings(),
     enabled: !!token,
   })
 
@@ -105,13 +186,23 @@ export default function MyBookingsPage() {
   const upcomingBookings = (bookings ?? []).filter((b) => b.status === "pending" || b.status === "payment_pending" || b.status === "confirmed")
   const completedBookings = (bookings ?? []).filter((b) => b.status === "completed")
   const cancelledBookings = (bookings ?? []).filter((b) => b.status === "cancelled")
+  const masterBookings = masterBookingsResp?.bookings ?? []
+  const upcomingMasterBookings = masterBookings.filter((b) => {
+    const s = String(b.status || "").toLowerCase()
+    return s !== "completed" && s !== "cancelled"
+  })
 
   return (
     <section className="bg-background py-16 md:py-24">
       <div className="container mx-auto px-4">
-        <h2 className="mb-8 text-3xl font-bold text-foreground md:text-4xl">Мои бронирования</h2>
+        <div className="mb-8 flex flex-wrap items-center justify-between gap-3">
+          <h2 className="text-3xl font-bold text-foreground md:text-4xl">Мои бронирования</h2>
+          <Button variant="outline" asChild>
+            <Link href="/support?source=my_bookings">Связаться с поддержкой</Link>
+          </Button>
+        </div>
 
-        {isLoading ? (
+        {isLoading || isLoadingMasterBookings ? (
           <div className="space-y-4">
             {Array.from({ length: 3 }).map((_, i) => (
               <div key={i} className="h-32 animate-pulse rounded-xl bg-muted" />
@@ -122,9 +213,9 @@ export default function MyBookingsPage() {
             <TabsList className="mb-6 w-full justify-start">
               <TabsTrigger value="upcoming" className="gap-2">
                 Предстоящие
-                {upcomingBookings.length > 0 && (
+                {upcomingBookings.length + upcomingMasterBookings.length > 0 && (
                   <Badge variant="secondary" className="ml-1 h-5 min-w-[20px] rounded-full px-1.5">
-                    {upcomingBookings.length}
+                    {upcomingBookings.length + upcomingMasterBookings.length}
                   </Badge>
                 )}
               </TabsTrigger>
@@ -133,7 +224,7 @@ export default function MyBookingsPage() {
             </TabsList>
 
             <TabsContent value="upcoming">
-              {upcomingBookings.length > 0 ? (
+              {upcomingBookings.length > 0 || upcomingMasterBookings.length > 0 ? (
                 <div className="space-y-4">
                   {upcomingBookings.map((booking) => (
                     <BookingCard
@@ -142,6 +233,9 @@ export default function MyBookingsPage() {
                       onCancel={(id) => cancelMutation.mutate(id)}
                       cancelling={cancelMutation.isPending}
                     />
+                  ))}
+                  {upcomingMasterBookings.map((booking) => (
+                    <MasterBookingCard key={booking.id} booking={booking} />
                   ))}
                 </div>
               ) : (

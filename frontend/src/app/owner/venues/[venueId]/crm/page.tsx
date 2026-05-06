@@ -56,7 +56,7 @@ import {
 } from "@/lib/api";
 import { useAuthStore } from "@/store/auth";
 import type { Booking, Venue, VenueCrmTask, VenueStaffRow } from "@/lib/types";
-import { VENUE_TYPE_LABELS } from "@/lib/types";
+import { BOOKING_STATUS_LABELS, VENUE_TYPE_LABELS } from "@/lib/types";
 import {
   ArrowLeft,
   CheckCircle2,
@@ -66,6 +66,7 @@ import {
   Trash2,
   UserPlus,
 } from "lucide-react";
+import { BookingChatPanel } from "@/components/banya/booking-chat-panel";
 
 const uuidRe =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -410,11 +411,6 @@ export default function OwnerVenueCrmPage() {
                                 {t.body}
                               </p>
                             ) : null}
-                            {t.booking_id ? (
-                              <p className="mt-1 text-xs text-muted-foreground">
-                                Бронь: {t.booking_id.slice(0, 8)}…
-                              </p>
-                            ) : null}
                           </TableCell>
                           <TableCell>
                             <Badge
@@ -462,11 +458,23 @@ export default function OwnerVenueCrmPage() {
                   onChange={(e) => setTaskBody(e.target.value)}
                   className="min-h-[80px]"
                 />
-                <Input
-                  placeholder="ID брони (UUID, необязательно)"
-                  value={taskBookingId}
-                  onChange={(e) => setTaskBookingId(e.target.value)}
-                />
+                <div className="space-y-2">
+                  <Label htmlFor="task-booking-id" className="text-foreground">
+                    Задача про конкретное бронирование?
+                  </Label>
+                  <p className="text-xs text-muted-foreground">
+                    Оставьте пустым — задача общая по заведению. Если нужно привязать к одному визиту,
+                    вставьте технический номер брони (UUID), например из письма поддержки или
+                    внутренних инструментов — в списке броней ниже этот номер не показывается.
+                  </p>
+                  <Input
+                    id="task-booking-id"
+                    placeholder="Технический номер брони — только если известен"
+                    value={taskBookingId}
+                    onChange={(e) => setTaskBookingId(e.target.value)}
+                    autoComplete="off"
+                  />
+                </div>
                 <Button
                   type="button"
                   disabled={
@@ -648,8 +656,8 @@ export default function OwnerVenueCrmPage() {
                               {b.date} · {b.time}
                             </div>
                             <div className="truncate text-sm text-muted-foreground">
-                              {b.status} · {b.total_price?.toLocaleString("ru-RU")}{" "}
-                              ₽
+                              {BOOKING_STATUS_LABELS[b.status] ?? b.status} ·{" "}
+                              {b.total_price?.toLocaleString("ru-RU")} ₽
                             </div>
                           </div>
                           <ChevronDown
@@ -661,10 +669,6 @@ export default function OwnerVenueCrmPage() {
                       </CollapsibleTrigger>
                       <CollapsibleContent>
                         <div className="space-y-3 border-t border-border px-4 py-3">
-                          <p className="text-xs text-muted-foreground">
-                            ID:{" "}
-                            <span className="font-mono">{b.id}</span>
-                          </p>
                           {expandedBookingId === b.id ? (
                             <div className="space-y-3">
                               {notesQueries.isLoading ? (
@@ -677,10 +681,7 @@ export default function OwnerVenueCrmPage() {
                                       className="rounded-md border border-border bg-muted/30 p-2"
                                     >
                                       <div className="text-xs text-muted-foreground">
-                                        {formatDt(n.created_at)} ·{" "}
-                                        <span className="font-mono">
-                                          {n.author_user_id.slice(0, 8)}…
-                                        </span>
+                                        {formatDt(n.created_at)}
                                       </div>
                                       <p className="mt-1 whitespace-pre-wrap">
                                         {n.body}
@@ -718,6 +719,11 @@ export default function OwnerVenueCrmPage() {
                                   Сохранить заметку
                                 </Button>
                               </div>
+                              <BookingChatPanel
+                                kind="venue_booking"
+                                refId={b.id}
+                                title="Чат с клиентом"
+                              />
                             </div>
                           ) : null}
                         </div>

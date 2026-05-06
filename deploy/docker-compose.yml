@@ -164,6 +164,7 @@ services:
       NATS_URL: nats://nats:4222
       BOOKING_SERVICE_ADDR: booking-service:50054
       VENUE_SERVICE_ADDR: venue-service:50053
+      MASTER_SERVICE_ADDR: master-service:50057
     depends_on:
       postgres:
         condition: service_healthy
@@ -179,6 +180,25 @@ services:
       GRPC_PORT: "50057"
       PG_HOST: postgres
       PG_DB: master_db
+      PG_USER: banya
+      PG_PASSWORD: ${POSTGRES_PASSWORD}
+      NATS_URL: nats://nats:4222
+      PAYMENT_SERVICE_ADDR: payment-service:50056
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  chat-service:
+    build:
+      context: ..
+      dockerfile: services/chat-service/Dockerfile
+    container_name: banya-chat
+    ports:
+      - "50058:50058"
+    environment:
+      GRPC_PORT: "50058"
+      PG_HOST: postgres
+      PG_DB: chat_db
       PG_USER: banya
       PG_PASSWORD: ${POSTGRES_PASSWORD}
     depends_on:
@@ -200,8 +220,8 @@ services:
       PG_PASSWORD: ${POSTGRES_PASSWORD}
       REDIS_ADDR: redis:6379
       NATS_URL: nats://nats:4222
-      YOOKASSA_SHOP_ID: ""
-      YOOKASSA_SECRET_KEY: ""
+      YOOKASSA_SHOP_ID: ${YOOKASSA_SHOP_ID:-}
+      YOOKASSA_SECRET_KEY: ${YOOKASSA_SECRET_KEY:-}
       PAYMENT_RETURN_URL: ${FRONTEND_URL:-http://localhost:3000}/my/bookings
       PLATFORM_FEE_BPS: "1500"
     depends_on:
@@ -223,6 +243,7 @@ services:
       HTTP_PORT: "8080"
       UPLOAD_ROOT: /data/uploads
       NATS_URL: nats://nats:4222
+      REDIS_ADDR: redis:6379
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
       OTEL_EXPORTER_OTLP_INSECURE: ${OTEL_EXPORTER_OTLP_INSECURE:-}
       AUTH_SERVICE_ADDR: auth-service:50051
@@ -232,6 +253,7 @@ services:
       REVIEW_SERVICE_ADDR: review-service:50055
       PAYMENT_SERVICE_ADDR: payment-service:50056
       MASTER_SERVICE_ADDR: master-service:50057
+      CHAT_SERVICE_ADDR: chat-service:50058
       BASE_URL: ${BASE_URL:-http://localhost:8080}
       FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3000}
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-}
@@ -245,20 +267,42 @@ services:
       SMTP_TLS: ${SMTP_TLS:-}
       SMTP_DIAL_TIMEOUT: ${SMTP_DIAL_TIMEOUT:-12s}
       SMTP_SEND_TIMEOUT: ${SMTP_SEND_TIMEOUT:-45s}
-      # Лимит POST /auth/forgot-password на один IP (память процесса; при нескольких репликах gateway нужен общий store).
+      SUPPORT_HELPDESK_WEBHOOK_URL: ${SUPPORT_HELPDESK_WEBHOOK_URL:-}
+      SUPPORT_HELPDESK_WEBHOOK_TOKEN: ${SUPPORT_HELPDESK_WEBHOOK_TOKEN:-}
+      SUPPORT_MODERATOR_EMAILS: ${SUPPORT_MODERATOR_EMAILS:-}
+      PG_HOST: postgres
+      PG_PORT: "5432"
+      PG_USER: banya
+      PG_PASSWORD: ${POSTGRES_PASSWORD}
+      PG_DB: support_db
+      # Лимит POST /auth/forgot-password на один IP (distributed при REDIS_ADDR).
       FORGOT_PASSWORD_RATE_LIMIT_MAX: ${FORGOT_PASSWORD_RATE_LIMIT_MAX:-10}
       FORGOT_PASSWORD_RATE_LIMIT_WINDOW: ${FORGOT_PASSWORD_RATE_LIMIT_WINDOW:-15m}
+      FORGOT_PASSWORD_RATE_LIMIT_KEY_PREFIX: ${FORGOT_PASSWORD_RATE_LIMIT_KEY_PREFIX:-auth:forgot:}
+      FORGOT_PASSWORD_RATE_LIMIT_FAIL_OPEN: ${FORGOT_PASSWORD_RATE_LIMIT_FAIL_OPEN:-true}
     volumes:
       - gateway_uploads:/data/uploads
     depends_on:
-      - auth-service
-      - user-service
-      - venue-service
-      - booking-service
-      - review-service
-      - payment-service
-      - master-service
-      - nats
+      postgres:
+        condition: service_healthy
+      auth-service:
+        condition: service_started
+      user-service:
+        condition: service_started
+      venue-service:
+        condition: service_started
+      booking-service:
+        condition: service_started
+      review-service:
+        condition: service_started
+      payment-service:
+        condition: service_started
+      master-service:
+        condition: service_started
+      chat-service:
+        condition: service_started
+      nats:
+        condition: service_started
 
   # Next.js UI (опционально): docker compose --profile frontend up -d --build
   frontend:

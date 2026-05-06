@@ -19,7 +19,10 @@ type MasterRepository interface {
 	InsertModerationHistory(ctx context.Context, e *ModerationHistoryEntry) error
 	ListModerationHistory(ctx context.Context, masterID uuid.UUID, limit int32) ([]ModerationHistoryEntry, error)
 	InsertBooking(ctx context.Context, b *MasterBooking) error
+	GetBookingByID(ctx context.Context, bookingID uuid.UUID) (*MasterBooking, error)
 	ListBookingsByMaster(ctx context.Context, masterID uuid.UUID, statusFilter string) ([]MasterBooking, error)
+	ListBookingsByClient(ctx context.Context, clientUserID uuid.UUID, statusFilter string) ([]MasterBooking, error)
+	HasCompletedBookingByClientMaster(ctx context.Context, clientUserID, masterID uuid.UUID) (bool, error)
 
 	CountPhotosByMaster(ctx context.Context, masterID uuid.UUID) (int32, error)
 	AddMasterPhoto(ctx context.Context, masterID uuid.UUID, url string) (*MasterPhoto, error)

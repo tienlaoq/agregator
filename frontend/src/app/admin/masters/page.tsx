@@ -23,7 +23,8 @@ import {
   getMasterModerationHistory,
   venueMediaUrl,
 } from "@/lib/api";
-import type { MasterPhoto, MasterProfile } from "@/lib/types";
+import { MasterTravelBaseMap } from "@/components/banya/master-travel-base-map";
+import type { MasterPhoto, MasterProfile, MasterTravelExcludeZone } from "@/lib/types";
 import { MASTER_PROFILE_STATUS_LABELS, PAYOUT_LEGAL_FORM_LABELS } from "@/lib/types";
 import { ChevronDown, Shield, Users, History } from "lucide-react";
 
@@ -66,6 +67,23 @@ function MasterModerationFullProfile({ m }: { m: MasterProfile }) {
   const photos = sortMasterPhotos(m.photos);
   const availNote = availabilityNoteFromJson(m.availability_json);
   const wf = WORK_FORMAT_LABELS[m.work_format] ?? m.work_format;
+  const yandexMapsApiKey = process.env.NEXT_PUBLIC_YANDEX_MAPS_API_KEY;
+  const canShowTravelMap =
+    (m.work_format === "mobile" || m.work_format === "both") &&
+    Number.isFinite(Number(m.travel_radius_km)) &&
+    Number(m.travel_radius_km) > 0 &&
+    m.travel_base_latitude != null &&
+    m.travel_base_longitude != null;
+  const excludeZones: MasterTravelExcludeZone[] = (m.travel_exclude_zones ?? []).map((z, i) => ({
+    id: z.id?.trim() ? z.id : `ex-${i}`,
+    latitude: z.latitude,
+    longitude: z.longitude,
+    radius_km: z.radius_km,
+    label: z.label ?? "",
+  }));
+  const mapVersion = `${m.id}-${m.updated_at ?? ""}-${excludeZones
+    .map((z) => `${z.id}:${z.latitude}:${z.longitude}:${z.radius_km}`)
+    .join("|")}`;
 
   return (
     <details className="group rounded-lg border border-border bg-muted/30">
@@ -209,6 +227,70 @@ function MasterModerationFullProfile({ m }: { m: MasterProfile }) {
                 </li>
               ))}
             </ul>
+          )}
+        </section>
+
+        <section className="space-y-2">
+          <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+            Яндекс.Карты и зона выезда
+          </h3>
+          <dl className="grid gap-3 sm:grid-cols-2">
+            <div>
+              <dt className="text-xs text-muted-foreground">Точка отсчёта (lat, lon)</dt>
+              <dd className="mt-0.5 font-mono text-xs">
+                {m.travel_base_latitude != null && m.travel_base_longitude != null
+                  ? `${m.travel_base_latitude.toFixed(6)}, ${m.travel_base_longitude.toFixed(6)}`
+                  : "—"}
+              </dd>
+            </div>
+            <div>
+              <dt className="text-xs text-muted-foreground">Ссылка в Яндекс.Карты</dt>
+              <dd className="mt-0.5">
+                {m.travel_base_latitude != null && m.travel_base_longitude != null ? (
+                  <a
+                    href={`https://yandex.ru/maps/?pt=${m.travel_base_longitude},${m.travel_base_latitude}&z=14&l=map`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-primary underline"
+                  >
+                    Открыть метку
+                  </a>
+                ) : (
+                  "—"
+                )}
+              </dd>
+            </div>
+            <div>
+              <dt className="text-xs text-muted-foreground">Радиус зоны, км</dt>
+              <dd className="mt-0.5">{m.travel_radius_km ?? "—"}</dd>
+            </div>
+            <div>
+              <dt className="text-xs text-muted-foreground">Исключающие зоны</dt>
+              <dd className="mt-0.5">{excludeZones.length}</dd>
+            </div>
+          </dl>
+          {canShowTravelMap ? (
+            yandexMapsApiKey ? (
+              <MasterTravelBaseMap
+                readOnly
+                apiKey={yandexMapsApiKey}
+                mapVersion={mapVersion}
+                cityHint={m.city || ""}
+                seedLat={m.travel_base_latitude ?? null}
+                seedLon={m.travel_base_longitude ?? null}
+                onPositionChange={() => {}}
+                travelRadiusKm={Number(m.travel_radius_km) || 0}
+                excludeZones={excludeZones}
+              />
+            ) : (
+              <p className="text-xs text-muted-foreground">
+                Карта не отображается: не задан `NEXT_PUBLIC_YANDEX_MAPS_API_KEY`.
+              </p>
+            )
+          ) : (
+            <p className="text-xs text-muted-foreground">
+              Для этого мастера зона выезда на карте не используется или заполнена не полностью.
+            </p>
           )}
         </section>
 

@@ -14,6 +14,7 @@ type mockReviewRepo struct {
 	CreateFunc            func(ctx context.Context, review *domain.Review) error
 	GetByIDFunc           func(ctx context.Context, id string) (*domain.Review, error)
 	ListByVenueFunc       func(ctx context.Context, venueID string, page, pageSize int32) ([]*domain.Review, int32, error)
+	ListByMasterFunc      func(ctx context.Context, masterID string, page, pageSize int32) ([]*domain.Review, int32, error)
 	GetVenueRatingFunc    func(ctx context.Context, venueID string) (*domain.VenueRating, error)
 	UpdateVenueRatingFunc func(ctx context.Context, venueID string) error
 }
@@ -39,6 +40,13 @@ func (m *mockReviewRepo) ListByVenue(ctx context.Context, venueID string, page, 
 	return nil, 0, nil
 }
 
+func (m *mockReviewRepo) ListByMaster(ctx context.Context, masterID string, page, pageSize int32) ([]*domain.Review, int32, error) {
+	if m.ListByMasterFunc != nil {
+		return m.ListByMasterFunc(ctx, masterID, page, pageSize)
+	}
+	return nil, 0, nil
+}
+
 func (m *mockReviewRepo) GetVenueRating(ctx context.Context, venueID string) (*domain.VenueRating, error) {
 	if m.GetVenueRatingFunc != nil {
 		return m.GetVenueRatingFunc(ctx, venueID)
@@ -54,14 +62,14 @@ func (m *mockReviewRepo) UpdateVenueRating(ctx context.Context, venueID string) 
 }
 
 type mockBookingClient struct {
-	CreateBookingFunc        func(ctx context.Context, in *bookingv1.CreateBookingRequest, opts ...grpc.CallOption) (*bookingv1.BookingResponse, error)
-	GetBookingFunc           func(ctx context.Context, in *bookingv1.GetBookingRequest, opts ...grpc.CallOption) (*bookingv1.BookingResponse, error)
-	ListUserBookingsFunc     func(ctx context.Context, in *bookingv1.ListUserBookingsRequest, opts ...grpc.CallOption) (*bookingv1.ListBookingsResponse, error)
-	ListVenueBookingsFunc    func(ctx context.Context, in *bookingv1.ListVenueBookingsRequest, opts ...grpc.CallOption) (*bookingv1.ListBookingsResponse, error)
-	CancelBookingFunc        func(ctx context.Context, in *bookingv1.CancelBookingRequest, opts ...grpc.CallOption) (*bookingv1.BookingResponse, error)
-	ConfirmBookingFunc       func(ctx context.Context, in *bookingv1.ConfirmBookingRequest, opts ...grpc.CallOption) (*bookingv1.BookingResponse, error)
-	CompleteBookingFunc      func(ctx context.Context, in *bookingv1.CompleteBookingRequest, opts ...grpc.CallOption) (*bookingv1.BookingResponse, error)
-	HasCompletedBookingFunc  func(ctx context.Context, in *bookingv1.HasCompletedBookingRequest, opts ...grpc.CallOption) (*bookingv1.HasCompletedBookingResponse, error)
+	CreateBookingFunc       func(ctx context.Context, in *bookingv1.CreateBookingRequest, opts ...grpc.CallOption) (*bookingv1.BookingResponse, error)
+	GetBookingFunc          func(ctx context.Context, in *bookingv1.GetBookingRequest, opts ...grpc.CallOption) (*bookingv1.BookingResponse, error)
+	ListUserBookingsFunc    func(ctx context.Context, in *bookingv1.ListUserBookingsRequest, opts ...grpc.CallOption) (*bookingv1.ListBookingsResponse, error)
+	ListVenueBookingsFunc   func(ctx context.Context, in *bookingv1.ListVenueBookingsRequest, opts ...grpc.CallOption) (*bookingv1.ListBookingsResponse, error)
+	CancelBookingFunc       func(ctx context.Context, in *bookingv1.CancelBookingRequest, opts ...grpc.CallOption) (*bookingv1.BookingResponse, error)
+	ConfirmBookingFunc      func(ctx context.Context, in *bookingv1.ConfirmBookingRequest, opts ...grpc.CallOption) (*bookingv1.BookingResponse, error)
+	CompleteBookingFunc     func(ctx context.Context, in *bookingv1.CompleteBookingRequest, opts ...grpc.CallOption) (*bookingv1.BookingResponse, error)
+	HasCompletedBookingFunc func(ctx context.Context, in *bookingv1.HasCompletedBookingRequest, opts ...grpc.CallOption) (*bookingv1.HasCompletedBookingResponse, error)
 }
 
 func (m *mockBookingClient) CreateBooking(ctx context.Context, in *bookingv1.CreateBookingRequest, opts ...grpc.CallOption) (*bookingv1.BookingResponse, error) {

@@ -68,9 +68,11 @@ INSERT INTO masters (
   id, user_id, slug, display_name, bio, phone, city, work_format,
   travel_radius_km, travel_base_latitude, travel_base_longitude, travel_exclude_zones_json,
   experience_years, specializations, hourly_rate, availability_json,
-  payout_legal_form,
+  payout_legal_form, yookassa_seller_account_id,
+  payout_legal_name, payout_inn, payout_kpp, payout_ogrn, payout_ogrnip,
+  payout_bank_name, payout_bik, payout_settlement_account, payout_correspondent_account, payout_verification_status,
   status, moderation_comment, moderated_by, moderated_at
-) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
+) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32)
 `
 	zj, err := marshalTravelExcludeZonesJSON(m.TravelExcludeZones)
 	if err != nil {
@@ -80,7 +82,9 @@ INSERT INTO masters (
 		m.ID, m.UserID, m.Slug, m.DisplayName, m.Bio, m.Phone, m.City, m.WorkFormat,
 		m.TravelRadiusKm, float64PtrArg(m.TravelBaseLatitude), float64PtrArg(m.TravelBaseLongitude), zj,
 		m.ExperienceYears, m.Specializations, m.HourlyRate, m.AvailabilityJSON,
-		m.PayoutLegalForm,
+		m.PayoutLegalForm, m.YookassaSellerAccountID,
+		m.PayoutLegalName, m.PayoutINN, m.PayoutKPP, m.PayoutOGRN, m.PayoutOGRNIP,
+		m.PayoutBankName, m.PayoutBIK, m.PayoutSettlementAccount, m.PayoutCorrespondentAccount, m.PayoutVerificationStatus,
 		m.Status, m.ModerationComment, m.ModeratedBy, m.ModeratedAt,
 	)
 	return err
@@ -91,7 +95,9 @@ func (r *MasterRepo) GetByUserID(ctx context.Context, userID uuid.UUID) (*domain
 SELECT id, user_id, slug, display_name, bio, phone, city, work_format,
   travel_radius_km, travel_base_latitude, travel_base_longitude, travel_exclude_zones_json,
   experience_years, specializations, hourly_rate, availability_json,
-  payout_legal_form,
+  payout_legal_form, yookassa_seller_account_id,
+  payout_legal_name, payout_inn, payout_kpp, payout_ogrn, payout_ogrnip,
+  payout_bank_name, payout_bik, payout_settlement_account, payout_correspondent_account, payout_verification_status,
   status, moderation_comment, moderated_by, moderated_at, created_at, updated_at
 FROM masters WHERE user_id = $1
 `
@@ -103,7 +109,9 @@ func (r *MasterRepo) GetByID(ctx context.Context, id uuid.UUID) (*domain.Master,
 SELECT id, user_id, slug, display_name, bio, phone, city, work_format,
   travel_radius_km, travel_base_latitude, travel_base_longitude, travel_exclude_zones_json,
   experience_years, specializations, hourly_rate, availability_json,
-  payout_legal_form,
+  payout_legal_form, yookassa_seller_account_id,
+  payout_legal_name, payout_inn, payout_kpp, payout_ogrn, payout_ogrnip,
+  payout_bank_name, payout_bik, payout_settlement_account, payout_correspondent_account, payout_verification_status,
   status, moderation_comment, moderated_by, moderated_at, created_at, updated_at
 FROM masters WHERE id = $1
 `
@@ -115,7 +123,9 @@ func (r *MasterRepo) GetBySlug(ctx context.Context, s string) (*domain.Master, e
 SELECT id, user_id, slug, display_name, bio, phone, city, work_format,
   travel_radius_km, travel_base_latitude, travel_base_longitude, travel_exclude_zones_json,
   experience_years, specializations, hourly_rate, availability_json,
-  payout_legal_form,
+  payout_legal_form, yookassa_seller_account_id,
+  payout_legal_name, payout_inn, payout_kpp, payout_ogrn, payout_ogrnip,
+  payout_bank_name, payout_bik, payout_settlement_account, payout_correspondent_account, payout_verification_status,
   status, moderation_comment, moderated_by, moderated_at, created_at, updated_at
 FROM masters WHERE slug = $1
 `
@@ -131,7 +141,9 @@ func (r *MasterRepo) scanMaster(ctx context.Context, row pgx.Row) (*domain.Maste
 	err := row.Scan(
 		&m.ID, &m.UserID, &m.Slug, &m.DisplayName, &m.Bio, &m.Phone, &m.City, &m.WorkFormat,
 		&m.TravelRadiusKm, &lat, &lon, &zonesJSON, &m.ExperienceYears, &m.Specializations, &m.HourlyRate, &m.AvailabilityJSON,
-		&m.PayoutLegalForm,
+		&m.PayoutLegalForm, &m.YookassaSellerAccountID,
+		&m.PayoutLegalName, &m.PayoutINN, &m.PayoutKPP, &m.PayoutOGRN, &m.PayoutOGRNIP,
+		&m.PayoutBankName, &m.PayoutBIK, &m.PayoutSettlementAccount, &m.PayoutCorrespondentAccount, &m.PayoutVerificationStatus,
 		&m.Status, &m.ModerationComment, &modBy, &modAt, &m.CreatedAt, &m.UpdatedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -192,8 +204,10 @@ UPDATE masters SET
   travel_radius_km = $7, travel_base_latitude = $8, travel_base_longitude = $9,
   travel_exclude_zones_json = $10,
   experience_years = $11, specializations = $12,
-  hourly_rate = $13, availability_json = $14, payout_legal_form = $15, status = $16,
-  moderation_comment = $17, moderated_by = $18, moderated_at = $19,
+  hourly_rate = $13, availability_json = $14, payout_legal_form = $15, yookassa_seller_account_id = $16,
+  payout_legal_name = $17, payout_inn = $18, payout_kpp = $19, payout_ogrn = $20, payout_ogrnip = $21,
+  payout_bank_name = $22, payout_bik = $23, payout_settlement_account = $24, payout_correspondent_account = $25, payout_verification_status = $26,
+  status = $27, moderation_comment = $28, moderated_by = $29, moderated_at = $30,
   updated_at = now()
 WHERE id = $1
 `
@@ -205,7 +219,9 @@ WHERE id = $1
 		m.ID, m.DisplayName, m.Bio, m.Phone, m.City, m.WorkFormat,
 		m.TravelRadiusKm, float64PtrArg(m.TravelBaseLatitude), float64PtrArg(m.TravelBaseLongitude), zj,
 		m.ExperienceYears, m.Specializations, m.HourlyRate, m.AvailabilityJSON,
-		m.PayoutLegalForm,
+		m.PayoutLegalForm, m.YookassaSellerAccountID,
+		m.PayoutLegalName, m.PayoutINN, m.PayoutKPP, m.PayoutOGRN, m.PayoutOGRNIP,
+		m.PayoutBankName, m.PayoutBIK, m.PayoutSettlementAccount, m.PayoutCorrespondentAccount, m.PayoutVerificationStatus,
 		m.Status, m.ModerationComment, m.ModeratedBy, m.ModeratedAt,
 	)
 	if err != nil {
@@ -241,7 +257,9 @@ func (r *MasterRepo) ListByStatus(ctx context.Context, statusFilter string, limi
 SELECT id, user_id, slug, display_name, bio, phone, city, work_format,
   travel_radius_km, travel_base_latitude, travel_base_longitude, travel_exclude_zones_json,
   experience_years, specializations, hourly_rate, availability_json,
-  payout_legal_form,
+  payout_legal_form, yookassa_seller_account_id,
+  payout_legal_name, payout_inn, payout_kpp, payout_ogrn, payout_ogrnip,
+  payout_bank_name, payout_bik, payout_settlement_account, payout_correspondent_account, payout_verification_status,
   status, moderation_comment, moderated_by, moderated_at, created_at, updated_at
 FROM masters`
 	args := []any{}
@@ -272,7 +290,9 @@ FROM masters`
 		if err := rows.Scan(
 			&m.ID, &m.UserID, &m.Slug, &m.DisplayName, &m.Bio, &m.Phone, &m.City, &m.WorkFormat,
 			&m.TravelRadiusKm, &lat, &lon, &zonesJSON, &m.ExperienceYears, &m.Specializations, &m.HourlyRate, &m.AvailabilityJSON,
-			&m.PayoutLegalForm,
+			&m.PayoutLegalForm, &m.YookassaSellerAccountID,
+			&m.PayoutLegalName, &m.PayoutINN, &m.PayoutKPP, &m.PayoutOGRN, &m.PayoutOGRNIP,
+			&m.PayoutBankName, &m.PayoutBIK, &m.PayoutSettlementAccount, &m.PayoutCorrespondentAccount, &m.PayoutVerificationStatus,
 			&m.Status, &m.ModerationComment, &modBy, &modAt, &m.CreatedAt, &m.UpdatedAt,
 		); err != nil {
 			return nil, 0, err
@@ -383,7 +403,9 @@ func (r *MasterRepo) ListPublic(ctx context.Context, p domain.ListPublicMastersP
 SELECT m.id, m.user_id, m.slug, m.display_name, m.bio, m.phone, m.city, m.work_format,
   m.travel_radius_km, m.travel_base_latitude, m.travel_base_longitude, m.travel_exclude_zones_json,
   m.experience_years, m.specializations, m.hourly_rate, m.availability_json,
-  m.payout_legal_form,
+  m.payout_legal_form, m.yookassa_seller_account_id,
+  m.payout_legal_name, m.payout_inn, m.payout_kpp, m.payout_ogrn, m.payout_ogrnip,
+  m.payout_bank_name, m.payout_bik, m.payout_settlement_account, m.payout_correspondent_account, m.payout_verification_status,
   m.status, m.moderation_comment, m.moderated_by, m.moderated_at, m.created_at, m.updated_at
 FROM masters m
 %s
@@ -406,7 +428,9 @@ LIMIT $%d OFFSET $%d`, whereSQL, limIdx, offIdx)
 		if err := rows.Scan(
 			&m.ID, &m.UserID, &m.Slug, &m.DisplayName, &m.Bio, &m.Phone, &m.City, &m.WorkFormat,
 			&m.TravelRadiusKm, &lat, &lon, &zonesJSON, &m.ExperienceYears, &m.Specializations, &m.HourlyRate, &m.AvailabilityJSON,
-			&m.PayoutLegalForm,
+			&m.PayoutLegalForm, &m.YookassaSellerAccountID,
+			&m.PayoutLegalName, &m.PayoutINN, &m.PayoutKPP, &m.PayoutOGRN, &m.PayoutOGRNIP,
+			&m.PayoutBankName, &m.PayoutBIK, &m.PayoutSettlementAccount, &m.PayoutCorrespondentAccount, &m.PayoutVerificationStatus,
 			&m.Status, &m.ModerationComment, &modBy, &modAt, &m.CreatedAt, &m.UpdatedAt,
 		); err != nil {
 			return nil, 0, err
@@ -626,16 +650,78 @@ func (r *MasterRepo) InsertBooking(ctx context.Context, b *domain.MasterBooking)
 		b.ID = uuid.New()
 	}
 	_, err := r.pool.Exec(ctx, `
-INSERT INTO master_bookings (id, master_id, client_user_id, master_service_id, date, time_from, time_to, comment, status)
-VALUES ($1,$2,$3,$4,$5::date,$6::time,$7::time,$8,$9)`,
-		b.ID, b.MasterID, b.ClientUserID, b.MasterServiceID, b.Date, b.TimeFrom, b.TimeTo, b.Comment, b.Status,
+INSERT INTO master_bookings (id, master_id, client_user_id, master_service_id, date, time_from, time_to, comment, status, payment_id, payment_url, total_price)
+VALUES ($1,$2,$3,$4,$5::date,$6::time,$7::time,$8,$9,$10,$11,$12)`,
+		b.ID, b.MasterID, b.ClientUserID, b.MasterServiceID, b.Date, b.TimeFrom, b.TimeTo, b.Comment, b.Status, b.PaymentID, b.PaymentURL, b.TotalPrice,
 	)
 	return err
 }
 
+func (r *MasterRepo) GetBookingByID(ctx context.Context, bookingID uuid.UUID) (*domain.MasterBooking, error) {
+	row := r.pool.QueryRow(ctx, `
+SELECT id, master_id, client_user_id, master_service_id, date::text, time_from::text, time_to::text, comment, status, payment_id, payment_url, total_price, created_at
+FROM master_bookings WHERE id = $1`, bookingID)
+	var b domain.MasterBooking
+	var svcID *uuid.UUID
+	if err := row.Scan(
+		&b.ID, &b.MasterID, &b.ClientUserID, &svcID, &b.Date, &b.TimeFrom, &b.TimeTo, &b.Comment, &b.Status, &b.PaymentID, &b.PaymentURL, &b.TotalPrice, &b.CreatedAt,
+	); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	b.MasterServiceID = svcID
+	return &b, nil
+}
+
+func (r *MasterRepo) GetBookingByPaymentID(ctx context.Context, paymentID string) (*domain.MasterBooking, error) {
+	paymentID = strings.TrimSpace(paymentID)
+	if paymentID == "" {
+		return nil, nil
+	}
+	row := r.pool.QueryRow(ctx, `
+SELECT id, master_id, client_user_id, master_service_id, date::text, time_from::text, time_to::text, comment, status, payment_id, payment_url, total_price, created_at
+FROM master_bookings WHERE payment_id = $1`, paymentID)
+	var b domain.MasterBooking
+	var svcID *uuid.UUID
+	if err := row.Scan(
+		&b.ID, &b.MasterID, &b.ClientUserID, &svcID, &b.Date, &b.TimeFrom, &b.TimeTo, &b.Comment, &b.Status, &b.PaymentID, &b.PaymentURL, &b.TotalPrice, &b.CreatedAt,
+	); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	b.MasterServiceID = svcID
+	return &b, nil
+}
+
+func (r *MasterRepo) SetBookingPayment(ctx context.Context, bookingID uuid.UUID, paymentID, paymentURL string, totalPrice int64, status string) error {
+	paymentID = strings.TrimSpace(paymentID)
+	paymentURL = strings.TrimSpace(paymentURL)
+	ct, err := r.pool.Exec(ctx, `
+UPDATE master_bookings
+SET payment_id = $2,
+    payment_url = $3,
+    total_price = $4,
+    status = $5,
+    updated_at = now()
+WHERE id = $1`,
+		bookingID, paymentID, paymentURL, totalPrice, status,
+	)
+	if err != nil {
+		return err
+	}
+	if ct.RowsAffected() == 0 {
+		return pgx.ErrNoRows
+	}
+	return nil
+}
+
 func (r *MasterRepo) ListBookingsByMaster(ctx context.Context, masterID uuid.UUID, statusFilter string) ([]domain.MasterBooking, error) {
 	q := `
-SELECT id, master_id, client_user_id, master_service_id, date::text, time_from::text, time_to::text, comment, status, created_at
+SELECT id, master_id, client_user_id, master_service_id, date::text, time_from::text, time_to::text, comment, status, payment_id, payment_url, total_price, created_at
 FROM master_bookings WHERE master_id = $1`
 	args := []any{masterID}
 	if statusFilter != "" {
@@ -652,13 +738,68 @@ FROM master_bookings WHERE master_id = $1`
 	for rows.Next() {
 		var b domain.MasterBooking
 		var svcID *uuid.UUID
-		if err := rows.Scan(&b.ID, &b.MasterID, &b.ClientUserID, &svcID, &b.Date, &b.TimeFrom, &b.TimeTo, &b.Comment, &b.Status, &b.CreatedAt); err != nil {
+		if err := rows.Scan(&b.ID, &b.MasterID, &b.ClientUserID, &svcID, &b.Date, &b.TimeFrom, &b.TimeTo, &b.Comment, &b.Status, &b.PaymentID, &b.PaymentURL, &b.TotalPrice, &b.CreatedAt); err != nil {
 			return nil, err
 		}
 		b.MasterServiceID = svcID
 		out = append(out, b)
 	}
 	return out, rows.Err()
+}
+
+func (r *MasterRepo) ListBookingsByClient(ctx context.Context, clientUserID uuid.UUID, statusFilter string) ([]domain.MasterBooking, error) {
+	q := `
+SELECT id, master_id, client_user_id, master_service_id, date::text, time_from::text, time_to::text, comment, status, payment_id, payment_url, total_price, created_at
+FROM master_bookings WHERE client_user_id = $1`
+	args := []any{clientUserID}
+	if statusFilter != "" {
+		q += ` AND status = $2`
+		args = append(args, statusFilter)
+	}
+	q += ` ORDER BY date DESC, time_from DESC`
+	rows, err := r.pool.Query(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []domain.MasterBooking
+	for rows.Next() {
+		var b domain.MasterBooking
+		var svcID *uuid.UUID
+		if err := rows.Scan(&b.ID, &b.MasterID, &b.ClientUserID, &svcID, &b.Date, &b.TimeFrom, &b.TimeTo, &b.Comment, &b.Status, &b.PaymentID, &b.PaymentURL, &b.TotalPrice, &b.CreatedAt); err != nil {
+			return nil, err
+		}
+		b.MasterServiceID = svcID
+		out = append(out, b)
+	}
+	return out, rows.Err()
+}
+
+func (r *MasterRepo) HasCompletedBookingByClientMaster(ctx context.Context, clientUserID, masterID uuid.UUID) (bool, error) {
+	var exists bool
+	err := r.pool.QueryRow(ctx, `
+SELECT EXISTS(
+  SELECT 1
+  FROM master_bookings
+  WHERE client_user_id = $1
+    AND master_id = $2
+    AND status = 'completed'
+)`, clientUserID, masterID).Scan(&exists)
+	if err != nil {
+		return false, err
+	}
+	return exists, nil
+}
+
+func (r *MasterRepo) UpdateBookingStatus(ctx context.Context, bookingID uuid.UUID, status string) error {
+	ct, err := r.pool.Exec(ctx, `UPDATE master_bookings SET status = $2, updated_at = now() WHERE id = $1`, bookingID, status)
+	if err != nil {
+		return err
+	}
+	if ct.RowsAffected() == 0 {
+		return pgx.ErrNoRows
+	}
+	return nil
 }
 
 // MakeUniqueSlug builds a URL slug from display name.

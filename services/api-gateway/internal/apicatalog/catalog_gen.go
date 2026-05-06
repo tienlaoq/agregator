@@ -80,6 +80,8 @@ var (
 	GatewayBookingTimeFromRequired = Entry{HTTP: 400, Code: "GATEWAY.BOOKING.TIME_FROM_REQUIRED", Message: "Поле time_from обязательно"}
 	// GatewayReviewVenueIdRequired — GATEWAY.REVIEW.VENUE_ID_REQUIRED
 	GatewayReviewVenueIdRequired = Entry{HTTP: 400, Code: "GATEWAY.REVIEW.VENUE_ID_REQUIRED", Message: "Параметр venue_id обязателен"}
+	// GatewayReviewBookingNotVerified — GATEWAY.REVIEW.BOOKING_NOT_VERIFIED
+	GatewayReviewBookingNotVerified = Entry{HTTP: 409, Code: "GATEWAY.REVIEW.BOOKING_NOT_VERIFIED", Message: "Ваша бронь не подтверждена платформой"}
 	// GatewayRequestBodyReadFailed — GATEWAY.REQUEST.BODY_READ_FAILED
 	GatewayRequestBodyReadFailed = Entry{HTTP: 400, Code: "GATEWAY.REQUEST.BODY_READ_FAILED", Message: "Не удалось прочитать тело запроса"}
 	// GatewayRequestMethodNotAllowed — GATEWAY.REQUEST.METHOD_NOT_ALLOWED
@@ -165,6 +167,8 @@ func ByCode(code string) (Entry, bool) {
 		return GatewayBookingTimeFromRequired, true
 	case "GATEWAY.REVIEW.VENUE_ID_REQUIRED":
 		return GatewayReviewVenueIdRequired, true
+	case "GATEWAY.REVIEW.BOOKING_NOT_VERIFIED":
+		return GatewayReviewBookingNotVerified, true
 	case "GATEWAY.REQUEST.BODY_READ_FAILED":
 		return GatewayRequestBodyReadFailed, true
 	case "GATEWAY.REQUEST.METHOD_NOT_ALLOWED":

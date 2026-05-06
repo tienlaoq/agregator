@@ -29,33 +29,51 @@ const (
 	PayoutLegalFormSelfEmployed = "self_employed"
 )
 
+const (
+	PayoutVerificationUnverified = "unverified"
+	PayoutVerificationPending    = "pending"
+	PayoutVerificationVerified   = "verified"
+	PayoutVerificationRejected   = "rejected"
+)
+
 type Master struct {
-	ID                uuid.UUID
-	UserID            uuid.UUID
-	Slug              string
-	DisplayName       string
-	Bio               string
-	Phone             string
-	City              string
-	WorkFormat        string
-	TravelRadiusKm    int32
+	ID             uuid.UUID
+	UserID         uuid.UUID
+	Slug           string
+	DisplayName    string
+	Bio            string
+	Phone          string
+	City           string
+	WorkFormat     string
+	TravelRadiusKm int32
 	// Точка отсчёта радиуса выезда (если WorkFormat mobile/both).
-	TravelBaseLatitude  *float64
-	TravelBaseLongitude *float64
-	TravelExcludeZones  []MasterTravelExcludeZone
-	ExperienceYears   int32
-	Specializations   []string
-	HourlyRate        int64
-	AvailabilityJSON  string
-	PayoutLegalForm   string
-	Status            string
-	ModerationComment string
-	ModeratedBy       *uuid.UUID
-	ModeratedAt       *time.Time
-	Services          []MasterService
-	Photos            []MasterPhoto
-	CreatedAt         time.Time
-	UpdatedAt         time.Time
+	TravelBaseLatitude         *float64
+	TravelBaseLongitude        *float64
+	TravelExcludeZones         []MasterTravelExcludeZone
+	ExperienceYears            int32
+	Specializations            []string
+	HourlyRate                 int64
+	AvailabilityJSON           string
+	PayoutLegalForm            string
+	YookassaSellerAccountID    string
+	PayoutLegalName            string
+	PayoutINN                  string
+	PayoutKPP                  string
+	PayoutOGRN                 string
+	PayoutOGRNIP               string
+	PayoutBankName             string
+	PayoutBIK                  string
+	PayoutSettlementAccount    string
+	PayoutCorrespondentAccount string
+	PayoutVerificationStatus   string
+	Status                     string
+	ModerationComment          string
+	ModeratedBy                *uuid.UUID
+	ModeratedAt                *time.Time
+	Services                   []MasterService
+	Photos                     []MasterPhoto
+	CreatedAt                  time.Time
+	UpdatedAt                  time.Time
 }
 
 type MasterPhoto struct {
@@ -114,5 +132,8 @@ type MasterBooking struct {
 	TimeTo          string
 	Comment         string
 	Status          string
+	PaymentID       string
+	PaymentURL      string
+	TotalPrice      int64
 	CreatedAt       time.Time
 }

@@ -1,0 +1,90 @@
+syntax = "proto3";
+
+package chat.v1;
+
+option go_package = "github.com/tienlao/agregator/gen/go/chat/v1;chatv1";
+
+import "google/protobuf/timestamp.proto";
+
+service ChatService {
+  rpc EnsureThread(EnsureThreadRequest) returns (ThreadResponse);
+  rpc ListThreads(ListThreadsRequest) returns (ListThreadsResponse);
+  rpc ListMessages(ListMessagesRequest) returns (ListMessagesResponse);
+  rpc SendMessage(SendMessageRequest) returns (MessageResponse);
+  rpc MarkRead(MarkReadRequest) returns (ThreadResponse);
+}
+
+message ParticipantReadState {
+  string user_id = 1;
+  string last_read_message_id = 2;
+}
+
+message ChatThread {
+  string id = 1;
+  string kind = 2; // venue_booking | master_booking
+  string ref_id = 3;
+  repeated string participant_user_ids = 4;
+  string last_message_id = 5;
+  google.protobuf.Timestamp last_message_at = 6;
+  int32 unread_count = 7;
+  repeated ParticipantReadState participant_reads = 8;
+}
+
+message ChatMessage {
+  string id = 1;
+  string thread_id = 2;
+  string author_user_id = 3;
+  string text = 4;
+  google.protobuf.Timestamp created_at = 5;
+  string client_msg_id = 6;
+}
+
+message EnsureThreadRequest {
+  string kind = 1;
+  string ref_id = 2;
+  repeated string participant_user_ids = 3;
+}
+
+message ThreadResponse {
+  ChatThread thread = 1;
+}
+
+message ListThreadsRequest {
+  string user_id = 1;
+  int32 limit = 2;
+  int32 offset = 3;
+}
+
+message ListThreadsResponse {
+  repeated ChatThread threads = 1;
+  int32 total = 2;
+}
+
+message ListMessagesRequest {
+  string thread_id = 1;
+  string user_id = 2;
+  int32 limit = 3;
+  int32 offset = 4;
+}
+
+message ListMessagesResponse {
+  repeated ChatMessage messages = 1;
+  int32 total = 2;
+}
+
+message SendMessageRequest {
+  string thread_id = 1;
+  string user_id = 2;
+  string text = 3;
+  string client_msg_id = 4;
+}
+
+message MessageResponse {
+  ChatMessage message = 1;
+  ChatThread thread = 2;
+}
+
+message MarkReadRequest {
+  string thread_id = 1;
+  string user_id = 2;
+}

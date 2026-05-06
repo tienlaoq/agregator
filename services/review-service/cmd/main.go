@@ -10,6 +10,7 @@ import (
 	"google.golang.org/grpc"
 
 	bookingv1 "github.com/tienlao/agregator/gen/go/booking/v1"
+	masterv1 "github.com/tienlao/agregator/gen/go/master/v1"
 	reviewv1 "github.com/tienlao/agregator/gen/go/review/v1"
 	venuev1 "github.com/tienlao/agregator/gen/go/venue/v1"
 	"github.com/tienlao/agregator/pkg/grpcutil"
@@ -69,10 +70,18 @@ func main() {
 	venueClient := venuev1.NewVenueServiceClient(venueConn)
 	log.Info().Str("addr", cfg.VenueServiceAddr).Msg("venue-service client ready")
 
+	masterConn, err := grpc.NewClient(cfg.MasterServiceAddr, grpcutil.InsecureDialOptions()...)
+	if err != nil {
+		log.Fatal().Err(err).Msg("failed to dial master-service")
+	}
+	defer masterConn.Close()
+	masterClient := masterv1.NewMasterServiceClient(masterConn)
+	log.Info().Str("addr", cfg.MasterServiceAddr).Msg("master-service client ready")
+
 	reviewRepo := repository.NewReviewRepo(pgPool)
 	publisher := events.NewPublisher(js)
 
-	uc := usecase.NewReviewUseCase(reviewRepo, bookingClient, venueClient, publisher)
+	uc := usecase.NewReviewUseCase(reviewRepo, bookingClient, venueClient, masterClient, publisher)
 
 	grpcServer := grpc.NewServer(grpcutil.ServerOptions()...)
 	reviewv1.RegisterReviewServiceServer(grpcServer, delivery.NewServer(uc))

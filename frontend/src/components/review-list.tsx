@@ -7,13 +7,20 @@ import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { Badge } from "@/components/ui/badge";
-import { createReview } from "@/lib/api";
+import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import { ApiError, createMasterReview, createReview, formatApiErrorMessage } from "@/lib/api";
 import { useAuthStore } from "@/store/auth";
 import type { Review } from "@/lib/types";
 import { CheckCircle, MessageSquare } from "lucide-react";
 
 interface ReviewListProps {
-  venueId: string;
+  targetId: string;
+  targetType?: "venue" | "master";
   reviews: Review[];
   onReviewAdded?: () => void;
 }
@@ -47,12 +54,14 @@ function RatingDistribution({ reviews }: { reviews: Review[] }) {
   );
 }
 
-export function ReviewList({ venueId, reviews, onReviewAdded }: ReviewListProps) {
+export function ReviewList({ targetId, targetType = "venue", reviews, onReviewAdded }: ReviewListProps) {
   const { token } = useAuthStore();
   const [showForm, setShowForm] = useState(false);
   const [rating, setRating] = useState(5);
   const [text, setText] = useState("");
   const [loading, setLoading] = useState(false);
+  const [submitError, setSubmitError] = useState("");
+  const [isAnonymous, setIsAnonymous] = useState(false);
 
   const avgRating =
     reviews.length > 0
@@ -62,14 +71,33 @@ export function ReviewList({ venueId, reviews, onReviewAdded }: ReviewListProps)
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
+    setSubmitError("");
     try {
-      await createReview(venueId, { rating, text });
+      if (targetType === "master") {
+        await createMasterReview(targetId, { rating, text, is_anonymous: isAnonymous });
+      } else {
+        await createReview(targetId, { rating, text, is_anonymous: isAnonymous });
+      }
       setText("");
       setRating(5);
+      setIsAnonymous(false);
       setShowForm(false);
       onReviewAdded?.();
-    } catch {
-      // silently fail for MVP
+    } catch (e) {
+      if (e instanceof ApiError && e.code === "GATEWAY.UPSTREAM.ALREADY_EXISTS") {
+        setSubmitError(
+          targetType === "master"
+            ? "Вы уже оставляли отзыв этому мастеру."
+            : "Вы уже оставляли отзыв этому заведению.",
+        );
+        return;
+      }
+      setSubmitError(
+        formatApiErrorMessage(
+          e,
+          "Не удалось отправить отзыв. Попробуйте позже.",
+        ),
+      );
     } finally {
       setLoading(false);
     }
@@ -94,7 +122,11 @@ export function ReviewList({ venueId, reviews, onReviewAdded }: ReviewListProps)
           <Button
             variant="outline"
             size="sm"
-            onClick={() => setShowForm(!showForm)}
+            onClick={() => {
+              setShowForm(!showForm);
+              setSubmitError("");
+              if (showForm) setIsAnonymous(false);
+            }}
           >
             <MessageSquare className="mr-1 h-4 w-4" />
             Написать отзыв
@@ -126,6 +158,16 @@ export function ReviewList({ venueId, reviews, onReviewAdded }: ReviewListProps)
               required
             />
           </div>
+          <div className="flex items-center gap-2">
+            <Checkbox
+              id="review-anonymous"
+              checked={isAnonymous}
+              onCheckedChange={(v) => setIsAnonymous(v === true)}
+            />
+            <Label htmlFor="review-anonymous" className="cursor-pointer text-sm font-normal">
+              Опубликовать отзыв анонимно
+            </Label>
+          </div>
           <div className="flex gap-2">
             <Button type="submit" size="sm" disabled={loading}>
               {loading ? "Отправка..." : "Отправить"}
@@ -134,11 +176,17 @@ export function ReviewList({ venueId, reviews, onReviewAdded }: ReviewListProps)
               type="button"
               variant="ghost"
               size="sm"
-              onClick={() => setShowForm(false)}
+              onClick={() => {
+                setShowForm(false);
+                setIsAnonymous(false);
+              }}
             >
               Отмена
             </Button>
           </div>
+          {submitError ? (
+            <p className="text-sm text-destructive">{submitError}</p>
+          ) : null}
         </form>
       )}
 
@@ -150,20 +198,32 @@ export function ReviewList({ venueId, reviews, onReviewAdded }: ReviewListProps)
         </p>
       ) : (
         <div className="space-y-4">
-          {reviews.map((review) => (
-            <div key={review.id} className="space-y-2">
+          {reviews.map((review) => {
+            const name = review.is_anonymous
+              ? "Аноним"
+              : (review.user_name || "").trim() || "Пользователь";
+            return (
+              <div key={review.id} className="space-y-2">
               <div className="flex items-center gap-2">
                 <div className="flex h-8 w-8 items-center justify-center rounded-full bg-primary/10 text-sm font-medium text-primary">
-                  {review.user_name.charAt(0).toUpperCase()}
+                  {name.charAt(0).toUpperCase()}
                 </div>
                 <div className="flex-1">
                   <div className="flex items-center gap-2">
-                    <span className="text-sm font-medium">{review.user_name}</span>
+                    <span className="text-sm font-medium">{name}</span>
                     {review.verified && (
-                      <Badge variant="secondary" className="gap-1 text-xs">
-                        <CheckCircle className="h-3 w-3" />
-                        Проверено
-                      </Badge>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Badge variant="secondary" className="gap-1 text-xs">
+                            <CheckCircle className="h-3 w-3" />
+                            Проверено
+                          </Badge>
+                        </TooltipTrigger>
+                        <TooltipContent side="top" sideOffset={6} className="max-w-xs text-[11px] leading-relaxed">
+                          Метка ставится автоматически: у автора есть подтверждённый завершённый визит в это
+                          заведение, поэтому отзыв считается подтверждённым.
+                        </TooltipContent>
+                      </Tooltip>
                     )}
                   </div>
                   <div className="flex items-center gap-2">
@@ -176,8 +236,9 @@ export function ReviewList({ venueId, reviews, onReviewAdded }: ReviewListProps)
               </div>
               <p className="text-sm text-foreground/80">{review.text}</p>
               <Separator />
-            </div>
-          ))}
+              </div>
+            );
+          })}
         </div>
       )}
     </div>

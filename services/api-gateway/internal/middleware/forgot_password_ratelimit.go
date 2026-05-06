@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"context"
 	"net"
 	"net/http"
 	"strings"
@@ -19,9 +20,9 @@ type forgotPasswordHits struct {
 	byIP map[string][]time.Time
 }
 
-func (h *forgotPasswordHits) allow(ip string, max int, window time.Duration) bool {
+func (h *forgotPasswordHits) Allow(_ context.Context, ip string, max int, window time.Duration) (bool, error) {
 	if max <= 0 {
-		return true
+		return true, nil
 	}
 	now := time.Now()
 	cutoff := now.Add(-window)
@@ -40,11 +41,15 @@ func (h *forgotPasswordHits) allow(ip string, max int, window time.Duration) boo
 	}
 	if len(kept) >= max {
 		h.byIP[ip] = kept
-		return false
+		return false, nil
 	}
 	kept = append(kept, now)
 	h.byIP[ip] = kept
-	return true
+	return true, nil
+}
+
+type forgotPasswordLimiter interface {
+	Allow(ctx context.Context, key string, limit int, window time.Duration) (bool, error)
 }
 
 func clientIP(r *http.Request) string {
@@ -62,11 +67,21 @@ func clientIP(r *http.Request) string {
 }
 
 // ForgotPasswordRateLimit returns middleware that returns 429 when the same IP exceeds the limit.
-// FORGOT_PASSWORD_RATE_LIMIT_MAX (default 10), 0 = disabled. FORGOT_PASSWORD_RATE_LIMIT_WINDOW (default 15m).
-func ForgotPasswordRateLimit(log zerolog.Logger) func(http.Handler) http.Handler {
-	h := &forgotPasswordHits{}
+// FORGOT_PASSWORD_RATE_LIMIT_MAX (default 10), 0 = disabled.
+// FORGOT_PASSWORD_RATE_LIMIT_WINDOW (default 15m).
+// FORGOT_PASSWORD_RATE_LIMIT_KEY_PREFIX (default auth:forgot:).
+// FORGOT_PASSWORD_RATE_LIMIT_FAIL_OPEN (default true): if limiter backend errors, allow request.
+func ForgotPasswordRateLimit(log zerolog.Logger, limiter forgotPasswordLimiter) func(http.Handler) http.Handler {
+	if limiter == nil {
+		limiter = &forgotPasswordHits{}
+	}
 	max := config.GetEnvInt("FORGOT_PASSWORD_RATE_LIMIT_MAX", 10)
 	winStr := strings.TrimSpace(config.GetEnv("FORGOT_PASSWORD_RATE_LIMIT_WINDOW", "15m"))
+	keyPrefix := strings.TrimSpace(config.GetEnv("FORGOT_PASSWORD_RATE_LIMIT_KEY_PREFIX", "auth:forgot:"))
+	if keyPrefix == "" {
+		keyPrefix = "auth:forgot:"
+	}
+	failOpen := config.GetEnvBool("FORGOT_PASSWORD_RATE_LIMIT_FAIL_OPEN", true)
 	window, err := time.ParseDuration(winStr)
 	if err != nil || window <= 0 {
 		window = 15 * time.Minute
@@ -79,7 +94,18 @@ func ForgotPasswordRateLimit(log zerolog.Logger) func(http.Handler) http.Handler
 				return
 			}
 			ip := clientIP(r)
-			if !h.allow(ip, max, window) {
+			ok, err := limiter.Allow(r.Context(), keyPrefix+ip, max, window)
+			if err != nil {
+				if failOpen {
+					log.Warn().Err(err).Str("client_ip", ip).Msg("forgot-password rate limiter unavailable, allowing request")
+					next.ServeHTTP(w, r)
+					return
+				}
+				log.Warn().Err(err).Str("client_ip", ip).Msg("forgot-password rate limiter unavailable, blocking request")
+				apicatalog.GatewayRequestRateLimited.Write(w)
+				return
+			}
+			if !ok {
 				log.Warn().Str("client_ip", ip).Msg("forgot-password rate limit exceeded")
 				apicatalog.GatewayRequestRateLimited.Write(w)
 				return

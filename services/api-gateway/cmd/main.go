@@ -13,10 +13,13 @@ import (
 	"github.com/go-chi/chi/v5"
 	chimw "github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/nats-io/nats.go"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/redis/go-redis/v9"
 	authv1 "github.com/tienlao/agregator/gen/go/auth/v1"
 	bookingv1 "github.com/tienlao/agregator/gen/go/booking/v1"
+	chatv1 "github.com/tienlao/agregator/gen/go/chat/v1"
 	masterv1 "github.com/tienlao/agregator/gen/go/master/v1"
 	paymentv1 "github.com/tienlao/agregator/gen/go/payment/v1"
 	reviewv1 "github.com/tienlao/agregator/gen/go/review/v1"
@@ -28,6 +31,8 @@ import (
 	"github.com/tienlao/agregator/services/api-gateway/internal/handler"
 	gwmetrics "github.com/tienlao/agregator/services/api-gateway/internal/metrics"
 	"github.com/tienlao/agregator/services/api-gateway/internal/middleware"
+	"github.com/tienlao/agregator/services/api-gateway/internal/ratelimit"
+	"github.com/tienlao/agregator/services/api-gateway/internal/supportstore"
 	"github.com/tienlao/agregator/services/api-gateway/internal/suspendnotify"
 	"github.com/tienlao/agregator/services/api-gateway/internal/telemetry"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
@@ -59,6 +64,7 @@ func main() {
 	reviewAddr := config.GetEnv("REVIEW_SERVICE_ADDR", "localhost:50055")
 	paymentAddr := config.GetEnv("PAYMENT_SERVICE_ADDR", "localhost:50056")
 	masterAddr := config.GetEnv("MASTER_SERVICE_ADDR", "localhost:50057")
+	chatAddr := config.GetEnv("CHAT_SERVICE_ADDR", "localhost:50058")
 
 	dialOpts := grpcutil.InsecureDialOptions()
 	dialOpts = append(dialOpts, grpc.WithStatsHandler(otelgrpc.NewClientHandler()))
@@ -104,6 +110,11 @@ func main() {
 		log.Fatal().Err(err).Msg("failed to connect to master service")
 	}
 	defer masterConn.Close()
+	chatConn, err := grpc.NewClient(chatAddr, dialOpts...)
+	if err != nil {
+		log.Fatal().Err(err).Msg("failed to connect to chat service")
+	}
+	defer chatConn.Close()
 
 	authClient := authv1.NewAuthServiceClient(authConn)
 	userClient := userv1.NewUserServiceClient(userConn)
@@ -112,9 +123,37 @@ func main() {
 	reviewClient := reviewv1.NewReviewServiceClient(reviewConn)
 	paymentClient := paymentv1.NewPaymentServiceClient(paymentConn)
 	masterClient := masterv1.NewMasterServiceClient(masterConn)
+	chatClient := chatv1.NewChatServiceClient(chatConn)
 
 	baseURL := strings.TrimSpace(config.GetEnv("BASE_URL", "http://localhost:8080"))
 	frontendURL := strings.TrimSpace(config.GetEnv("FRONTEND_URL", "http://localhost:3000"))
+	redisAddr := strings.TrimSpace(config.GetEnv("REDIS_ADDR", ""))
+	supportWebhookURL := strings.TrimSpace(config.GetEnv("SUPPORT_HELPDESK_WEBHOOK_URL", ""))
+	supportWebhookToken := strings.TrimSpace(config.GetEnv("SUPPORT_HELPDESK_WEBHOOK_TOKEN", ""))
+	supportModeratorEmails := parseCSV(config.GetEnv("SUPPORT_MODERATOR_EMAILS", ""))
+
+	var ticketPool *pgxpool.Pool
+	var ticketStore *supportstore.Store
+	pgSupport := config.NewPostgresConfig("PG")
+	pgSupport.DBName = config.GetEnv("PG_DB", "support_db")
+	if err := pgSupport.Validate(); err != nil {
+		log.Warn().Err(err).Msg("support tickets Postgres disabled — set PG_* / migrate support_db for moderator inbox")
+	} else {
+		p, err := pgxpool.New(rootCtx, pgSupport.DSN())
+		if err != nil {
+			log.Warn().Err(err).Msg("support tickets: postgres pool failed")
+		} else if pingErr := p.Ping(rootCtx); pingErr != nil {
+			log.Warn().Err(pingErr).Msg("support tickets: postgres ping failed")
+			p.Close()
+		} else {
+			ticketPool = p
+			ticketStore = supportstore.New(p)
+			log.Info().Str("pg_db", pgSupport.DBName).Msg("support tickets persistence enabled")
+		}
+	}
+	if ticketPool != nil {
+		defer ticketPool.Close()
+	}
 
 	authHandler := handler.NewAuthHandler(authClient)
 	oauthHandler := handler.NewOAuthHandler(authClient, handler.OAuthConfig{
@@ -132,9 +171,22 @@ func main() {
 		log.Info().Msg("SMTP configured: при приостановке и возобновлении заведения владельцу и персоналу уйдут письма")
 	}
 	bookingHandler := handler.NewBookingHandler(bookingClient, venueClient)
-	reviewHandler := handler.NewReviewHandler(reviewClient)
+	reviewHandler := handler.NewReviewHandler(reviewClient, userClient)
 	paymentHandler := handler.NewPaymentHandler(paymentClient)
 	masterHandler := handler.NewMasterHandler(masterClient, uploadRoot)
+	var redisLimiter ratelimit.Limiter
+	var redisClient *redis.Client
+	if redisAddr != "" {
+		rdb := redis.NewClient(&redis.Options{Addr: redisAddr})
+		if err := rdb.Ping(rootCtx).Err(); err != nil {
+			log.Warn().Err(err).Str("redis_addr", redisAddr).Msg("redis unavailable, fallback to in-memory rate limit")
+			_ = rdb.Close()
+		} else {
+			redisClient = rdb
+			redisLimiter = ratelimit.NewRedisLimiter(rdb)
+			defer rdb.Close()
+		}
+	}
 
 	var nc *nats.Conn
 	if natsURL := strings.TrimSpace(config.GetEnv("NATS_URL", "")); natsURL != "" {
@@ -144,8 +196,24 @@ func main() {
 			log.Fatal().Err(natsErr).Str("nats_url", natsURL).Msg("failed to connect to NATS")
 		}
 		defer nc.Close()
-		log.Info().Str("nats_url", natsURL).Msg("NATS connected (analytics publish)")
+		log.Info().Str("nats_url", natsURL).Msg("NATS connected")
 	}
+
+	chatHandler := handler.NewChatHandler(chatClient, bookingClient, venueClient, masterClient, userClient, redisLimiter, redisClient, nc)
+	if nc != nil {
+		if _, err := nc.Subscribe("chat.fanout", func(msg *nats.Msg) {
+			chatHandler.HandleFanoutMessage(msg.Data)
+		}); err != nil {
+			log.Warn().Err(err).Msg("chat NATS fanout subscribe failed")
+		}
+	}
+
+	var ticketRepo handler.SupportTicketsPersistence
+	if ticketStore != nil {
+		ticketRepo = ticketStore
+	}
+	supportHandler := handler.NewSupportHandler(log, supportWebhookURL, supportWebhookToken, supportModeratorEmails, ticketRepo)
+
 	analyticsHandler := handler.NewAnalyticsHandler(log, nc)
 
 	r := chi.NewRouter()
@@ -182,7 +250,7 @@ func main() {
 		api.Post("/auth/login", authHandler.Login)
 		api.Post("/auth/refresh", authHandler.RefreshToken)
 		api.Post("/auth/logout", authHandler.Logout)
-		api.With(middleware.ForgotPasswordRateLimit(log)).Post("/auth/forgot-password", authHandler.ForgotPassword)
+		api.With(middleware.ForgotPasswordRateLimit(log, redisLimiter)).Post("/auth/forgot-password", authHandler.ForgotPassword)
 		api.Post("/auth/reset-password", authHandler.ResetPassword)
 
 		// OAuth (public)
@@ -202,6 +270,7 @@ func main() {
 
 		// Reviews (public read)
 		api.Get("/venues/{venueId}/reviews", reviewHandler.ListByVenue)
+		api.Get("/masters/{masterId}/reviews", reviewHandler.ListByMaster)
 
 		api.Get("/masters", masterHandler.ListPublic)
 		api.Get("/masters/{slug}", masterHandler.GetPublic)
@@ -214,7 +283,7 @@ func main() {
 
 		// Protected routes
 		api.Group(func(protected chi.Router) {
-			protected.Use(middleware.Auth(authClient))
+			protected.Use(middleware.Auth(authClient, redisClient))
 
 			// User profile
 			protected.Get("/users/me", userHandler.GetMe)
@@ -233,6 +302,8 @@ func main() {
 
 			// Owner / CRM views (any authenticated user; venue-service enforces access)
 			ownerCabinet := middleware.RequireRole("user", "venue_owner", "master")
+			// Chat: same as typical participants + admin (support / moderation UX loads threads globally).
+			chatCabinet := middleware.RequireRole("user", "venue_owner", "master", "admin")
 			protected.With(ownerCabinet).Get("/owner/venues", venueHandler.ListOwnerVenues)
 			protected.With(ownerCabinet).Get("/owner/venues/{venueId}/slot-blocks", venueHandler.ListOwnerSlotBlocks)
 			protected.With(ownerCabinet).Post("/owner/venues/{venueId}/slot-blocks", venueHandler.CreateOwnerSlotBlock)
@@ -246,6 +317,22 @@ func main() {
 			protected.With(ownerCabinet).Post("/owner/venues/{venueId}/crm/tasks/{taskId}/complete", venueHandler.CompleteVenueCRMTask)
 			protected.With(ownerCabinet).Get("/owner/venues/{venueId}/bookings/{bookingId}/staff-notes", bookingHandler.ListBookingStaffNotes)
 			protected.With(ownerCabinet).Post("/owner/venues/{venueId}/bookings/{bookingId}/staff-notes", bookingHandler.AddBookingStaffNote)
+			protected.With(chatCabinet).Get("/chat/ws", chatHandler.WS)
+			protected.With(chatCabinet).Post("/chat/threads", chatHandler.EnsureThread)
+			protected.With(chatCabinet).Get("/chat/threads", chatHandler.ListThreads)
+			protected.With(chatCabinet).Get("/chat/threads/{threadId}/messages", chatHandler.ListMessages)
+			protected.With(chatCabinet).Post("/chat/threads/{threadId}/messages", chatHandler.SendMessage)
+			protected.With(chatCabinet).Post("/chat/threads/{threadId}/read", chatHandler.MarkRead)
+
+			// Chat v2 (breaking contract): explicit versioned endpoints with v2 envelope in WS events.
+			protected.With(chatCabinet).Get("/v2/chat/ws", chatHandler.WS)
+			protected.With(chatCabinet).Post("/v2/chat/threads:ensure", chatHandler.EnsureThread)
+			protected.With(chatCabinet).Get("/v2/chat/threads", chatHandler.ListThreads)
+			protected.With(chatCabinet).Get("/v2/chat/threads/{threadId}/messages", chatHandler.ListMessages)
+			protected.With(chatCabinet).Post("/v2/chat/threads/{threadId}/messages", chatHandler.SendMessage)
+			protected.With(chatCabinet).Post("/v2/chat/threads/{threadId}:read", chatHandler.MarkRead)
+			protected.With(chatCabinet).Post("/v2/chat/ws-ticket", chatHandler.IssueWSTicket)
+			protected.With(middleware.RequireRole("user", "venue_owner", "master", "admin")).Post("/support/contact", supportHandler.Contact)
 
 			// Кабинет мастера: подроутер + сначала более длинные пути (Chi /profile vs /profile/submit-for-review).
 			protected.Route("/owner/master", func(om chi.Router) {
@@ -261,6 +348,7 @@ func main() {
 			})
 
 			protected.With(middleware.RequireRole("user", "venue_owner", "master", "admin")).Post("/masters/{slug}/bookings", masterHandler.CreateBooking)
+			protected.With(middleware.RequireRole("user", "venue_owner", "master", "admin")).Get("/my/master-bookings", masterHandler.ListMyClientBookings)
 
 			// Bookings
 			protected.Post("/bookings", bookingHandler.Create)
@@ -271,6 +359,7 @@ func main() {
 			// Reviews (write)
 			protected.Post("/reviews", reviewHandler.Create)
 			protected.Post("/venues/{venueId}/reviews", reviewHandler.CreateForVenue)
+			protected.Post("/masters/{masterId}/reviews", reviewHandler.CreateForMaster)
 
 			// Admin routes
 			protected.With(middleware.RequireRole("admin")).Get("/admin/venues", venueHandler.ListPending)
@@ -279,6 +368,9 @@ func main() {
 			protected.With(middleware.RequireRole("admin")).Get("/admin/masters", masterHandler.ListForModeration)
 			protected.With(middleware.RequireRole("admin")).Post("/admin/masters/{id}/moderate", masterHandler.Moderate)
 			protected.With(middleware.RequireRole("admin")).Get("/admin/masters/{id}/moderation-history", masterHandler.ModerationHistory)
+			protected.With(middleware.RequireRole("admin")).Get("/admin/support/tickets", supportHandler.AdminListTickets)
+			protected.With(middleware.RequireRole("admin")).Get("/admin/support/tickets/{requestID}", supportHandler.AdminGetTicket)
+			protected.With(middleware.RequireRole("admin")).Post("/admin/support/reply", supportHandler.AdminReply)
 		})
 	})
 
@@ -322,4 +414,20 @@ func main() {
 		log.Error().Err(err).Msg("OpenTelemetry shutdown")
 	}
 	log.Info().Msg("server stopped")
+}
+
+func parseCSV(raw string) []string {
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		v := strings.TrimSpace(part)
+		if v == "" {
+			continue
+		}
+		out = append(out, v)
+	}
+	return out
 }

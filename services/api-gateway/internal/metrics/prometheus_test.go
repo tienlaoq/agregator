@@ -34,3 +34,28 @@ func TestHTTPMiddleware_routeAndStatus(t *testing.T) {
 		t.Fatalf("requests=%d want 1", got)
 	}
 }
+
+func TestObserveSupportWebhookDelivery(t *testing.T) {
+	t.Parallel()
+
+	beforeSuccess, err := supportWebhookDeliveries.GetMetricWithLabelValues("success")
+	if err != nil {
+		t.Fatal(err)
+	}
+	beforeError, err := supportWebhookDeliveries.GetMetricWithLabelValues("error")
+	if err != nil {
+		t.Fatal(err)
+	}
+	successStart := testutil.ToFloat64(beforeSuccess)
+	errorStart := testutil.ToFloat64(beforeError)
+
+	ObserveSupportWebhookDelivery("success")
+	ObserveSupportWebhookDelivery("error")
+
+	if got := testutil.ToFloat64(beforeSuccess); got != successStart+1 {
+		t.Fatalf("success deliveries=%v want %v", got, successStart+1)
+	}
+	if got := testutil.ToFloat64(beforeError); got != errorStart+1 {
+		t.Fatalf("error deliveries=%v want %v", got, errorStart+1)
+	}
+}

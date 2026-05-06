@@ -23,7 +23,8 @@ import {
   Shield,
   Building2,
   Users,
-  Anchor,
+  Activity,
+  MessageSquare,
 } from "lucide-react"
 import { useAuthStore } from "@/store/auth"
 
@@ -73,6 +74,9 @@ export function Header({ isLoggedIn = false, userName = "Иван", userAvatar, 
           <Link href="/about" className="text-sm font-medium text-muted-foreground transition-colors hover:text-foreground">
             О нас
           </Link>
+          <Link href="/support" className="text-sm font-medium text-muted-foreground transition-colors hover:text-foreground">
+            Поддержка
+          </Link>
         </nav>
 
         <div className="hidden items-center gap-2 md:flex">
@@ -104,6 +108,18 @@ export function Header({ isLoggedIn = false, userName = "Иван", userAvatar, 
                         Модерация мастеров
                       </Link>
                     </DropdownMenuItem>
+                    <DropdownMenuItem asChild>
+                      <Link href="/admin/metrics" className="flex items-center gap-2">
+                        <Activity className="h-4 w-4" />
+                        Метрики платформы
+                      </Link>
+                    </DropdownMenuItem>
+                    <DropdownMenuItem asChild>
+                      <Link href="/admin/support" className="flex items-center gap-2">
+                        <MessageSquare className="h-4 w-4" />
+                        Обращения в поддержку
+                      </Link>
+                    </DropdownMenuItem>
                   </>
                 ) : userRole === "master" ? (
                   <DropdownMenuItem asChild>
@@ -119,13 +135,6 @@ export function Header({ isLoggedIn = false, userName = "Иван", userAvatar, 
                       Мои заведения
                     </Link>
                   </DropdownMenuItem>
-                ) : userRole === "user" ? (
-                  <DropdownMenuItem asChild>
-                    <Link href="/owner/venues" className="flex items-center gap-2">
-                      <Anchor className="h-4 w-4" />
-                      Командный мостик
-                    </Link>
-                  </DropdownMenuItem>
                 ) : null}
                 <DropdownMenuItem asChild>
                   <Link href="/my/bookings" className="flex items-center gap-2">
@@ -137,6 +146,12 @@ export function Header({ isLoggedIn = false, userName = "Иван", userAvatar, 
                   <Link href="/my/profile" className="flex items-center gap-2">
                     <User className="h-4 w-4" />
                     Профиль
+                  </Link>
+                </DropdownMenuItem>
+                <DropdownMenuItem asChild>
+                  <Link href="/support" className="flex items-center gap-2">
+                    <Users className="h-4 w-4" />
+                    Поддержка
                   </Link>
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />
@@ -190,6 +205,13 @@ export function Header({ isLoggedIn = false, userName = "Иван", userAvatar, 
               >
                 О нас
               </Link>
+              <Link
+                href="/support"
+                className="text-lg font-medium"
+                onClick={() => setMobileMenuOpen(false)}
+              >
+                Поддержка
+              </Link>
               <div className="border-t border-border pt-6">
                 {isLoggedIn ? (
                   <div className="flex flex-col gap-4">
@@ -220,6 +242,22 @@ export function Header({ isLoggedIn = false, userName = "Иван", userAvatar, 
                           <Users className="h-4 w-4 shrink-0" />
                           Модерация мастеров
                         </Link>
+                        <Link
+                          href="/admin/metrics"
+                          className="flex items-center gap-2 text-muted-foreground"
+                          onClick={() => setMobileMenuOpen(false)}
+                        >
+                          <Activity className="h-4 w-4 shrink-0" />
+                          Метрики платформы
+                        </Link>
+                        <Link
+                          href="/admin/support"
+                          className="flex items-center gap-2 text-muted-foreground"
+                          onClick={() => setMobileMenuOpen(false)}
+                        >
+                          <MessageSquare className="h-4 w-4 shrink-0" />
+                          Обращения в поддержку
+                        </Link>
                       </>
                     ) : userRole === "master" ? (
                       <Link
@@ -239,21 +277,15 @@ export function Header({ isLoggedIn = false, userName = "Иван", userAvatar, 
                         <Building2 className="h-4 w-4 shrink-0" />
                         Мои заведения
                       </Link>
-                    ) : userRole === "user" ? (
-                      <Link
-                        href="/owner/venues"
-                        className="flex items-center gap-2 text-muted-foreground"
-                        onClick={() => setMobileMenuOpen(false)}
-                      >
-                        <Anchor className="h-4 w-4 shrink-0" />
-                        Командный мостик
-                      </Link>
                     ) : null}
                     <Link href="/my/bookings" className="text-muted-foreground" onClick={() => setMobileMenuOpen(false)}>
                       Мои бронирования
                     </Link>
                     <Link href="/my/profile" className="text-muted-foreground" onClick={() => setMobileMenuOpen(false)}>
                       Профиль
+                    </Link>
+                    <Link href="/support" className="text-muted-foreground" onClick={() => setMobileMenuOpen(false)}>
+                      Поддержка
                     </Link>
                     <Button variant="destructive" className="mt-2" onClick={handleLogout}>
                       <LogOut className="mr-2 h-4 w-4" />

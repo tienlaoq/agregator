@@ -20,10 +20,13 @@ func NewServer(uc *usecase.ReviewUseCase) *Server {
 
 func (s *Server) CreateReview(ctx context.Context, req *reviewv1.CreateReviewRequest) (*reviewv1.ReviewResponse, error) {
 	review, err := s.uc.CreateReview(ctx, usecase.CreateReviewInput{
-		UserID:  req.GetUserId(),
-		VenueID: req.GetVenueId(),
-		Rating:  req.GetRating(),
-		Text:    req.GetText(),
+		UserID:      req.GetUserId(),
+		UserName:    req.GetUserName(),
+		VenueID:     req.GetVenueId(),
+		MasterID:    req.GetMasterId(),
+		Rating:      req.GetRating(),
+		Text:        req.GetText(),
+		IsAnonymous: req.GetIsAnonymous(),
 	})
 	if err != nil {
 		return nil, err
@@ -67,15 +70,33 @@ func (s *Server) GetVenueRating(ctx context.Context, req *reviewv1.GetVenueRatin
 	}, nil
 }
 
+func (s *Server) ListMasterReviews(ctx context.Context, req *reviewv1.ListMasterReviewsRequest) (*reviewv1.ListReviewsResponse, error) {
+	reviews, total, err := s.uc.ListMasterReviews(ctx, req.GetMasterId(), req.GetPage(), req.GetPageSize())
+	if err != nil {
+		return nil, err
+	}
+
+	pbReviews := make([]*reviewv1.ReviewResponse, 0, len(reviews))
+	for _, r := range reviews {
+		pbReviews = append(pbReviews, reviewToProto(r))
+	}
+	return &reviewv1.ListReviewsResponse{
+		Reviews: pbReviews,
+		Total:   total,
+	}, nil
+}
+
 func reviewToProto(r *domain.Review) *reviewv1.ReviewResponse {
 	return &reviewv1.ReviewResponse{
-		Id:         r.ID,
-		UserId:     r.UserID,
-		UserName:   "",
-		VenueId:    r.VenueID,
-		Rating:     r.Rating,
-		Text:       r.Text,
-		IsVerified: r.IsVerified,
-		CreatedAt:  timestamppb.New(r.CreatedAt),
+		Id:          r.ID,
+		UserId:      r.UserID,
+		UserName:    r.UserName,
+		VenueId:     r.VenueID,
+		MasterId:    r.MasterID,
+		Rating:      r.Rating,
+		Text:        r.Text,
+		IsVerified:  r.IsVerified,
+		IsAnonymous: r.IsAnonymous,
+		CreatedAt:   timestamppb.New(r.CreatedAt),
 	}
 }

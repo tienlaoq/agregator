@@ -2,6 +2,7 @@
 
 import { AppHeader } from "@/components/banya/app-header"
 import { Footer } from "@/components/banya/footer"
+import { ChatWidget } from "@/components/banya/chat-widget"
 
 export function AppLayout({ children }: { children: React.ReactNode }) {
   return (
@@ -9,6 +10,7 @@ export function AppLayout({ children }: { children: React.ReactNode }) {
       <AppHeader />
       <main className="flex-1">{children}</main>
       <Footer />
+      <ChatWidget />
     </div>
   )
 }

@@ -373,11 +373,13 @@ export interface Booking {
 export interface Review {
   id: string;
   venue_id: string;
+  master_id?: string;
   user_name: string;
   rating: number;
   text: string;
   created_at: string;
   verified: boolean;
+  is_anonymous?: boolean;
 }
 
 export interface AuthResponse {
@@ -477,6 +479,7 @@ export type VenueUpdatePayload = Omit<UpdateVenueRequest, "services" | "halls"> 
 export interface CreateReviewRequest {
   rating: number;
   text: string;
+  is_anonymous?: boolean;
 }
 
 /** Длительность услуги из ответа API (поле duration_min или duration_minutes) */
@@ -574,6 +577,19 @@ export interface MasterProfile {
   city: string;
   /** ip | ooo | individual | self_employed — не отдаётся в публичном API каталога */
   payout_legal_form?: string;
+  /** ЮKassa account_id подключенного получателя для split-выплат. */
+  yookassa_seller_account_id?: string;
+  payout_legal_name?: string;
+  payout_inn?: string;
+  payout_kpp?: string;
+  payout_ogrn?: string;
+  payout_ogrnip?: string;
+  payout_bank_name?: string;
+  payout_bik?: string;
+  payout_settlement_account?: string;
+  payout_correspondent_account?: string;
+  payout_verification_status?: "unverified" | "pending" | "verified" | "rejected" | string;
+  payout_ready?: boolean;
   work_format: string;
   /** Макс. расстояние от метки на карте до клиента, км (по прямой на карте; API: travel_radius_km). */
   travel_radius_km: number;
@@ -605,6 +621,9 @@ export interface MasterBooking {
   time_to: string;
   comment: string;
   status: string;
+  payment_id?: string;
+  payment_url?: string;
+  total_price?: number;
   created_at: string;
 }
 
@@ -638,3 +657,82 @@ export const MASTER_PROFILE_STATUS_LABELS: Record<
     description: "Профиль временно скрыт модератором.",
   },
 };
+
+export interface ChatParticipantRead {
+  user_id: string;
+  /** Furthest message id this user has acknowledged (MarkRead / open thread). */
+  last_read_message_id?: string;
+}
+
+export interface ChatThread {
+  id: string;
+  kind: "venue_booking" | "master_booking" | string;
+  ref_id: string;
+  participant_user_ids: string[];
+  last_message_id?: string;
+  last_message_at?: string;
+  unread_count: number;
+  participant_reads?: ChatParticipantRead[];
+  /** Имя собеседника в списке чатов (клиент для владельца заведения, заведение для гостя и т.д.). */
+  peer_display_name?: string;
+}
+
+export interface ChatMessage {
+  id: string;
+  thread_id: string;
+  author_user_id: string;
+  text: string;
+  client_msg_id?: string;
+  created_at?: string;
+}
+
+export interface SupportContactRequest {
+  topic: string;
+  message: string;
+  email?: string;
+  booking_id?: string;
+  payment_id?: string;
+  source_page?: string;
+}
+
+export interface SupportContactResponse {
+  request_id: string;
+  ticket_number?: string;
+  status: string;
+}
+
+/** Ответ модератора пользователю по ранее созданному обращению (email через SMTP). */
+export interface SupportTicketReplyRequest {
+  ticket_number?: string;
+  request_id?: string;
+  user_email: string;
+  reply: string;
+}
+
+export interface SupportTicketReplyResponse {
+  status: string;
+}
+
+/** Запись в очереди обращений (модератор, GET /admin/support/tickets). */
+export interface SupportTicketAdmin {
+  request_id: string;
+  ticket_number: string;
+  topic: string;
+  message: string;
+  user_email: string;
+  user_id: string;
+  role: string;
+  booking_id: string;
+  payment_id: string;
+  source_page: string;
+  created_at: string;
+  replied_at: string | null;
+  replied_by: string;
+  /** Доставка уведомления модератору (email/webhook): pending | ok | failed */
+  notify_status?: string;
+}
+
+export interface SupportTicketsListResponse {
+  tickets: SupportTicketAdmin[];
+  total: number;
+}

@@ -13,7 +13,6 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -40,7 +39,6 @@ import {
 import { useAuthStore } from "@/store/auth";
 import {
   VENUE_CARD_STATUS_LABELS,
-  VENUE_TYPE_LABELS,
   buildVenueSocialLinksPayload,
   parseVenueSocialLinks,
   newVenueHallLine,
@@ -53,12 +51,16 @@ import {
   type VenueHallFormLine,
   type VenuePhoto,
 } from "@/lib/types";
-import { CityCombobox } from "@/components/banya/city-combobox";
-import { AddressSuggest } from "@/components/banya/address-suggest";
+import { PartnerVenueRegistrationCard } from "@/components/banya/partner-venue-registration-card";
 import { OwnerSlotBlocksSection } from "@/components/banya/owner-slot-blocks-section";
 import { VenueServicesFields } from "@/components/banya/venue-services-fields";
 import { VenueSocialLinksFields } from "@/components/banya/venue-social-links-fields";
-import { PhoneInput, getRawPhone } from "@/components/banya/phone-input";
+import { getRawPhone } from "@/components/banya/phone-input";
+import {
+  applyPartnerVenuePatchToUpdateForm,
+  partnerVenueValuesFromUpdateForm,
+  type PartnerVenueFormValues,
+} from "@/lib/partner-venue";
 import {
   AlertTriangle,
   ArrowLeft,
@@ -773,6 +775,12 @@ export default function EditOwnerVenuePage() {
   const saveDisabled =
     mutation.isPending || persistVenueMutation.isPending || !canSave;
 
+  const patchPartnerVenue = (patch: Partial<PartnerVenueFormValues>) => {
+    setForm((prev) =>
+      prev ? applyPartnerVenuePatchToUpdateForm(prev, patch) : prev,
+    );
+  };
+
   return (
     <section className="min-h-screen bg-muted/30 pb-28">
       <div className="sticky top-0 z-20 border-b border-border bg-background">
@@ -994,159 +1002,98 @@ export default function EditOwnerVenuePage() {
           ) : null}
 
           <form id="venue-edit-form" onSubmit={handleSubmit} className="space-y-6">
-            <Card className="border-border">
-              <CardHeader className="pb-4">
-                <CardTitle className="text-lg">Основная информация</CardTitle>
-                <CardDescription>
-                  Название и тип заведения. Тип после создания не меняется.
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-5">
-                <div className="grid gap-5 sm:grid-cols-2">
-                  <div className="space-y-2">
-                    <Label htmlFor="name">
-                      Название заведения <span className="text-destructive">*</span>
-                    </Label>
-                    <Input
-                      id="name"
-                      value={form.name}
-                      onChange={(e) => updateField("name", e.target.value)}
-                      required
-                      placeholder="Например: Русская баня"
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label>Тип заведения</Label>
-                    <div className="flex h-10 items-center">
-                      <Badge variant="secondary">
-                        {VENUE_TYPE_LABELS[venue.type] ?? venue.type}
-                      </Badge>
-                    </div>
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-
-            <Card className="border-border">
-              <CardHeader className="pb-4">
-                <CardTitle className="text-lg">Адрес и контакты</CardTitle>
-                <CardDescription>
-                  Как клиенты найдут вас и свяжутся.
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-5">
-                <div className="grid gap-5 sm:grid-cols-2">
-                  <div className="space-y-2">
-                    <Label>
-                      Город <span className="text-destructive">*</span>
-                    </Label>
-                    <CityCombobox
-                      value={form.city}
-                      onChange={(v) => updateField("city", v)}
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="phone">
-                      Телефон <span className="text-destructive">*</span>
-                    </Label>
-                    <PhoneInput
-                      id="phone"
-                      value={form.phone}
-                      onChange={(v) => updateField("phone", v)}
-                      required
-                    />
-                  </div>
-                </div>
-                <div className="space-y-2">
-                  <Label>
-                    Адрес <span className="text-destructive">*</span>
-                  </Label>
-                  <AddressSuggest
-                    value={form.address}
-                    onChange={(v) => updateField("address", v)}
-                    city={form.city}
-                  />
-                </div>
-                <Separator />
-                <div>
-                  <Label className="mb-3 block">Часы работы</Label>
-                  <div className="grid gap-4 sm:grid-cols-2">
-                    <div className="space-y-2">
-                      <span className="text-sm text-muted-foreground">
-                        Будни (Пн–Пт)
-                      </span>
-                      <div className="flex items-center gap-2">
-                        <Input
-                          type="time"
-                          value={workingDraft.weekdays.from}
-                          onChange={(e) =>
-                            setWorkingDraft({
-                              ...workingDraft,
-                              weekdays: {
-                                ...workingDraft.weekdays,
-                                from: e.target.value,
-                              },
-                            })
-                          }
-                          className="min-w-0 flex-1"
-                        />
-                        <span className="text-muted-foreground">—</span>
-                        <Input
-                          type="time"
-                          value={workingDraft.weekdays.to}
-                          onChange={(e) =>
-                            setWorkingDraft({
-                              ...workingDraft,
-                              weekdays: {
-                                ...workingDraft.weekdays,
-                                to: e.target.value,
-                              },
-                            })
-                          }
-                          className="min-w-0 flex-1"
-                        />
+            <PartnerVenueRegistrationCard
+              values={partnerVenueValuesFromUpdateForm(form, venue.type)}
+              onChange={patchPartnerVenue}
+              showVenuePhone
+              venuePhone={form.phone}
+              onVenuePhoneChange={(v) => updateField("phone", v)}
+              venueTypeReadOnly
+              descriptionMaxLength={2000}
+              wrapperClassName="max-w-none"
+              slotAfterPhone={
+                <>
+                  <Separator />
+                  <div>
+                    <Label className="mb-3 block">Часы работы</Label>
+                    <div className="grid gap-4 sm:grid-cols-2">
+                      <div className="space-y-2">
+                        <span className="text-sm text-muted-foreground">
+                          Будни (Пн–Пт)
+                        </span>
+                        <div className="flex items-center gap-2">
+                          <Input
+                            type="time"
+                            value={workingDraft.weekdays.from}
+                            onChange={(e) =>
+                              setWorkingDraft({
+                                ...workingDraft,
+                                weekdays: {
+                                  ...workingDraft.weekdays,
+                                  from: e.target.value,
+                                },
+                              })
+                            }
+                            className="min-w-0 flex-1"
+                          />
+                          <span className="text-muted-foreground">—</span>
+                          <Input
+                            type="time"
+                            value={workingDraft.weekdays.to}
+                            onChange={(e) =>
+                              setWorkingDraft({
+                                ...workingDraft,
+                                weekdays: {
+                                  ...workingDraft.weekdays,
+                                  to: e.target.value,
+                                },
+                              })
+                            }
+                            className="min-w-0 flex-1"
+                          />
+                        </div>
                       </div>
-                    </div>
-                    <div className="space-y-2">
-                      <span className="text-sm text-muted-foreground">
-                        Выходные (Сб–Вс)
-                      </span>
-                      <div className="flex items-center gap-2">
-                        <Input
-                          type="time"
-                          value={workingDraft.weekends.from}
-                          onChange={(e) =>
-                            setWorkingDraft({
-                              ...workingDraft,
-                              weekends: {
-                                ...workingDraft.weekends,
-                                from: e.target.value,
-                              },
-                            })
-                          }
-                          className="min-w-0 flex-1"
-                        />
-                        <span className="text-muted-foreground">—</span>
-                        <Input
-                          type="time"
-                          value={workingDraft.weekends.to}
-                          onChange={(e) =>
-                            setWorkingDraft({
-                              ...workingDraft,
-                              weekends: {
-                                ...workingDraft.weekends,
-                                to: e.target.value,
-                              },
-                            })
-                          }
-                          className="min-w-0 flex-1"
-                        />
+                      <div className="space-y-2">
+                        <span className="text-sm text-muted-foreground">
+                          Выходные (Сб–Вс)
+                        </span>
+                        <div className="flex items-center gap-2">
+                          <Input
+                            type="time"
+                            value={workingDraft.weekends.from}
+                            onChange={(e) =>
+                              setWorkingDraft({
+                                ...workingDraft,
+                                weekends: {
+                                  ...workingDraft.weekends,
+                                  from: e.target.value,
+                                },
+                              })
+                            }
+                            className="min-w-0 flex-1"
+                          />
+                          <span className="text-muted-foreground">—</span>
+                          <Input
+                            type="time"
+                            value={workingDraft.weekends.to}
+                            onChange={(e) =>
+                              setWorkingDraft({
+                                ...workingDraft,
+                                weekends: {
+                                  ...workingDraft.weekends,
+                                  to: e.target.value,
+                                },
+                              })
+                            }
+                            className="min-w-0 flex-1"
+                          />
+                        </div>
                       </div>
                     </div>
                   </div>
-                </div>
-              </CardContent>
-            </Card>
+                </>
+              }
+            />
 
             <Card className="border-border">
               <CardHeader className="pb-4">
@@ -1165,32 +1112,6 @@ export default function EditOwnerVenuePage() {
             </Card>
 
             <OwnerSlotBlocksSection venueId={venueId} />
-
-            <Card className="border-border">
-              <CardHeader className="pb-4">
-                <CardTitle className="text-lg">Описание</CardTitle>
-                <CardDescription>
-                  Расскажите о заведении. Не дублируйте телефон и мессенджеры в
-                  тексте — для этого есть поле «Телефон».
-                </CardDescription>
-              </CardHeader>
-              <CardContent>
-                <Textarea
-                  id="description"
-                  value={form.description}
-                  onChange={(e) =>
-                    updateField("description", e.target.value.slice(0, 2000))
-                  }
-                  required
-                  placeholder="Особенности, залы, традиции парения…"
-                  className="min-h-[150px] resize-y"
-                  maxLength={2000}
-                />
-                <p className="mt-2 text-sm text-muted-foreground">
-                  {form.description.length} / 2000 символов
-                </p>
-              </CardContent>
-            </Card>
 
             <Card className="border-border">
               <CardHeader className="pb-4">
@@ -1683,89 +1604,6 @@ export default function EditOwnerVenuePage() {
                     загрузить новые.
                   </p>
                 ) : null}
-              </CardContent>
-            </Card>
-
-            <Card className="border-border">
-              <CardHeader className="pb-4">
-                <CardTitle className="text-lg">Данные для проверки</CardTitle>
-                <CardDescription>
-                  Для модерации и сверки с картами. Комментарий видит только
-                  модератор.
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-5">
-                <div className="space-y-2">
-                  <Label htmlFor="legal_entity_name">
-                    Наименование ИП / организации{" "}
-                    <span className="text-destructive">*</span>
-                  </Label>
-                  <Input
-                    id="legal_entity_name"
-                    value={form.legal_entity_name}
-                    onChange={(e) =>
-                      updateField("legal_entity_name", e.target.value)
-                    }
-                    required
-                  />
-                </div>
-                <div className="grid gap-5 sm:grid-cols-2">
-                  <div className="space-y-2">
-                    <Label htmlFor="inn">
-                      ИНН <span className="text-destructive">*</span>
-                    </Label>
-                    <Input
-                      id="inn"
-                      inputMode="numeric"
-                      value={form.inn}
-                      onChange={(e) => updateField("inn", e.target.value)}
-                      required
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="ogrn">
-                      ОГРН / ОГРНИП <span className="text-destructive">*</span>
-                    </Label>
-                    <Input
-                      id="ogrn"
-                      inputMode="numeric"
-                      value={form.ogrn}
-                      onChange={(e) => updateField("ogrn", e.target.value)}
-                      required
-                    />
-                  </div>
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="public_listing_url">
-                    Ссылка на карточку на картах{" "}
-                    <span className="text-destructive">*</span>
-                  </Label>
-                  <Input
-                    id="public_listing_url"
-                    type="url"
-                    value={form.public_listing_url}
-                    onChange={(e) =>
-                      updateField("public_listing_url", e.target.value)
-                    }
-                    required
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="verification_note">
-                    Комментарий для модерации (необязательно)
-                  </Label>
-                  <Textarea
-                    id="verification_note"
-                    value={form.verification_note ?? ""}
-                    onChange={(e) =>
-                      updateField(
-                        "verification_note",
-                        e.target.value.trim() || undefined,
-                      )
-                    }
-                    rows={3}
-                  />
-                </div>
               </CardContent>
             </Card>
 

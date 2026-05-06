@@ -53,24 +53,36 @@ func masterProtoToJSON(m *masterv1.Master) map[string]any {
 		})
 	}
 	out := map[string]any{
-		"id":                 m.GetId(),
-		"user_id":            m.GetUserId(),
-		"slug":               m.GetSlug(),
-		"display_name":       m.GetDisplayName(),
-		"bio":                m.GetBio(),
-		"phone":              m.GetPhone(),
-		"city":               m.GetCity(),
-		"work_format":        m.GetWorkFormat(),
-		"travel_radius_km": m.GetTravelRadiusKm(),
-		"experience_years": m.GetExperienceYears(),
-		"specializations":    m.GetSpecializations(),
-		"hourly_rate":        m.GetHourlyRate(),
-		"availability_json":  m.GetAvailabilityJson(),
-		"payout_legal_form":  m.GetPayoutLegalForm(),
-		"status":             m.GetStatus(),
-		"moderation_comment": m.GetModerationComment(),
-		"services":           svcs,
-		"photos":             photos,
+		"id":                           m.GetId(),
+		"user_id":                      m.GetUserId(),
+		"slug":                         m.GetSlug(),
+		"display_name":                 m.GetDisplayName(),
+		"bio":                          m.GetBio(),
+		"phone":                        m.GetPhone(),
+		"city":                         m.GetCity(),
+		"work_format":                  m.GetWorkFormat(),
+		"travel_radius_km":             m.GetTravelRadiusKm(),
+		"experience_years":             m.GetExperienceYears(),
+		"specializations":              m.GetSpecializations(),
+		"hourly_rate":                  m.GetHourlyRate(),
+		"availability_json":            m.GetAvailabilityJson(),
+		"payout_legal_form":            m.GetPayoutLegalForm(),
+		"yookassa_seller_account_id":   m.GetYookassaSellerAccountId(),
+		"payout_legal_name":            m.GetPayoutLegalName(),
+		"payout_inn":                   m.GetPayoutInn(),
+		"payout_kpp":                   m.GetPayoutKpp(),
+		"payout_ogrn":                  m.GetPayoutOgrn(),
+		"payout_ogrnip":                m.GetPayoutOgrnip(),
+		"payout_bank_name":             m.GetPayoutBankName(),
+		"payout_bik":                   m.GetPayoutBik(),
+		"payout_settlement_account":    m.GetPayoutSettlementAccount(),
+		"payout_correspondent_account": m.GetPayoutCorrespondentAccount(),
+		"payout_verification_status":   m.GetPayoutVerificationStatus(),
+		"payout_ready":                 m.GetPayoutReady(),
+		"status":                       m.GetStatus(),
+		"moderation_comment":           m.GetModerationComment(),
+		"services":                     svcs,
+		"photos":                       photos,
 	}
 	if m.GetCreatedAt() != nil {
 		out["created_at"] = m.GetCreatedAt().AsTime().Format("2006-01-02T15:04:05Z07:00")
@@ -93,11 +105,11 @@ func masterProtoToJSON(m *masterv1.Master) map[string]any {
 	zones := make([]map[string]any, 0, len(m.GetTravelExcludeZones()))
 	for _, z := range m.GetTravelExcludeZones() {
 		zones = append(zones, map[string]any{
-			"id":         z.GetId(),
-			"latitude":   z.GetLatitude(),
-			"longitude":  z.GetLongitude(),
-			"radius_km":  z.GetRadiusKm(),
-			"label":      z.GetLabel(),
+			"id":        z.GetId(),
+			"latitude":  z.GetLatitude(),
+			"longitude": z.GetLongitude(),
+			"radius_km": z.GetRadiusKm(),
+			"label":     z.GetLabel(),
 		})
 	}
 	out["travel_exclude_zones"] = zones
@@ -107,6 +119,18 @@ func masterProtoToJSON(m *masterv1.Master) map[string]any {
 func masterProtoToJSONPublic(m *masterv1.Master) map[string]any {
 	out := masterProtoToJSON(m)
 	delete(out, "payout_legal_form")
+	delete(out, "yookassa_seller_account_id")
+	delete(out, "payout_legal_name")
+	delete(out, "payout_inn")
+	delete(out, "payout_kpp")
+	delete(out, "payout_ogrn")
+	delete(out, "payout_ogrnip")
+	delete(out, "payout_bank_name")
+	delete(out, "payout_bik")
+	delete(out, "payout_settlement_account")
+	delete(out, "payout_correspondent_account")
+	delete(out, "payout_verification_status")
+	delete(out, "payout_ready")
 	return out
 }
 
@@ -289,6 +313,7 @@ func (h *MasterHandler) updateReqFromRaw(uid string, raw map[string]json.RawMess
 		}
 	}
 	var dn, bio, phone, city, wf, avj, plf *string
+	var ysa, pln, pinn, pkpp, pogrn, pogrnip, pbank, pbik, psettle, pcorr, pver *string
 	var tr, ex *int32
 	var hr *int64
 	var tblat, tblon *float64
@@ -299,6 +324,17 @@ func (h *MasterHandler) updateReqFromRaw(uid string, raw map[string]json.RawMess
 	setString("work_format", &wf)
 	setString("availability_json", &avj)
 	setString("payout_legal_form", &plf)
+	setString("yookassa_seller_account_id", &ysa)
+	setString("payout_legal_name", &pln)
+	setString("payout_inn", &pinn)
+	setString("payout_kpp", &pkpp)
+	setString("payout_ogrn", &pogrn)
+	setString("payout_ogrnip", &pogrnip)
+	setString("payout_bank_name", &pbank)
+	setString("payout_bik", &pbik)
+	setString("payout_settlement_account", &psettle)
+	setString("payout_correspondent_account", &pcorr)
+	setString("payout_verification_status", &pver)
 	setInt32("travel_radius_km", &tr)
 	setInt32("experience_years", &ex)
 	setInt64("hourly_rate", &hr)
@@ -316,6 +352,17 @@ func (h *MasterHandler) updateReqFromRaw(uid string, raw map[string]json.RawMess
 	req.TravelBaseLatitude = tblat
 	req.TravelBaseLongitude = tblon
 	req.PayoutLegalForm = plf
+	req.YookassaSellerAccountId = ysa
+	req.PayoutLegalName = pln
+	req.PayoutInn = pinn
+	req.PayoutKpp = pkpp
+	req.PayoutOgrn = pogrn
+	req.PayoutOgrnip = pogrnip
+	req.PayoutBankName = pbank
+	req.PayoutBik = pbik
+	req.PayoutSettlementAccount = psettle
+	req.PayoutCorrespondentAccount = pcorr
+	req.PayoutVerificationStatus = pver
 
 	if _, ok := raw["specializations"]; ok {
 		req.ApplySpecializations = true
@@ -464,6 +511,45 @@ func (h *MasterHandler) ListMyBookings(w http.ResponseWriter, r *http.Request) {
 			"time_to":           b.GetTimeTo(),
 			"comment":           b.GetComment(),
 			"status":            b.GetStatus(),
+			"payment_id":        b.GetPaymentId(),
+			"payment_url":       b.GetPaymentUrl(),
+			"total_price":       b.GetTotalPrice(),
+			"created_at":        b.GetCreatedAt().AsTime().Format("2006-01-02T15:04:05Z07:00"),
+		})
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"bookings": out})
+}
+
+// ListMyClientBookings GET /api/v1/my/master-bookings
+func (h *MasterHandler) ListMyClientBookings(w http.ResponseWriter, r *http.Request) {
+	uid := middleware.UserIDFromCtx(r.Context())
+	if uid == "" {
+		writeCatalog(w, apicatalog.GatewayAuthUnauthorized)
+		return
+	}
+	resp, err := h.client.ListClientMasterBookings(r.Context(), &masterv1.ListClientMasterBookingsRequest{
+		UserId:       uid,
+		StatusFilter: r.URL.Query().Get("status"),
+	})
+	if err != nil {
+		grpcErrorToHTTP(w, err)
+		return
+	}
+	out := make([]map[string]any, 0, len(resp.GetBookings()))
+	for _, b := range resp.GetBookings() {
+		out = append(out, map[string]any{
+			"id":                b.GetId(),
+			"master_id":         b.GetMasterId(),
+			"client_user_id":    b.GetClientUserId(),
+			"master_service_id": b.GetMasterServiceId(),
+			"date":              b.GetDate(),
+			"time_from":         b.GetTimeFrom(),
+			"time_to":           b.GetTimeTo(),
+			"comment":           b.GetComment(),
+			"status":            b.GetStatus(),
+			"payment_id":        b.GetPaymentId(),
+			"payment_url":       b.GetPaymentUrl(),
+			"total_price":       b.GetTotalPrice(),
 			"created_at":        b.GetCreatedAt().AsTime().Format("2006-01-02T15:04:05Z07:00"),
 		})
 	}
@@ -516,6 +602,9 @@ func (h *MasterHandler) CreateBooking(w http.ResponseWriter, r *http.Request) {
 		"time_to":           b.GetTimeTo(),
 		"comment":           b.GetComment(),
 		"status":            b.GetStatus(),
+		"payment_id":        b.GetPaymentId(),
+		"payment_url":       b.GetPaymentUrl(),
+		"total_price":       b.GetTotalPrice(),
 		"created_at":        b.GetCreatedAt().AsTime().Format("2006-01-02T15:04:05Z07:00"),
 	})
 }

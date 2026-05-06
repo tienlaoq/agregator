@@ -21,6 +21,9 @@ service MasterService {
 
   rpc CreateMasterBooking(CreateMasterBookingRequest) returns (MasterBookingResponse);
   rpc ListMyMasterBookings(ListMyMasterBookingsRequest) returns (ListMasterBookingsResponse);
+  rpc ListClientMasterBookings(ListClientMasterBookingsRequest) returns (ListMasterBookingsResponse);
+  rpc GetMasterBooking(GetMasterBookingRequest) returns (MasterBookingResponse);
+  rpc HasCompletedMasterBooking(HasCompletedMasterBookingRequest) returns (HasCompletedMasterBookingResponse);
 
   rpc AddMasterPhoto(AddMasterPhotoRequest) returns (MasterResponse);
   rpc DeleteMasterPhoto(DeleteMasterPhotoRequest) returns (DeleteMasterPhotoResponse);
@@ -89,6 +92,19 @@ message Master {
   repeated MasterPhoto photos = 21;
   // ip | ooo | individual | self_employed — куда перечисляется оплата; в публичном API не отдаётся.
   string payout_legal_form = 22;
+  // ЮKassa account_id подключенного получателя (для marketplace split).
+  string yookassa_seller_account_id = 26;
+  string payout_legal_name = 27;
+  string payout_inn = 28;
+  string payout_kpp = 29;
+  string payout_ogrn = 30;
+  string payout_ogrnip = 31;
+  string payout_bank_name = 32;
+  string payout_bik = 33;
+  string payout_settlement_account = 34;
+  string payout_correspondent_account = 35;
+  string payout_verification_status = 36; // unverified | pending | verified | rejected
+  bool payout_ready = 37;
 }
 
 message MasterResponse {
@@ -124,6 +140,17 @@ message UpdateMyProfileRequest {
   // When true, replace specializations with the repeated field (empty clears).
   bool apply_specializations = 14;
   optional string payout_legal_form = 15;
+  optional string yookassa_seller_account_id = 20;
+  optional string payout_legal_name = 21;
+  optional string payout_inn = 22;
+  optional string payout_kpp = 23;
+  optional string payout_ogrn = 24;
+  optional string payout_ogrnip = 25;
+  optional string payout_bank_name = 26;
+  optional string payout_bik = 27;
+  optional string payout_settlement_account = 28;
+  optional string payout_correspondent_account = 29;
+  optional string payout_verification_status = 30;
   // При true заменить travel_exclude_zones на переданный список (пустой — очистить).
   bool apply_travel_exclude_zones = 18;
   repeated MasterTravelExcludeZone travel_exclude_zones = 19;
@@ -208,6 +235,11 @@ message MasterBooking {
   string comment = 8;
   string status = 9;
   google.protobuf.Timestamp created_at = 10;
+  // User id владельца профиля мастера (для чата: участник вместе с client_user_id).
+  optional string master_user_id = 11;
+  string payment_id = 12;
+  string payment_url = 13;
+  int64 total_price = 14; // kopecks
 }
 
 message MasterBookingResponse {
@@ -219,8 +251,27 @@ message ListMyMasterBookingsRequest {
   string status_filter = 2;
 }
 
+message ListClientMasterBookingsRequest {
+  string user_id = 1;
+  string status_filter = 2;
+}
+
 message ListMasterBookingsResponse {
   repeated MasterBooking bookings = 1;
+}
+
+message GetMasterBookingRequest {
+  string booking_id = 1;
+  string actor_user_id = 2;
+}
+
+message HasCompletedMasterBookingRequest {
+  string client_user_id = 1;
+  string master_id = 2;
+}
+
+message HasCompletedMasterBookingResponse {
+  bool has_completed = 1;
 }
 
 message AddMasterPhotoRequest {

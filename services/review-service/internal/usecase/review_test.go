@@ -19,7 +19,7 @@ import (
 
 func TestCreateReview_InvalidRating(t *testing.T) {
 	ctx := context.Background()
-	uc := NewReviewUseCase(&mockReviewRepo{}, &mockBookingClient{}, &mockVenueClient{}, events.NewPublisher(nil))
+	uc := NewReviewUseCase(&mockReviewRepo{}, &mockBookingClient{}, &mockVenueClient{}, nil, events.NewPublisher(nil))
 
 	for _, rating := range []int32{0, 6, -1} {
 		t.Run(fmt.Sprintf("rating_%d", rating), func(t *testing.T) {
@@ -36,6 +36,35 @@ func TestCreateReview_InvalidRating(t *testing.T) {
 			assert.Contains(t, st.Message(), "rating must be between 1 and 5")
 		})
 	}
+}
+
+func TestCreateReview_InvalidTargetCombination(t *testing.T) {
+	ctx := context.Background()
+	uc := NewReviewUseCase(&mockReviewRepo{}, &mockBookingClient{}, &mockVenueClient{}, nil, nil)
+
+	_, err := uc.CreateReview(ctx, CreateReviewInput{
+		UserID:   "u1",
+		Rating:   5,
+		Text:     "ok",
+		VenueID:  "",
+		MasterID: "",
+	})
+	require.Error(t, err)
+	st, ok := status.FromError(err)
+	require.True(t, ok)
+	assert.Equal(t, codes.InvalidArgument, st.Code())
+
+	_, err = uc.CreateReview(ctx, CreateReviewInput{
+		UserID:   "u1",
+		Rating:   5,
+		Text:     "ok",
+		VenueID:  "v1",
+		MasterID: "m1",
+	})
+	require.Error(t, err)
+	st, ok = status.FromError(err)
+	require.True(t, ok)
+	assert.Equal(t, codes.InvalidArgument, st.Code())
 }
 
 func TestCreateReview_Success(t *testing.T) {
@@ -62,7 +91,7 @@ func TestCreateReview_Success(t *testing.T) {
 		},
 	}
 
-	uc := NewReviewUseCase(repo, bookingClient, &mockVenueClient{}, events.NewPublisher(nil))
+	uc := NewReviewUseCase(repo, bookingClient, &mockVenueClient{}, nil, events.NewPublisher(nil))
 
 	var panicked any
 	func() {
@@ -89,6 +118,66 @@ func TestCreateReview_Success(t *testing.T) {
 	assert.Equal(t, []string{"venue-1"}, updateVenueRatingCalls)
 }
 
+func TestCreateReview_MasterTarget_SkipsVenueOps(t *testing.T) {
+	ctx := context.Background()
+	var gotCreate *domain.Review
+	var bookingCalls int
+	var venueRatingUpdates int
+	repo := &mockReviewRepo{
+		CreateFunc: func(ctx context.Context, review *domain.Review) error {
+			gotCreate = review
+			review.ID = "r-master-1"
+			return nil
+		},
+		UpdateVenueRatingFunc: func(ctx context.Context, venueID string) error {
+			venueRatingUpdates++
+			return nil
+		},
+	}
+	bookingClient := &mockBookingClient{
+		HasCompletedBookingFunc: func(ctx context.Context, in *bookingv1.HasCompletedBookingRequest, opts ...grpc.CallOption) (*bookingv1.HasCompletedBookingResponse, error) {
+			bookingCalls++
+			return &bookingv1.HasCompletedBookingResponse{HasCompleted: true}, nil
+		},
+	}
+
+	uc := NewReviewUseCase(repo, bookingClient, &mockVenueClient{}, nil, nil)
+	got, err := uc.CreateReview(ctx, CreateReviewInput{
+		UserID:   "user-1",
+		MasterID: "master-1",
+		Rating:   5,
+		Text:     "solid session",
+	})
+	require.Error(t, err)
+	require.Nil(t, got)
+	st, ok := status.FromError(err)
+	require.True(t, ok)
+	assert.Equal(t, codes.FailedPrecondition, st.Code())
+	assert.Nil(t, gotCreate)
+	assert.Equal(t, 0, bookingCalls)
+	assert.Equal(t, 0, venueRatingUpdates)
+}
+
+func TestCreateReview_UnconfirmedVenueBooking(t *testing.T) {
+	ctx := context.Background()
+	uc := NewReviewUseCase(&mockReviewRepo{}, &mockBookingClient{
+		HasCompletedBookingFunc: func(ctx context.Context, in *bookingv1.HasCompletedBookingRequest, opts ...grpc.CallOption) (*bookingv1.HasCompletedBookingResponse, error) {
+			return &bookingv1.HasCompletedBookingResponse{HasCompleted: false}, nil
+		},
+	}, &mockVenueClient{}, nil, nil)
+	got, err := uc.CreateReview(ctx, CreateReviewInput{
+		UserID:  "u1",
+		VenueID: "v1",
+		Rating:  5,
+		Text:    "ok",
+	})
+	require.Error(t, err)
+	require.Nil(t, got)
+	st, ok := status.FromError(err)
+	require.True(t, ok)
+	assert.Equal(t, codes.FailedPrecondition, st.Code())
+}
+
 func TestListVenueReviews(t *testing.T) {
 	ctx := context.Background()
 	want := []*domain.Review{{ID: "r1", VenueID: "v1"}}
@@ -100,7 +189,7 @@ func TestListVenueReviews(t *testing.T) {
 			return want, 99, nil
 		},
 	}
-	uc := NewReviewUseCase(repo, &mockBookingClient{}, &mockVenueClient{}, nil)
+	uc := NewReviewUseCase(repo, &mockBookingClient{}, &mockVenueClient{}, nil, nil)
 
 	got, total, err := uc.ListVenueReviews(ctx, "v1", 2, 10)
 	require.NoError(t, err)
@@ -117,7 +206,7 @@ func TestGetReview(t *testing.T) {
 			return want, nil
 		},
 	}
-	uc := NewReviewUseCase(repo, &mockBookingClient{}, &mockVenueClient{}, nil)
+	uc := NewReviewUseCase(repo, &mockBookingClient{}, &mockVenueClient{}, nil, nil)
 
 	got, err := uc.GetReview(ctx, "r1")
 	require.NoError(t, err)
@@ -133,7 +222,7 @@ func TestGetVenueRating(t *testing.T) {
 			return want, nil
 		},
 	}
-	uc := NewReviewUseCase(repo, &mockBookingClient{}, &mockVenueClient{}, nil)
+	uc := NewReviewUseCase(repo, &mockBookingClient{}, &mockVenueClient{}, nil, nil)
 
 	got, err := uc.GetVenueRating(ctx, "v1")
 	require.NoError(t, err)

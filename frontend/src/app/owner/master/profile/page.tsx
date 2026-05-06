@@ -174,6 +174,32 @@ function masterSubmitValidationMessage(body: Record<string, unknown>): string | 
   if (!["ip", "ooo", "individual", "self_employed"].includes(plf)) {
     return "Укажите форму получения выплат: ИП, ООО, физическое лицо или самозанятость";
   }
+  const sellerId = String(body.yookassa_seller_account_id ?? "").trim();
+  if (!sellerId) return "Укажите аккаунт получателя выплат ЮKassa";
+  const legalName = String(body.payout_legal_name ?? "").trim();
+  if (!legalName) return "Укажите ФИО или наименование получателя";
+  const inn = String(body.payout_inn ?? "").replace(/\D/g, "");
+  if (plf === "ooo" && inn.length !== 10) return "Для ООО ИНН должен содержать 10 цифр";
+  if (["ip", "individual", "self_employed"].includes(plf) && inn.length !== 12) {
+    return "ИНН должен содержать 12 цифр";
+  }
+  if (plf === "ooo" && String(body.payout_kpp ?? "").replace(/\D/g, "").length !== 9) {
+    return "Для ООО КПП должен содержать 9 цифр";
+  }
+  if (plf === "ooo" && String(body.payout_ogrn ?? "").replace(/\D/g, "").length !== 13) {
+    return "Для ООО ОГРН должен содержать 13 цифр";
+  }
+  if (plf === "ip" && String(body.payout_ogrnip ?? "").replace(/\D/g, "").length !== 15) {
+    return "Для ИП ОГРНИП должен содержать 15 цифр";
+  }
+  if (String(body.payout_bank_name ?? "").trim() === "") return "Укажите банк получателя";
+  if (String(body.payout_bik ?? "").replace(/\D/g, "").length !== 9) return "БИК должен содержать 9 цифр";
+  if (String(body.payout_settlement_account ?? "").replace(/\D/g, "").length !== 20) {
+    return "Расчетный счет должен содержать 20 цифр";
+  }
+  if (String(body.payout_correspondent_account ?? "").replace(/\D/g, "").length !== 20) {
+    return "Корреспондентский счет должен содержать 20 цифр";
+  }
   const wf = String(body.work_format ?? "").toLowerCase();
   if (wf === "mobile" || wf === "both") {
     const travelKm = Number(body.travel_radius_km);
@@ -203,11 +229,7 @@ function masterSubmitValidationMessage(body: Record<string, unknown>): string | 
           return `Зона исключения ${i + 1}: некорректные координаты`;
         }
         const rk = Number(o.radius_km);
-        if (
-          !Number.isFinite(rk) ||
-          rk < MIN_EXCLUDE_RADIUS_KM ||
-          rk > MAX_EXCLUDE_RADIUS_KM
-        ) {
+        if (Number.isFinite(rk) && rk > 0 && (rk < MIN_EXCLUDE_RADIUS_KM || rk > MAX_EXCLUDE_RADIUS_KM)) {
           return `Зона исключения ${i + 1}: радиус от ${MIN_EXCLUDE_RADIUS_KM} до ${MAX_EXCLUDE_RADIUS_KM} км`;
         }
         if (
@@ -246,6 +268,16 @@ export default function MasterProfilePage() {
   const [phone, setPhone] = useState("");
   const [city, setCity] = useState("");
   const [payoutLegalForm, setPayoutLegalForm] = useState("");
+  const [yookassaSellerAccountId, setYookassaSellerAccountId] = useState("");
+  const [payoutLegalName, setPayoutLegalName] = useState("");
+  const [payoutInn, setPayoutInn] = useState("");
+  const [payoutKpp, setPayoutKpp] = useState("");
+  const [payoutOgrn, setPayoutOgrn] = useState("");
+  const [payoutOgrnip, setPayoutOgrnip] = useState("");
+  const [payoutBankName, setPayoutBankName] = useState("");
+  const [payoutBik, setPayoutBik] = useState("");
+  const [payoutSettlementAccount, setPayoutSettlementAccount] = useState("");
+  const [payoutCorrespondentAccount, setPayoutCorrespondentAccount] = useState("");
   const [workFormat, setWorkFormat] = useState("both");
   const [travelRadius, setTravelRadius] = useState(0);
   /** Координаты метки с Яндекс.Карт (на сервер уходят как travel_base_*). */
@@ -353,6 +385,16 @@ export default function MasterProfilePage() {
     );
     setCity(profile.city);
     setPayoutLegalForm(normalizePayoutLegalFormStored(profile.payout_legal_form));
+    setYookassaSellerAccountId(profile.yookassa_seller_account_id ?? "");
+    setPayoutLegalName(profile.payout_legal_name ?? "");
+    setPayoutInn(profile.payout_inn ?? "");
+    setPayoutKpp(profile.payout_kpp ?? "");
+    setPayoutOgrn(profile.payout_ogrn ?? "");
+    setPayoutOgrnip(profile.payout_ogrnip ?? "");
+    setPayoutBankName(profile.payout_bank_name ?? "");
+    setPayoutBik(profile.payout_bik ?? "");
+    setPayoutSettlementAccount(profile.payout_settlement_account ?? "");
+    setPayoutCorrespondentAccount(profile.payout_correspondent_account ?? "");
     setWorkFormat(profile.work_format || "both");
     setTravelRadius(profile.travel_radius_km);
     const pLat = profile.travel_base_latitude;
@@ -423,6 +465,16 @@ export default function MasterProfilePage() {
       phone: getRawPhone(phone).trim(),
       city: city.trim(),
       payout_legal_form: normalizePayoutLegalFormStored(payoutLegalForm),
+      yookassa_seller_account_id: yookassaSellerAccountId.trim(),
+      payout_legal_name: payoutLegalName.trim(),
+      payout_inn: payoutInn.trim(),
+      payout_kpp: payoutKpp.trim(),
+      payout_ogrn: payoutOgrn.trim(),
+      payout_ogrnip: payoutOgrnip.trim(),
+      payout_bank_name: payoutBankName.trim(),
+      payout_bik: payoutBik.trim(),
+      payout_settlement_account: payoutSettlementAccount.trim(),
+      payout_correspondent_account: payoutCorrespondentAccount.trim(),
       work_format: workFormat,
       travel_radius_km: travelRadius,
       experience_years: experienceYears,
@@ -493,6 +545,16 @@ export default function MasterProfilePage() {
     phone,
     city,
     payoutLegalForm,
+    yookassaSellerAccountId,
+    payoutLegalName,
+    payoutInn,
+    payoutKpp,
+    payoutOgrn,
+    payoutOgrnip,
+    payoutBankName,
+    payoutBik,
+    payoutSettlementAccount,
+    payoutCorrespondentAccount,
     workFormat,
     travelRadius,
     travelBasePinLat,
@@ -774,6 +836,64 @@ export default function MasterProfilePage() {
                   </SelectContent>
                 </Select>
               </div>
+              <div className="grid gap-4 rounded-md border border-border/70 p-3 sm:grid-cols-2">
+                <div className="space-y-2 sm:col-span-2">
+                  <Label>ЮKassa account_id</Label>
+                  <Input
+                    value={yookassaSellerAccountId}
+                    onChange={(e) => setYookassaSellerAccountId(e.target.value)}
+                    placeholder="Например: 1234567"
+                  />
+                </div>
+                <div className="space-y-2 sm:col-span-2">
+                  <Label>ФИО / наименование получателя</Label>
+                  <Input value={payoutLegalName} onChange={(e) => setPayoutLegalName(e.target.value)} />
+                </div>
+                <div className="space-y-2">
+                  <Label>ИНН</Label>
+                  <Input value={payoutInn} onChange={(e) => setPayoutInn(e.target.value)} />
+                </div>
+                {payoutLegalForm === "ooo" ? (
+                  <div className="space-y-2">
+                    <Label>КПП</Label>
+                    <Input value={payoutKpp} onChange={(e) => setPayoutKpp(e.target.value)} />
+                  </div>
+                ) : null}
+                {payoutLegalForm === "ooo" ? (
+                  <div className="space-y-2">
+                    <Label>ОГРН</Label>
+                    <Input value={payoutOgrn} onChange={(e) => setPayoutOgrn(e.target.value)} />
+                  </div>
+                ) : null}
+                {payoutLegalForm === "ip" ? (
+                  <div className="space-y-2">
+                    <Label>ОГРНИП</Label>
+                    <Input value={payoutOgrnip} onChange={(e) => setPayoutOgrnip(e.target.value)} />
+                  </div>
+                ) : null}
+                <div className="space-y-2 sm:col-span-2">
+                  <Label>Банк получателя</Label>
+                  <Input value={payoutBankName} onChange={(e) => setPayoutBankName(e.target.value)} />
+                </div>
+                <div className="space-y-2">
+                  <Label>БИК</Label>
+                  <Input value={payoutBik} onChange={(e) => setPayoutBik(e.target.value)} />
+                </div>
+                <div className="space-y-2">
+                  <Label>Расчетный счет</Label>
+                  <Input
+                    value={payoutSettlementAccount}
+                    onChange={(e) => setPayoutSettlementAccount(e.target.value)}
+                  />
+                </div>
+                <div className="space-y-2 sm:col-span-2">
+                  <Label>Корреспондентский счет</Label>
+                  <Input
+                    value={payoutCorrespondentAccount}
+                    onChange={(e) => setPayoutCorrespondentAccount(e.target.value)}
+                  />
+                </div>
+              </div>
               <div className="space-y-2">
                 <Label>Формат работы</Label>
                 <Select value={workFormat} onValueChange={setWorkFormat}>
@@ -814,7 +934,7 @@ export default function MasterProfilePage() {
                     <Label htmlFor="travelKmFromPin">На сколько километров от метки принимаете выезды</Label>
                     <p className="text-xs text-muted-foreground">
                       Число километров по прямой на карте от вашей метки до точки клиента (как ориентир;
-                      дорога может быть длиннее).
+                      дорога может быть длиннее). Поле можно оставить пустым.
                     </p>
                     <Input
                       id="travelKmFromPin"
@@ -833,7 +953,8 @@ export default function MasterProfilePage() {
                       <p className="text-xs text-muted-foreground">
                         Внутри синей зоны выезда можно отметить круги «сюда не приезжаю» (например, закрытая
                         территория). Каждый такой круг должен целиком помещаться в синюю зону: от метки до
-                        дальней точки круга не дальше, чем ваш километраж выезда. Радиус зоны — от{" "}
+                        дальней точки круга не дальше, чем ваш километраж выезда. Радиус зоны можно оставить
+                        пустым; если задаёте число, диапазон — от{" "}
                         {MIN_EXCLUDE_RADIUS_KM} до {MAX_EXCLUDE_RADIUS_KM} км, не более{" "}
                         {MAX_TRAVEL_EXCLUDE_ZONES} зон.
                       </p>
@@ -891,9 +1012,9 @@ export default function MasterProfilePage() {
                                 max={MAX_EXCLUDE_RADIUS_KM}
                                 step={0.1}
                                 inputMode="decimal"
-                                value={numFieldValue(z.radius_km, false)}
+                                value={numFieldValue(z.radius_km, true)}
                                 onChange={(e) => {
-                                  const v = parseNonNegFloatInput(e.target.value, z.radius_km);
+                                  const v = parseNonNegFloatInput(e.target.value, 0);
                                   setTravelExcludeZones((list) =>
                                     list.map((x) =>
                                       x.id === z.id ? { ...x, radius_km: v } : x,
@@ -905,9 +1026,8 @@ export default function MasterProfilePage() {
                                     list.map((x) => {
                                       if (x.id !== z.id) return x;
                                       let r = x.radius_km;
-                                      if (!Number.isFinite(r) || r < MIN_EXCLUDE_RADIUS_KM) {
-                                        r = MIN_EXCLUDE_RADIUS_KM;
-                                      }
+                                      if (!Number.isFinite(r) || r <= 0) return { ...x, radius_km: 0 };
+                                      if (r < MIN_EXCLUDE_RADIUS_KM) r = MIN_EXCLUDE_RADIUS_KM;
                                       if (r > MAX_EXCLUDE_RADIUS_KM) {
                                         r = MAX_EXCLUDE_RADIUS_KM;
                                       }

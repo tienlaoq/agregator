@@ -111,6 +111,50 @@ func (s *Server) UpdateMyProfile(ctx context.Context, req *masterv1.UpdateMyProf
 		v := *req.PayoutLegalForm
 		in.PayoutLegalForm = &v
 	}
+	if req.YookassaSellerAccountId != nil {
+		v := *req.YookassaSellerAccountId
+		in.YookassaSellerAccountID = &v
+	}
+	if req.PayoutLegalName != nil {
+		v := *req.PayoutLegalName
+		in.PayoutLegalName = &v
+	}
+	if req.PayoutInn != nil {
+		v := *req.PayoutInn
+		in.PayoutINN = &v
+	}
+	if req.PayoutKpp != nil {
+		v := *req.PayoutKpp
+		in.PayoutKPP = &v
+	}
+	if req.PayoutOgrn != nil {
+		v := *req.PayoutOgrn
+		in.PayoutOGRN = &v
+	}
+	if req.PayoutOgrnip != nil {
+		v := *req.PayoutOgrnip
+		in.PayoutOGRNIP = &v
+	}
+	if req.PayoutBankName != nil {
+		v := *req.PayoutBankName
+		in.PayoutBankName = &v
+	}
+	if req.PayoutBik != nil {
+		v := *req.PayoutBik
+		in.PayoutBIK = &v
+	}
+	if req.PayoutSettlementAccount != nil {
+		v := *req.PayoutSettlementAccount
+		in.PayoutSettlementAccount = &v
+	}
+	if req.PayoutCorrespondentAccount != nil {
+		v := *req.PayoutCorrespondentAccount
+		in.PayoutCorrespondentAccount = &v
+	}
+	if req.PayoutVerificationStatus != nil {
+		v := *req.PayoutVerificationStatus
+		in.PayoutVerificationStatus = &v
+	}
 	if req.GetApplyTravelExcludeZones() {
 		in.ApplyTravelExcludeZones = true
 		for _, z := range req.GetTravelExcludeZones() {
@@ -286,6 +330,59 @@ func (s *Server) ListMyMasterBookings(ctx context.Context, req *masterv1.ListMyM
 	return &masterv1.ListMasterBookingsResponse{Bookings: out}, nil
 }
 
+func (s *Server) ListClientMasterBookings(ctx context.Context, req *masterv1.ListClientMasterBookingsRequest) (*masterv1.ListMasterBookingsResponse, error) {
+	uid, err := parseUUID(req.GetUserId(), "user_id")
+	if err != nil {
+		return nil, err
+	}
+	list, err := s.uc.ListClientBookings(ctx, uid, req.GetStatusFilter())
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*masterv1.MasterBooking, 0, len(list))
+	for i := range list {
+		out = append(out, bookingToProto(&list[i]))
+	}
+	return &masterv1.ListMasterBookingsResponse{Bookings: out}, nil
+}
+
+func (s *Server) GetMasterBooking(ctx context.Context, req *masterv1.GetMasterBookingRequest) (*masterv1.MasterBookingResponse, error) {
+	bid, err := parseUUID(req.GetBookingId(), "booking_id")
+	if err != nil {
+		return nil, err
+	}
+	aid, err := parseUUID(req.GetActorUserId(), "actor_user_id")
+	if err != nil {
+		return nil, err
+	}
+	b, err := s.uc.GetBookingForActor(ctx, bid, aid)
+	if err != nil {
+		return nil, err
+	}
+	pb := bookingToProto(b)
+	if ownerID, err := s.uc.MasterOwnerUserID(ctx, b.MasterID); err == nil {
+		s := ownerID.String()
+		pb.MasterUserId = &s
+	}
+	return &masterv1.MasterBookingResponse{Booking: pb}, nil
+}
+
+func (s *Server) HasCompletedMasterBooking(ctx context.Context, req *masterv1.HasCompletedMasterBookingRequest) (*masterv1.HasCompletedMasterBookingResponse, error) {
+	clientID, err := parseUUID(req.GetClientUserId(), "client_user_id")
+	if err != nil {
+		return nil, err
+	}
+	masterID, err := parseUUID(req.GetMasterId(), "master_id")
+	if err != nil {
+		return nil, err
+	}
+	ok, err := s.uc.HasCompletedBookingByClientMaster(ctx, clientID, masterID)
+	if err != nil {
+		return nil, err
+	}
+	return &masterv1.HasCompletedMasterBookingResponse{HasCompleted: ok}, nil
+}
+
 func (s *Server) AddMasterPhoto(ctx context.Context, req *masterv1.AddMasterPhotoRequest) (*masterv1.MasterResponse, error) {
 	uid, err := parseUUID(req.GetUserId(), "user_id")
 	if err != nil {
@@ -357,26 +454,38 @@ func masterToProto(m *domain.Master) *masterv1.Master {
 		})
 	}
 	pb := &masterv1.Master{
-		Id:              m.ID.String(),
-		UserId:          m.UserID.String(),
-		Slug:            m.Slug,
-		DisplayName:     m.DisplayName,
-		Bio:             m.Bio,
-		Phone:           m.Phone,
-		City:            m.City,
-		WorkFormat:      m.WorkFormat,
-		TravelRadiusKm:  m.TravelRadiusKm,
-		ExperienceYears: m.ExperienceYears,
-		Specializations:    m.Specializations,
-		HourlyRate:         m.HourlyRate,
-		AvailabilityJson:   m.AvailabilityJSON,
-		PayoutLegalForm:    m.PayoutLegalForm,
-		Status:             m.Status,
-		ModerationComment:  m.ModerationComment,
-		Services:           svcs,
-		Photos:             ph,
-		CreatedAt:          timestamppb.New(m.CreatedAt),
-		UpdatedAt:          timestamppb.New(m.UpdatedAt),
+		Id:                         m.ID.String(),
+		UserId:                     m.UserID.String(),
+		Slug:                       m.Slug,
+		DisplayName:                m.DisplayName,
+		Bio:                        m.Bio,
+		Phone:                      m.Phone,
+		City:                       m.City,
+		WorkFormat:                 m.WorkFormat,
+		TravelRadiusKm:             m.TravelRadiusKm,
+		ExperienceYears:            m.ExperienceYears,
+		Specializations:            m.Specializations,
+		HourlyRate:                 m.HourlyRate,
+		AvailabilityJson:           m.AvailabilityJSON,
+		PayoutLegalForm:            m.PayoutLegalForm,
+		YookassaSellerAccountId:    m.YookassaSellerAccountID,
+		PayoutLegalName:            m.PayoutLegalName,
+		PayoutInn:                  m.PayoutINN,
+		PayoutKpp:                  m.PayoutKPP,
+		PayoutOgrn:                 m.PayoutOGRN,
+		PayoutOgrnip:               m.PayoutOGRNIP,
+		PayoutBankName:             m.PayoutBankName,
+		PayoutBik:                  m.PayoutBIK,
+		PayoutSettlementAccount:    m.PayoutSettlementAccount,
+		PayoutCorrespondentAccount: m.PayoutCorrespondentAccount,
+		PayoutVerificationStatus:   m.PayoutVerificationStatus,
+		PayoutReady:                payoutProfileReady(m),
+		Status:                     m.Status,
+		ModerationComment:          m.ModerationComment,
+		Services:                   svcs,
+		Photos:                     ph,
+		CreatedAt:                  timestamppb.New(m.CreatedAt),
+		UpdatedAt:                  timestamppb.New(m.UpdatedAt),
 	}
 	if m.ModeratedBy != nil {
 		s := m.ModeratedBy.String()
@@ -410,6 +519,18 @@ func masterToProtoPublic(m *domain.Master) *masterv1.Master {
 	p := masterToProto(m)
 	if p != nil {
 		p.PayoutLegalForm = ""
+		p.YookassaSellerAccountId = ""
+		p.PayoutLegalName = ""
+		p.PayoutInn = ""
+		p.PayoutKpp = ""
+		p.PayoutOgrn = ""
+		p.PayoutOgrnip = ""
+		p.PayoutBankName = ""
+		p.PayoutBik = ""
+		p.PayoutSettlementAccount = ""
+		p.PayoutCorrespondentAccount = ""
+		p.PayoutVerificationStatus = ""
+		p.PayoutReady = false
 	}
 	return p
 }
@@ -427,6 +548,9 @@ func bookingToProto(b *domain.MasterBooking) *masterv1.MasterBooking {
 		TimeTo:       b.TimeTo,
 		Comment:      b.Comment,
 		Status:       b.Status,
+		PaymentId:    b.PaymentID,
+		PaymentUrl:   b.PaymentURL,
+		TotalPrice:   b.TotalPrice,
 		CreatedAt:    timestamppb.New(b.CreatedAt),
 	}
 	if b.MasterServiceID != nil {
@@ -434,4 +558,17 @@ func bookingToProto(b *domain.MasterBooking) *masterv1.MasterBooking {
 		pb.MasterServiceId = s
 	}
 	return pb
+}
+
+func payoutProfileReady(m *domain.Master) bool {
+	if m == nil {
+		return false
+	}
+	return strings.TrimSpace(m.YookassaSellerAccountID) != "" &&
+		strings.TrimSpace(m.PayoutLegalName) != "" &&
+		strings.TrimSpace(m.PayoutINN) != "" &&
+		strings.TrimSpace(m.PayoutBankName) != "" &&
+		strings.TrimSpace(m.PayoutBIK) != "" &&
+		strings.TrimSpace(m.PayoutSettlementAccount) != "" &&
+		strings.TrimSpace(m.PayoutCorrespondentAccount) != ""
 }

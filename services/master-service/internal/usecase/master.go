@@ -5,9 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	paymentv1 "github.com/tienlao/agregator/gen/go/payment/v1"
+	"google.golang.org/grpc"
 
 	pkgerrors "github.com/tienlao/agregator/pkg/errors"
 	"github.com/tienlao/agregator/pkg/geo"
@@ -27,7 +30,13 @@ type MasterRepo interface {
 	InsertModerationHistory(ctx context.Context, e *domain.ModerationHistoryEntry) error
 	ListModerationHistory(ctx context.Context, masterID uuid.UUID, limit int32) ([]domain.ModerationHistoryEntry, error)
 	InsertBooking(ctx context.Context, b *domain.MasterBooking) error
+	GetBookingByID(ctx context.Context, bookingID uuid.UUID) (*domain.MasterBooking, error)
+	GetBookingByPaymentID(ctx context.Context, paymentID string) (*domain.MasterBooking, error)
+	SetBookingPayment(ctx context.Context, bookingID uuid.UUID, paymentID, paymentURL string, totalPrice int64, status string) error
 	ListBookingsByMaster(ctx context.Context, masterID uuid.UUID, statusFilter string) ([]domain.MasterBooking, error)
+	ListBookingsByClient(ctx context.Context, clientUserID uuid.UUID, statusFilter string) ([]domain.MasterBooking, error)
+	UpdateBookingStatus(ctx context.Context, bookingID uuid.UUID, status string) error
+	HasCompletedBookingByClientMaster(ctx context.Context, clientUserID, masterID uuid.UUID) (bool, error)
 	NewSlug(ctx context.Context, displayName string) (string, error)
 
 	CountPhotosByMaster(ctx context.Context, masterID uuid.UUID) (int32, error)
@@ -37,11 +46,16 @@ type MasterRepo interface {
 }
 
 type MasterUseCase struct {
-	repo MasterRepo
+	repo          MasterRepo
+	paymentClient paymentGatewayClient
 }
 
-func NewMasterUseCase(repo MasterRepo) *MasterUseCase {
-	return &MasterUseCase{repo: repo}
+type paymentGatewayClient interface {
+	CreatePayment(ctx context.Context, in *paymentv1.CreatePaymentRequest, opts ...grpc.CallOption) (*paymentv1.PaymentResponse, error)
+}
+
+func NewMasterUseCase(repo MasterRepo, paymentClient paymentGatewayClient) *MasterUseCase {
+	return &MasterUseCase{repo: repo, paymentClient: paymentClient}
 }
 
 const maxMasterPhotos int32 = 12
@@ -79,17 +93,18 @@ func (uc *MasterUseCase) CreateMyProfile(ctx context.Context, userID uuid.UUID, 
 		return nil, err
 	}
 	m := &domain.Master{
-		ID:               uuid.New(),
-		UserID:           userID,
-		Slug:             slug,
-		DisplayName:      displayName,
-		Bio:              "",
-		Phone:            "",
-		City:             "",
-		WorkFormat:       domain.WorkFormatBoth,
-		Specializations:  []string{},
-		Status:           domain.StatusDraft,
-		AvailabilityJSON: "{}",
+		ID:                       uuid.New(),
+		UserID:                   userID,
+		Slug:                     slug,
+		DisplayName:              displayName,
+		Bio:                      "",
+		Phone:                    "",
+		City:                     "",
+		WorkFormat:               domain.WorkFormatBoth,
+		Specializations:          []string{},
+		Status:                   domain.StatusDraft,
+		AvailabilityJSON:         "{}",
+		PayoutVerificationStatus: domain.PayoutVerificationUnverified,
 	}
 	if err := uc.repo.Insert(ctx, m); err != nil {
 		return nil, err
@@ -102,24 +117,35 @@ func (uc *MasterUseCase) CreateMyProfile(ctx context.Context, userID uuid.UUID, 
 }
 
 type UpdateMasterInput struct {
-	DisplayName      *string
-	Bio              *string
-	Phone            *string
-	City             *string
-	WorkFormat       *string
-	TravelRadiusKm         *int32
-	TravelBaseLatitude     *float64
-	TravelBaseLongitude    *float64
-	ExperienceYears        *int32
-	HourlyRate             *int64
-	AvailabilityJSON       *string
-	ApplyServicesReplace   bool
-	ServicesReplace        []domain.MasterServiceUpsert
-	ApplySpecializations   bool
-	Specializations        []string
-	PayoutLegalForm        *string
-	ApplyTravelExcludeZones bool
-	TravelExcludeZones      []domain.MasterTravelExcludeZone
+	DisplayName                *string
+	Bio                        *string
+	Phone                      *string
+	City                       *string
+	WorkFormat                 *string
+	TravelRadiusKm             *int32
+	TravelBaseLatitude         *float64
+	TravelBaseLongitude        *float64
+	ExperienceYears            *int32
+	HourlyRate                 *int64
+	AvailabilityJSON           *string
+	ApplyServicesReplace       bool
+	ServicesReplace            []domain.MasterServiceUpsert
+	ApplySpecializations       bool
+	Specializations            []string
+	PayoutLegalForm            *string
+	YookassaSellerAccountID    *string
+	PayoutLegalName            *string
+	PayoutINN                  *string
+	PayoutKPP                  *string
+	PayoutOGRN                 *string
+	PayoutOGRNIP               *string
+	PayoutBankName             *string
+	PayoutBIK                  *string
+	PayoutSettlementAccount    *string
+	PayoutCorrespondentAccount *string
+	PayoutVerificationStatus   *string
+	ApplyTravelExcludeZones    bool
+	TravelExcludeZones         []domain.MasterTravelExcludeZone
 }
 
 func (uc *MasterUseCase) UpdateMyProfile(ctx context.Context, userID uuid.UUID, in UpdateMasterInput) (*domain.Master, error) {
@@ -186,6 +212,64 @@ func (uc *MasterUseCase) UpdateMyProfile(ctx context.Context, userID uuid.UUID, 
 			m.PayoutLegalForm = v
 		default:
 			return nil, pkgerrors.InvalidArgument("invalid payout_legal_form")
+		}
+	}
+	if in.YookassaSellerAccountID != nil {
+		m.YookassaSellerAccountID = strings.TrimSpace(*in.YookassaSellerAccountID)
+	}
+	if in.PayoutLegalName != nil {
+		m.PayoutLegalName = strings.TrimSpace(*in.PayoutLegalName)
+	}
+	if in.PayoutINN != nil {
+		m.PayoutINN = normalizeDigits(*in.PayoutINN)
+	}
+	if in.PayoutKPP != nil {
+		m.PayoutKPP = normalizeDigits(*in.PayoutKPP)
+	}
+	if in.PayoutOGRN != nil {
+		m.PayoutOGRN = normalizeDigits(*in.PayoutOGRN)
+	}
+	if in.PayoutOGRNIP != nil {
+		m.PayoutOGRNIP = normalizeDigits(*in.PayoutOGRNIP)
+	}
+	if in.PayoutBankName != nil {
+		m.PayoutBankName = strings.TrimSpace(*in.PayoutBankName)
+	}
+	if in.PayoutBIK != nil {
+		m.PayoutBIK = normalizeDigits(*in.PayoutBIK)
+	}
+	if in.PayoutSettlementAccount != nil {
+		m.PayoutSettlementAccount = normalizeDigits(*in.PayoutSettlementAccount)
+	}
+	if in.PayoutCorrespondentAccount != nil {
+		m.PayoutCorrespondentAccount = normalizeDigits(*in.PayoutCorrespondentAccount)
+	}
+	if in.PayoutVerificationStatus != nil {
+		v := strings.TrimSpace(strings.ToLower(*in.PayoutVerificationStatus))
+		switch v {
+		case "":
+			m.PayoutVerificationStatus = domain.PayoutVerificationUnverified
+		case domain.PayoutVerificationUnverified, domain.PayoutVerificationPending, domain.PayoutVerificationVerified, domain.PayoutVerificationRejected:
+			m.PayoutVerificationStatus = v
+		default:
+			return nil, pkgerrors.InvalidArgument("invalid payout_verification_status")
+		}
+	}
+	if in.PayoutLegalForm != nil ||
+		in.YookassaSellerAccountID != nil ||
+		in.PayoutLegalName != nil ||
+		in.PayoutINN != nil ||
+		in.PayoutKPP != nil ||
+		in.PayoutOGRN != nil ||
+		in.PayoutOGRNIP != nil ||
+		in.PayoutBankName != nil ||
+		in.PayoutBIK != nil ||
+		in.PayoutSettlementAccount != nil ||
+		in.PayoutCorrespondentAccount != nil {
+		if hasAnyPayoutData(m) {
+			if err := validatePayoutProfileByLegalForm(m); err != nil {
+				return nil, pkgerrors.InvalidArgument(err.Error())
+			}
 		}
 	}
 	if in.ApplyTravelExcludeZones {
@@ -313,7 +397,8 @@ func validateTravelBaseForProfile(m *domain.Master) error {
 		return nil
 	}
 	if m.TravelRadiusKm <= 0 {
-		return fmt.Errorf("укажите расстояние в километрах от метки на карте")
+		// Радиус не задан: карта выезда для анкеты опциональна.
+		return nil
 	}
 	if m.TravelBaseLatitude == nil || m.TravelBaseLongitude == nil {
 		return fmt.Errorf("поставьте метку на карте (точка отсчёта километража)")
@@ -343,7 +428,7 @@ func validateTravelExcludeZones(zones []domain.MasterTravelExcludeZone) error {
 		if z.Latitude < -90 || z.Latitude > 90 || z.Longitude < -180 || z.Longitude > 180 {
 			return fmt.Errorf("зона %d: некорректные координаты", i+1)
 		}
-		if z.RadiusKm < minExcludeRadiusKm || z.RadiusKm > maxExcludeRadiusKm {
+		if z.RadiusKm > 0 && (z.RadiusKm < minExcludeRadiusKm || z.RadiusKm > maxExcludeRadiusKm) {
 			return fmt.Errorf("зона %d: радиус от %.1f до %.0f км", i+1, minExcludeRadiusKm, maxExcludeRadiusKm)
 		}
 	}
@@ -410,6 +495,9 @@ func validateReadyForReview(m *domain.Master) error {
 	default:
 		return fmt.Errorf("укажите форму получения выплат: ИП, ООО, физическое лицо или самозанятость")
 	}
+	if err := validatePayoutProfileByLegalForm(m); err != nil {
+		return err
+	}
 	if err := validateTravelBaseForProfile(m); err != nil {
 		return err
 	}
@@ -417,6 +505,91 @@ func validateReadyForReview(m *domain.Master) error {
 		return err
 	}
 	return nil
+}
+
+func normalizeDigits(s string) string {
+	var b strings.Builder
+	for _, r := range strings.TrimSpace(s) {
+		if r >= '0' && r <= '9' {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+func validatePayoutProfileByLegalForm(m *domain.Master) error {
+	plf := strings.TrimSpace(strings.ToLower(m.PayoutLegalForm))
+	if plf == "gph" {
+		plf = domain.PayoutLegalFormIndividual
+	}
+	switch plf {
+	case domain.PayoutLegalFormIP, domain.PayoutLegalFormOOO, domain.PayoutLegalFormIndividual, domain.PayoutLegalFormSelfEmployed:
+	default:
+		return fmt.Errorf("укажите форму получения выплат: ИП, ООО, физическое лицо или самозанятость")
+	}
+	if strings.TrimSpace(m.YookassaSellerAccountID) == "" {
+		return fmt.Errorf("укажите аккаунт получателя выплат ЮKassa")
+	}
+	if strings.TrimSpace(m.PayoutLegalName) == "" {
+		return fmt.Errorf("укажите ФИО или наименование получателя выплат")
+	}
+	if strings.TrimSpace(m.PayoutBankName) == "" {
+		return fmt.Errorf("укажите банк получателя")
+	}
+	if len(normalizeDigits(m.PayoutBIK)) != 9 {
+		return fmt.Errorf("БИК должен содержать 9 цифр")
+	}
+	if len(normalizeDigits(m.PayoutSettlementAccount)) != 20 {
+		return fmt.Errorf("расчетный счет должен содержать 20 цифр")
+	}
+	if len(normalizeDigits(m.PayoutCorrespondentAccount)) != 20 {
+		return fmt.Errorf("корреспондентский счет должен содержать 20 цифр")
+	}
+	innLen := len(normalizeDigits(m.PayoutINN))
+	if plf == domain.PayoutLegalFormOOO {
+		if innLen != 10 {
+			return fmt.Errorf("для ООО ИНН должен содержать 10 цифр")
+		}
+		if len(normalizeDigits(m.PayoutKPP)) != 9 {
+			return fmt.Errorf("для ООО КПП должен содержать 9 цифр")
+		}
+		if l := len(normalizeDigits(m.PayoutOGRN)); l != 13 {
+			return fmt.Errorf("для ООО ОГРН должен содержать 13 цифр")
+		}
+	}
+	if plf == domain.PayoutLegalFormIP {
+		if innLen != 12 {
+			return fmt.Errorf("для ИП ИНН должен содержать 12 цифр")
+		}
+		if l := len(normalizeDigits(m.PayoutOGRNIP)); l != 15 {
+			return fmt.Errorf("для ИП ОГРНИП должен содержать 15 цифр")
+		}
+	}
+	if plf == domain.PayoutLegalFormSelfEmployed {
+		if innLen != 12 {
+			return fmt.Errorf("для самозанятого ИНН должен содержать 12 цифр")
+		}
+	}
+	if plf == domain.PayoutLegalFormIndividual {
+		if innLen != 12 {
+			return fmt.Errorf("для физлица ИНН должен содержать 12 цифр")
+		}
+	}
+	return nil
+}
+
+func hasAnyPayoutData(m *domain.Master) bool {
+	return strings.TrimSpace(m.PayoutLegalForm) != "" ||
+		strings.TrimSpace(m.YookassaSellerAccountID) != "" ||
+		strings.TrimSpace(m.PayoutLegalName) != "" ||
+		strings.TrimSpace(m.PayoutINN) != "" ||
+		strings.TrimSpace(m.PayoutKPP) != "" ||
+		strings.TrimSpace(m.PayoutOGRN) != "" ||
+		strings.TrimSpace(m.PayoutOGRNIP) != "" ||
+		strings.TrimSpace(m.PayoutBankName) != "" ||
+		strings.TrimSpace(m.PayoutBIK) != "" ||
+		strings.TrimSpace(m.PayoutSettlementAccount) != "" ||
+		strings.TrimSpace(m.PayoutCorrespondentAccount) != ""
 }
 
 func (uc *MasterUseCase) ListPublic(ctx context.Context, params domain.ListPublicMastersParams) ([]domain.Master, int32, error) {
@@ -523,6 +696,16 @@ func (uc *MasterUseCase) CreateBooking(ctx context.Context, clientUserID uuid.UU
 			return nil, pkgerrors.InvalidArgument("unknown service")
 		}
 	}
+	if uc.paymentClient == nil {
+		return nil, pkgerrors.Internal("payment client is not configured")
+	}
+	if err := validatePayoutProfileByLegalForm(m); err != nil {
+		return nil, pkgerrors.InvalidArgument(err.Error())
+	}
+	totalPrice, err := estimateMasterBookingPriceKopecks(m, serviceID, timeFrom, timeTo)
+	if err != nil {
+		return nil, err
+	}
 	b := &domain.MasterBooking{
 		ID:              uuid.New(),
 		MasterID:        m.ID,
@@ -533,8 +716,28 @@ func (uc *MasterUseCase) CreateBooking(ctx context.Context, clientUserID uuid.UU
 		TimeTo:          timeTo,
 		Comment:         comment,
 		Status:          "pending",
+		TotalPrice:      totalPrice,
 	}
 	if err := uc.repo.InsertBooking(ctx, b); err != nil {
+		return nil, err
+	}
+	payResp, err := uc.paymentClient.CreatePayment(ctx, &paymentv1.CreatePaymentRequest{
+		BookingId:               b.ID.String(),
+		Amount:                  totalPrice,
+		Description:             fmt.Sprintf("Master booking %s", b.ID.String()),
+		IdempotencyKey:          b.ID.String(),
+		CounterpartyType:        "master",
+		CounterpartyId:          m.ID.String(),
+		YookassaSellerAccountId: strings.TrimSpace(m.YookassaSellerAccountID),
+	})
+	if err != nil {
+		_ = uc.repo.UpdateBookingStatus(ctx, b.ID, "cancelled")
+		return nil, fmt.Errorf("create payment: %w", err)
+	}
+	b.PaymentID = strings.TrimSpace(payResp.GetId())
+	b.PaymentURL = strings.TrimSpace(payResp.GetPaymentUrl())
+	b.Status = "payment_pending"
+	if err := uc.repo.SetBookingPayment(ctx, b.ID, b.PaymentID, b.PaymentURL, b.TotalPrice, b.Status); err != nil {
 		return nil, err
 	}
 	list, err := uc.repo.ListBookingsByMaster(ctx, m.ID, "")
@@ -549,6 +752,44 @@ func (uc *MasterUseCase) CreateBooking(ctx context.Context, clientUserID uuid.UU
 	return b, nil
 }
 
+func estimateMasterBookingPriceKopecks(m *domain.Master, serviceID *uuid.UUID, timeFrom, timeTo string) (int64, error) {
+	if serviceID != nil {
+		for _, s := range m.Services {
+			if s.ID == *serviceID {
+				if s.Price <= 0 {
+					return 0, pkgerrors.InvalidArgument("стоимость услуги не настроена")
+				}
+				return s.Price, nil
+			}
+		}
+		return 0, pkgerrors.InvalidArgument("unknown service")
+	}
+	if m.HourlyRate <= 0 {
+		return 0, pkgerrors.InvalidArgument("master hourly rate is not configured")
+	}
+	startAt, err := time.Parse("15:04", strings.TrimSpace(timeFrom))
+	if err != nil {
+		return 0, pkgerrors.InvalidArgument("invalid time_from")
+	}
+	endAt, err := time.Parse("15:04", strings.TrimSpace(timeTo))
+	if err != nil {
+		return 0, pkgerrors.InvalidArgument("invalid time_to")
+	}
+	if !endAt.After(startAt) {
+		return 0, pkgerrors.InvalidArgument("time_to must be later than time_from")
+	}
+	minutes := int64(endAt.Sub(startAt).Minutes())
+	if minutes <= 0 {
+		return 0, pkgerrors.InvalidArgument("invalid booking duration")
+	}
+	// Round up partial hours so master is not underpaid on uneven slots.
+	amount := (m.HourlyRate*minutes + 59) / 60
+	if amount <= 0 {
+		return 0, pkgerrors.InvalidArgument("invalid booking amount")
+	}
+	return amount, nil
+}
+
 func (uc *MasterUseCase) ListMyBookings(ctx context.Context, userID uuid.UUID, statusFilter string) ([]domain.MasterBooking, error) {
 	m, err := uc.repo.GetByUserID(ctx, userID)
 	if err != nil {
@@ -558,6 +799,108 @@ func (uc *MasterUseCase) ListMyBookings(ctx context.Context, userID uuid.UUID, s
 		return nil, pkgerrors.NotFound("master profile not found")
 	}
 	return uc.repo.ListBookingsByMaster(ctx, m.ID, statusFilter)
+}
+
+func (uc *MasterUseCase) ListClientBookings(ctx context.Context, userID uuid.UUID, statusFilter string) ([]domain.MasterBooking, error) {
+	return uc.repo.ListBookingsByClient(ctx, userID, statusFilter)
+}
+
+func (uc *MasterUseCase) GetBookingForActor(ctx context.Context, bookingID, actorUserID uuid.UUID) (*domain.MasterBooking, error) {
+	b, err := uc.repo.GetBookingByID(ctx, bookingID)
+	if err != nil {
+		return nil, err
+	}
+	if b == nil {
+		return nil, pkgerrors.NotFound("booking not found")
+	}
+	if b.ClientUserID == actorUserID {
+		return b, nil
+	}
+	m, err := uc.repo.GetByID(ctx, b.MasterID)
+	if err != nil {
+		return nil, err
+	}
+	if m == nil {
+		return nil, pkgerrors.NotFound("master not found")
+	}
+	if m.UserID != actorUserID {
+		return nil, pkgerrors.PermissionDenied("access denied")
+	}
+	return b, nil
+}
+
+// MasterOwnerUserID returns the platform user id for the master profile (venue owner account).
+func (uc *MasterUseCase) MasterOwnerUserID(ctx context.Context, masterID uuid.UUID) (uuid.UUID, error) {
+	m, err := uc.repo.GetByID(ctx, masterID)
+	if err != nil {
+		return uuid.Nil, err
+	}
+	if m == nil {
+		return uuid.Nil, pkgerrors.NotFound("master not found")
+	}
+	return m.UserID, nil
+}
+
+func (uc *MasterUseCase) HasCompletedBookingByClientMaster(ctx context.Context, clientUserID, masterID uuid.UUID) (bool, error) {
+	return uc.repo.HasCompletedBookingByClientMaster(ctx, clientUserID, masterID)
+}
+
+func (uc *MasterUseCase) ConfirmBookingByPayment(ctx context.Context, bookingID, paymentID string) error {
+	bid, err := uuid.Parse(strings.TrimSpace(bookingID))
+	if err != nil {
+		return pkgerrors.InvalidArgument("invalid booking_id")
+	}
+	b, err := uc.repo.GetBookingByID(ctx, bid)
+	if err != nil {
+		return err
+	}
+	if b == nil {
+		return pkgerrors.NotFound("booking not found")
+	}
+	if b.PaymentID != "" && !strings.EqualFold(strings.TrimSpace(b.PaymentID), strings.TrimSpace(paymentID)) {
+		return pkgerrors.InvalidArgument("payment does not belong to booking")
+	}
+	if b.PaymentID == "" {
+		if err := uc.repo.SetBookingPayment(ctx, b.ID, strings.TrimSpace(paymentID), b.PaymentURL, b.TotalPrice, b.Status); err != nil {
+			return err
+		}
+	}
+	if b.Status == "confirmed" || b.Status == "cancelled" {
+		return nil
+	}
+	if b.Status != "payment_pending" {
+		return pkgerrors.InvalidArgument("booking is not waiting for payment")
+	}
+	return uc.repo.UpdateBookingStatus(ctx, b.ID, "confirmed")
+}
+
+func (uc *MasterUseCase) CancelBookingByPayment(ctx context.Context, bookingID, paymentID string) error {
+	bid, err := uuid.Parse(strings.TrimSpace(bookingID))
+	if err != nil {
+		return pkgerrors.InvalidArgument("invalid booking_id")
+	}
+	b, err := uc.repo.GetBookingByID(ctx, bid)
+	if err != nil {
+		return err
+	}
+	if b == nil {
+		return pkgerrors.NotFound("booking not found")
+	}
+	if b.PaymentID != "" && !strings.EqualFold(strings.TrimSpace(b.PaymentID), strings.TrimSpace(paymentID)) {
+		return pkgerrors.InvalidArgument("payment does not belong to booking")
+	}
+	if b.PaymentID == "" {
+		if err := uc.repo.SetBookingPayment(ctx, b.ID, strings.TrimSpace(paymentID), b.PaymentURL, b.TotalPrice, b.Status); err != nil {
+			return err
+		}
+	}
+	if b.Status == "cancelled" {
+		return nil
+	}
+	if b.Status != "payment_pending" {
+		return nil
+	}
+	return uc.repo.UpdateBookingStatus(ctx, b.ID, "cancelled")
 }
 
 func (uc *MasterUseCase) AddMasterPhoto(ctx context.Context, userID uuid.UUID, url string) (*domain.Master, error) {

@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import {
   Select,
   SelectContent,
@@ -26,10 +27,13 @@ import {
   getPublicMaster,
   createMasterBooking,
   formatApiErrorMessage,
+  getMasterReviews,
   masterCardImageSrc,
   masterCardPriceLabel,
   venueMediaUrl,
 } from "@/lib/api";
+import { ReviewList } from "@/components/review-list";
+import type { Review } from "@/lib/types";
 import { MasterTravelBaseMap } from "@/components/banya/master-travel-base-map";
 import type { MasterPhoto, MasterTravelExcludeZone } from "@/lib/types";
 import {
@@ -41,6 +45,9 @@ import {
 import {
   ArrowLeft,
   CalendarIcon,
+  Check,
+  ChevronLeft,
+  ChevronRight,
   ImageIcon,
   MapPin,
   Minus,
@@ -77,15 +84,40 @@ export default function MasterPublicPage({
   const [date, setDate] = useState<Date>();
   const [time, setTime] = useState("");
   const [timeTo, setTimeTo] = useState("");
-  const [serviceId, setServiceId] = useState<string>("none");
+  const [selectedServiceIds, setSelectedServiceIds] = useState<string[]>([]);
   const [guests] = useState(1);
   const [comment, setComment] = useState("");
   const [msg, setMsg] = useState("");
+  const [selectedPhotoIndex, setSelectedPhotoIndex] = useState(0);
+  const [lightboxOpen, setLightboxOpen] = useState(false);
+  const [reviews, setReviews] = useState<Review[]>([]);
 
   const { data: master, isLoading, error } = useQuery({
     queryKey: ["public-master", slug],
     queryFn: () => getPublicMaster(slug),
   });
+
+  useEffect(() => {
+    if (!master?.id) {
+      setReviews([]);
+      return;
+    }
+    getMasterReviews(master.id)
+      .then(setReviews)
+      .catch(() => {
+        setReviews([]);
+      });
+  }, [master?.id]);
+
+  const reloadReviews = useCallback(async () => {
+    if (!master?.id) return;
+    try {
+      const r = await getMasterReviews(master.id);
+      setReviews(r);
+    } catch {
+      // keep current state on refresh errors
+    }
+  }, [master?.id]);
 
   const showPublicTravelZone = useMemo(() => {
     if (!master) return false;
@@ -128,11 +160,16 @@ export default function MasterPublicPage({
         time_from: time,
         time_to: timeTo,
         comment: comment.trim(),
-        ...(serviceId !== "none" ? { master_service_id: serviceId } : {}),
+        ...(selectedServiceIds.length === 1
+          ? { master_service_id: selectedServiceIds[0] }
+          : {}),
       }),
-    onSuccess: () => {
-      setMsg("Заявка отправлена. Мастер свяжется с вами.");
+    onSuccess: (b) => {
+      setMsg("Заявка отправлена. Перенаправляем на оплату...");
       qc.invalidateQueries({ queryKey: ["my-master-bookings"] });
+      if (b.payment_url) {
+        window.location.assign(b.payment_url);
+      }
     },
     onError: (e) => setMsg(formatApiErrorMessage(e, "Ошибка")),
   });
@@ -142,12 +179,17 @@ export default function MasterPublicPage({
       const m = slotLengthMinutes(time, timeTo);
       if (m != null && m >= 30 && m <= 720) return m;
     }
-    if (serviceId !== "none" && master) {
-      const s = master.services?.find((x) => x.id === serviceId);
-      if (s) return Math.min(720, Math.max(30, masterServiceDurationMin(s)));
+    if (selectedServiceIds.length > 0 && master) {
+      let m = 30;
+      for (const id of selectedServiceIds) {
+        const s = master.services?.find((x) => x.id === id);
+        if (!s) continue;
+        m = Math.max(m, masterServiceDurationMin(s));
+      }
+      return Math.min(720, Math.max(30, m));
     }
     return 120;
-  }, [time, timeTo, serviceId, master]);
+  }, [time, timeTo, selectedServiceIds, master]);
 
   const slotValid = useMemo(() => {
     if (!time || !timeTo) return false;
@@ -160,11 +202,30 @@ export default function MasterPublicPage({
 
   const priceHint = useMemo(() => {
     if (!master) return null;
-    if (serviceId !== "none") {
-      const s = master.services?.find((x) => x.id === serviceId);
-      if (s && Number(s.price) > 0) {
-        return `${kopecksToRub(Number(s.price))} ₽`;
+    if (selectedServiceIds.length > 0) {
+      let sumRub = 0;
+      let hourlySlots = 0;
+      for (const id of selectedServiceIds) {
+        const s = master.services?.find((x) => x.id === id);
+        if (!s) continue;
+        if (Number(s.price) > 0) sumRub += Number(s.price) / 100;
+        else hourlySlots++;
       }
+      if (hourlySlots > 1) return null;
+      if (hourlySlots === 1 && typeof master.hourly_rate === "number" && master.hourly_rate > 0 && slotValid) {
+        const mins = slotLengthMinutes(time, timeTo);
+        if (mins != null) {
+          const hours = Math.ceil(mins / 60);
+          sumRub += (master.hourly_rate / 100) * hours;
+        }
+      }
+      if (sumRub > 0) {
+        return `${new Intl.NumberFormat("ru-RU", {
+          minimumFractionDigits: 0,
+          maximumFractionDigits: 0,
+        }).format(sumRub)} ₽`;
+      }
+      return null;
     }
     if (typeof master.hourly_rate === "number" && master.hourly_rate > 0 && slotValid) {
       const mins = slotLengthMinutes(time, timeTo);
@@ -178,7 +239,7 @@ export default function MasterPublicPage({
       }
     }
     return null;
-  }, [master, serviceId, time, timeTo, slotValid]);
+  }, [master, selectedServiceIds, time, timeTo, slotValid]);
 
   useEffect(() => {
     if (!time || !master) {
@@ -186,12 +247,17 @@ export default function MasterPublicPage({
       return;
     }
     let addMin = 120;
-    if (serviceId !== "none") {
-      const s = master.services?.find((x) => x.id === serviceId);
-      if (s) addMin = Math.max(30, masterServiceDurationMin(s));
+    if (selectedServiceIds.length > 0) {
+      let m = 30;
+      for (const id of selectedServiceIds) {
+        const s = master.services?.find((x) => x.id === id);
+        if (!s) continue;
+        m = Math.max(m, masterServiceDurationMin(s));
+      }
+      addMin = Math.max(30, m);
     }
     setTimeTo(defaultEndTimeForDuration(time, addMin));
-  }, [time, serviceId, master]);
+  }, [time, selectedServiceIds, master]);
 
   useEffect(() => {
     if (!date) {
@@ -205,12 +271,17 @@ export default function MasterPublicPage({
     const opts = endTimeOptionsThirtyMinutes(time);
     if (opts.length === 0 || opts.includes(timeTo)) return;
     let addMin = 120;
-    if (serviceId !== "none") {
-      const s = master.services?.find((x) => x.id === serviceId);
-      if (s) addMin = Math.max(30, masterServiceDurationMin(s));
+    if (selectedServiceIds.length > 0) {
+      let m = 30;
+      for (const id of selectedServiceIds) {
+        const s = master.services?.find((x) => x.id === id);
+        if (!s) continue;
+        m = Math.max(m, masterServiceDurationMin(s));
+      }
+      addMin = Math.max(30, m);
     }
     setTimeTo(defaultEndTimeForDuration(time, addMin));
-  }, [time, timeTo, serviceId, master]);
+  }, [time, timeTo, selectedServiceIds, master]);
 
   const onBook = () => {
     setMsg("");
@@ -232,6 +303,55 @@ export default function MasterPublicPage({
     }
     bookMut.mutate();
   };
+
+  const gallery = sortMasterPhotosPublic(master?.photos);
+  const coverSrc = master ? masterCardImageSrc(master) : "";
+  const priceLine = master ? masterCardPriceLabel(master) : "";
+  const displayPhotos = gallery.length > 0
+    ? gallery.map((p) => ({ id: p.id, src: venueMediaUrl(p.url) }))
+    : coverSrc
+      ? [{ id: "cover", src: coverSrc }]
+      : [];
+  const hasPhotoGallery = displayPhotos.length > 0;
+  const activePhoto = hasPhotoGallery
+    ? displayPhotos[Math.min(selectedPhotoIndex, displayPhotos.length - 1)]
+    : null;
+
+  const openPhotoAt = useCallback((idx: number) => {
+    if (!hasPhotoGallery) return;
+    const safeIdx = ((idx % displayPhotos.length) + displayPhotos.length) % displayPhotos.length;
+    setSelectedPhotoIndex(safeIdx);
+    setLightboxOpen(true);
+  }, [displayPhotos.length, hasPhotoGallery]);
+
+  const showPrevPhoto = useCallback(() => {
+    if (!hasPhotoGallery) return;
+    setSelectedPhotoIndex((i) => (i - 1 + displayPhotos.length) % displayPhotos.length);
+  }, [displayPhotos.length, hasPhotoGallery]);
+
+  const showNextPhoto = useCallback(() => {
+    if (!hasPhotoGallery) return;
+    setSelectedPhotoIndex((i) => (i + 1) % displayPhotos.length);
+  }, [displayPhotos.length, hasPhotoGallery]);
+
+  useEffect(() => {
+    setSelectedPhotoIndex(0);
+  }, [slug, master?.id]);
+
+  useEffect(() => {
+    if (!lightboxOpen || !hasPhotoGallery) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "ArrowLeft") {
+        e.preventDefault();
+        showPrevPhoto();
+      } else if (e.key === "ArrowRight") {
+        e.preventDefault();
+        showNextPhoto();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [lightboxOpen, hasPhotoGallery, showPrevPhoto, showNextPhoto]);
 
   if (isLoading) {
     return (
@@ -259,10 +379,6 @@ export default function MasterPublicPage({
     );
   }
 
-  const gallery = sortMasterPhotosPublic(master.photos);
-  const coverSrc = masterCardImageSrc(master);
-  const priceLine = masterCardPriceLabel(master);
-
   return (
     <section className="bg-background py-10 md:py-16">
       <div className="container mx-auto max-w-6xl px-4">
@@ -277,10 +393,15 @@ export default function MasterPublicPage({
         <div className="grid gap-8 lg:grid-cols-3">
           <div className="lg:col-span-2">
             <div className="mb-8">
-              {coverSrc ? (
-                <div className="relative aspect-[16/9] w-full overflow-hidden rounded-xl border border-border bg-muted">
+              {activePhoto ? (
+                <button
+                  type="button"
+                  className="relative aspect-[16/9] w-full overflow-hidden rounded-xl border border-border bg-muted"
+                  onClick={() => openPhotoAt(selectedPhotoIndex)}
+                  aria-label="Открыть фото в полном размере"
+                >
                   <Image
-                    src={coverSrc}
+                    src={activePhoto.src}
                     alt=""
                     fill
                     className="object-cover"
@@ -288,7 +409,7 @@ export default function MasterPublicPage({
                     priority
                     unoptimized
                   />
-                </div>
+                </button>
               ) : (
                 <div className="flex aspect-[16/9] items-center justify-center rounded-xl border border-border bg-muted">
                   <div className="flex flex-col items-center gap-2 text-muted-foreground/40">
@@ -297,22 +418,29 @@ export default function MasterPublicPage({
                   </div>
                 </div>
               )}
-              {gallery.length > 1 ? (
+              {displayPhotos.length > 1 ? (
                 <div className="mt-3 flex gap-2 overflow-x-auto pb-1 pt-0.5 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-                  {gallery.map((p) => (
-                    <div
+                  {displayPhotos.map((p, idx) => (
+                    <button
+                      type="button"
                       key={p.id}
-                      className="relative h-16 w-16 shrink-0 overflow-hidden rounded-md border border-border bg-muted"
+                      onClick={() => setSelectedPhotoIndex(idx)}
+                      aria-label={`Показать фото ${idx + 1}`}
+                      className={`relative h-16 w-16 shrink-0 overflow-hidden rounded-md border bg-muted ${
+                        idx === selectedPhotoIndex
+                          ? "border-primary ring-2 ring-primary/30"
+                          : "border-border"
+                      }`}
                     >
                       <Image
-                        src={venueMediaUrl(p.url)}
+                        src={p.src}
                         alt=""
                         fill
                         className="object-cover"
                         sizes="64px"
                         unoptimized
                       />
-                    </div>
+                    </button>
                   ))}
                 </div>
               ) : null}
@@ -372,12 +500,46 @@ export default function MasterPublicPage({
 
             {master.services && master.services.length > 0 ? (
               <div className="mb-8">
-                <h2 className="mb-4 text-xl font-semibold text-foreground">Услуги и цены</h2>
+                <h2 className="mb-2 text-xl font-semibold text-foreground">Услуги и цены</h2>
+                <p className="mb-4 text-sm text-muted-foreground">
+                  Нажмите на карточку, чтобы добавить услугу в заявку или убрать её. Можно выбрать несколько услуг одновременно.
+                </p>
                 <div className="space-y-3">
-                  {master.services.map((svc) => (
-                    <Card key={svc.id} className="border-border">
-                      <CardContent className="flex items-center justify-between p-4">
-                        <div>
+                  {master.services.map((svc) => {
+                    const selected = selectedServiceIds.includes(svc.id);
+                    return (
+                    <Card
+                      key={svc.id}
+                      role="button"
+                      tabIndex={0}
+                      aria-pressed={selected}
+                      onClick={() =>
+                        setSelectedServiceIds((prev) =>
+                          prev.includes(svc.id) ? prev.filter((x) => x !== svc.id) : [...prev, svc.id],
+                        )
+                      }
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault();
+                          setSelectedServiceIds((prev) =>
+                            prev.includes(svc.id) ? prev.filter((x) => x !== svc.id) : [...prev, svc.id],
+                          );
+                        }
+                      }}
+                      className={`cursor-pointer border-2 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
+                        selected ? "border-primary bg-primary/5" : "border-border hover:border-primary/40"
+                      }`}
+                    >
+                      <CardContent className="relative flex items-center justify-between gap-4 p-4 pr-14">
+                        {selected ? (
+                          <div
+                            className="absolute right-3 top-1/2 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-full bg-primary text-primary-foreground"
+                            aria-hidden
+                          >
+                            <Check className="h-4 w-4" />
+                          </div>
+                        ) : null}
+                        <div className="min-w-0">
                           <p className="font-medium text-card-foreground">{svc.name}</p>
                           {svc.description ? (
                             <p className="text-sm text-muted-foreground">{svc.description}</p>
@@ -388,10 +550,12 @@ export default function MasterPublicPage({
                           <span className="shrink-0 font-semibold text-primary">
                             {kopecksToRub(Number(svc.price))} ₽
                           </span>
-                        ) : null}
+                        ) : (
+                          <span className="shrink-0 text-sm text-muted-foreground">Почасово</span>
+                        )}
                       </CardContent>
                     </Card>
-                  ))}
+                  )})}
                 </div>
               </div>
             ) : null}
@@ -418,12 +582,15 @@ export default function MasterPublicPage({
             ) : null}
 
             <div>
-              <h2 className="mb-6 text-xl font-semibold text-foreground">Отзывы</h2>
-              <Card className="border-border">
-                <CardContent className="py-10 text-center text-muted-foreground">
-                  Пока нет отзывов. Будьте первым!
-                </CardContent>
-              </Card>
+              <h2 className="mb-6 text-xl font-semibold text-foreground">
+                Отзывы {reviews.length > 0 && `(${reviews.length})`}
+              </h2>
+              <ReviewList
+                targetId={master.id}
+                targetType="master"
+                reviews={reviews}
+                onReviewAdded={reloadReviews}
+              />
             </div>
           </div>
 
@@ -465,23 +632,43 @@ export default function MasterPublicPage({
 
                 {master.services && master.services.length > 0 ? (
                   <div className="space-y-2">
-                    <Label className="text-card-foreground">Услуга</Label>
-                    <Select value={serviceId} onValueChange={setServiceId}>
-                      <SelectTrigger>
-                        <SelectValue placeholder="Как бронируете" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="none">Без пакета (по длительности)</SelectItem>
-                        {master.services.map((s) => (
-                          <SelectItem key={s.id} value={s.id}>
-                            {s.name}
-                            {Number(s.price) > 0 ? ` · ${kopecksToRub(Number(s.price))} ₽` : ""}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
+                    <Label className="text-card-foreground">Услуги в заявке</Label>
+                    {selectedServiceIds.length === 0 ? (
+                      <p className="text-sm text-muted-foreground">
+                        Почасовой расчёт. Выберите услуги на карточках слева.
+                      </p>
+                    ) : (
+                      <ul className="max-h-40 space-y-1.5 overflow-y-auto rounded-md border border-border bg-muted/30 px-3 py-2 text-sm">
+                        {selectedServiceIds.map((id) => {
+                          const s = master.services?.find((x) => x.id === id);
+                          if (!s) return null;
+                          return (
+                            <li key={id} className="flex justify-between gap-2">
+                              <span className="line-clamp-2 text-card-foreground">{s.name}</span>
+                              {Number(s.price) > 0 ? (
+                                <span className="shrink-0 font-medium text-primary">
+                                  {kopecksToRub(Number(s.price))} ₽
+                                </span>
+                              ) : (
+                                <span className="shrink-0 text-muted-foreground">почасово</span>
+                              )}
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    )}
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="w-full"
+                      disabled={selectedServiceIds.length === 0}
+                      onClick={() => setSelectedServiceIds([])}
+                    >
+                      Только почасово
+                    </Button>
                     <p className="text-xs text-muted-foreground">
-                      Пакет — фиксированная цена; без пакета — ориентир по ставке за время визита.
+                      Фиксированные услуги суммируются; не более одной услуги без цены в одной заявке.
                     </p>
                   </div>
                 ) : null}
@@ -566,7 +753,7 @@ export default function MasterPublicPage({
                 <div className="border-t border-border pt-4">
                   {priceHint ? (
                     <div className="mb-4 flex items-center justify-between gap-2">
-                      <span className="text-muted-foreground">Ориентир</span>
+                      <span className="text-muted-foreground">К оплате</span>
                       <span className="text-2xl font-bold text-foreground">{priceHint}</span>
                     </div>
                   ) : (
@@ -597,6 +784,51 @@ export default function MasterPublicPage({
           </div>
         </div>
       </div>
+      <Dialog open={lightboxOpen} onOpenChange={setLightboxOpen}>
+        <DialogContent
+          className="max-w-[96vw] border-0 bg-black/95 p-2 sm:p-4"
+          showCloseButton={false}
+          aria-describedby={undefined}
+        >
+          <DialogTitle className="sr-only">Фото мастера</DialogTitle>
+          {activePhoto ? (
+            <div className="relative h-[80vh] w-full">
+              <Image
+                src={activePhoto.src}
+                alt=""
+                fill
+                className="object-contain"
+                sizes="100vw"
+                unoptimized
+              />
+              {displayPhotos.length > 1 ? (
+                <>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="icon"
+                    className="absolute left-2 top-1/2 z-10 h-10 w-10 -translate-y-1/2 border-white/40 bg-black/60 text-white hover:bg-black/70"
+                    onClick={showPrevPhoto}
+                    aria-label="Предыдущее фото"
+                  >
+                    <ChevronLeft className="h-5 w-5" />
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="icon"
+                    className="absolute right-2 top-1/2 z-10 h-10 w-10 -translate-y-1/2 border-white/40 bg-black/60 text-white hover:bg-black/70"
+                    onClick={showNextPhoto}
+                    aria-label="Следующее фото"
+                  >
+                    <ChevronRight className="h-5 w-5" />
+                  </Button>
+                </>
+              ) : null}
+            </div>
+          ) : null}
+        </DialogContent>
+      </Dialog>
     </section>
   );
 }

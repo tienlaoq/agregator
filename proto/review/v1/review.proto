@@ -10,6 +10,7 @@ service ReviewService {
   rpc CreateReview(CreateReviewRequest) returns (ReviewResponse);
   rpc GetReview(GetReviewRequest) returns (ReviewResponse);
   rpc ListVenueReviews(ListVenueReviewsRequest) returns (ListReviewsResponse);
+  rpc ListMasterReviews(ListMasterReviewsRequest) returns (ListReviewsResponse);
   rpc GetVenueRating(GetVenueRatingRequest) returns (VenueRatingResponse);
 }
 
@@ -18,6 +19,9 @@ message CreateReviewRequest {
   string venue_id = 2;
   int32 rating = 3; // 1-5
   string text = 4;
+  bool is_anonymous = 5;
+  string user_name = 6;
+  string master_id = 7;
 }
 
 message GetReviewRequest {
@@ -33,6 +37,8 @@ message ReviewResponse {
   string text = 6;
   bool is_verified = 7;
   google.protobuf.Timestamp created_at = 8;
+  bool is_anonymous = 9;
+  string master_id = 10;
 }
 
 message ListVenueReviewsRequest {
@@ -44,6 +50,12 @@ message ListVenueReviewsRequest {
 message ListReviewsResponse {
   repeated ReviewResponse reviews = 1;
   int32 total = 2;
+}
+
+message ListMasterReviewsRequest {
+  string master_id = 1;
+  int32 page = 2;
+  int32 page_size = 3;
 }
 
 message GetVenueRatingRequest {

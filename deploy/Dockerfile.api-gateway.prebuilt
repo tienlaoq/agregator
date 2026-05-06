@@ -1,0 +1,5 @@
+# Pre-built linux binary at bin/linux/api-gateway (see deploy README or Makefile build-linux).
+FROM alpine:3.19
+RUN apk add --no-cache ca-certificates
+COPY bin/linux/api-gateway /service
+CMD ["/service"]

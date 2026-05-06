@@ -7,8 +7,8 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	authv1 "github.com/tienlao/agregator/gen/go/auth/v1"
 	"github.com/stretchr/testify/assert"
+	authv1 "github.com/tienlao/agregator/gen/go/auth/v1"
 	"google.golang.org/grpc"
 )
 
@@ -55,7 +55,7 @@ func (m *mockAuthClient) CompletePasswordReset(ctx context.Context, in *authv1.C
 
 func TestAuth_MissingHeader(t *testing.T) {
 	client := &mockAuthClient{}
-	h := Auth(client)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	h := Auth(client, nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Fatal("next handler should not run")
 	}))
 
@@ -69,7 +69,7 @@ func TestAuth_MissingHeader(t *testing.T) {
 
 func TestAuth_InvalidFormat(t *testing.T) {
 	client := &mockAuthClient{}
-	h := Auth(client)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	h := Auth(client, nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Fatal("next handler should not run")
 	}))
 
@@ -88,7 +88,7 @@ func TestAuth_InvalidToken(t *testing.T) {
 			return &authv1.ValidateTokenResponse{Valid: false}, nil
 		},
 	}
-	h := Auth(client)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	h := Auth(client, nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Fatal("next handler should not run")
 	}))
 
@@ -116,7 +116,7 @@ func TestAuth_ValidToken(t *testing.T) {
 	}
 
 	var uid, role, email string
-	h := Auth(client)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	h := Auth(client, nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		uid = UserIDFromCtx(r.Context())
 		role = RoleFromCtx(r.Context())
 		email = EmailFromCtx(r.Context())
@@ -135,13 +135,39 @@ func TestAuth_ValidToken(t *testing.T) {
 	assert.Equal(t, "a@b.c", email)
 }
 
+func TestAuth_ValidTokenFromQueryParam(t *testing.T) {
+	var gotToken string
+	client := &mockAuthClient{
+		validateToken: func(ctx context.Context, in *authv1.ValidateTokenRequest, opts ...grpc.CallOption) (*authv1.ValidateTokenResponse, error) {
+			gotToken = in.GetAccessToken()
+			return &authv1.ValidateTokenResponse{
+				Valid:  true,
+				UserId: "user-1",
+				Role:   "customer",
+				Email:  "a@b.c",
+			}, nil
+		},
+	}
+
+	h := Auth(client, nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/chat/ws?access_token=good-token", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, "good-token", gotToken)
+}
+
 func TestAuth_ServiceError(t *testing.T) {
 	client := &mockAuthClient{
 		validateToken: func(ctx context.Context, in *authv1.ValidateTokenRequest, opts ...grpc.CallOption) (*authv1.ValidateTokenResponse, error) {
 			return nil, errors.New("rpc failed")
 		},
 	}
-	h := Auth(client)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	h := Auth(client, nil)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Fatal("next handler should not run")
 	}))
 

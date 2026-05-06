@@ -5,6 +5,7 @@ import (
 	"errors"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	pkgerr "github.com/tienlao/agregator/pkg/errors"
@@ -21,22 +22,30 @@ func NewReviewRepo(pool *pgxpool.Pool) *ReviewRepo {
 
 func (r *ReviewRepo) Create(ctx context.Context, review *domain.Review) error {
 	const q = `
-		INSERT INTO reviews (user_id, venue_id, rating, text, is_verified)
-		VALUES ($1, $2, $3, $4, $5)
+		INSERT INTO reviews (user_id, user_name, venue_id, master_id, rating, text, is_verified, is_anonymous)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
 		RETURNING id, created_at`
-	return r.pool.QueryRow(ctx, q,
-		review.UserID, review.VenueID, review.Rating, review.Text, review.IsVerified,
+	err := r.pool.QueryRow(ctx, q,
+		review.UserID, review.UserName, nullableText(review.VenueID), nullableText(review.MasterID), review.Rating, review.Text, review.IsVerified, review.IsAnonymous,
 	).Scan(&review.ID, &review.CreatedAt)
+	if err == nil {
+		return nil
+	}
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+		return pkgerr.AlreadyExists("review already exists for this target")
+	}
+	return err
 }
 
 func (r *ReviewRepo) GetByID(ctx context.Context, id string) (*domain.Review, error) {
 	const q = `
-		SELECT id, user_id, venue_id, rating, text, is_verified, created_at
+		SELECT id, user_id, user_name, COALESCE(venue_id::text, ''), COALESCE(master_id::text, ''), rating, text, is_verified, is_anonymous, created_at
 		FROM reviews WHERE id = $1`
 	rev := &domain.Review{}
 	err := r.pool.QueryRow(ctx, q, id).Scan(
-		&rev.ID, &rev.UserID, &rev.VenueID,
-		&rev.Rating, &rev.Text, &rev.IsVerified, &rev.CreatedAt,
+		&rev.ID, &rev.UserID, &rev.UserName, &rev.VenueID, &rev.MasterID,
+		&rev.Rating, &rev.Text, &rev.IsVerified, &rev.IsAnonymous, &rev.CreatedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, pkgerr.NotFound("review not found")
@@ -65,7 +74,7 @@ func (r *ReviewRepo) ListByVenue(ctx context.Context, venueID string, page, page
 	}
 
 	rows, err := r.pool.Query(ctx, `
-		SELECT id, user_id, venue_id, rating, text, is_verified, created_at
+		SELECT id, user_id, user_name, COALESCE(venue_id::text, ''), COALESCE(master_id::text, ''), rating, text, is_verified, is_anonymous, created_at
 		FROM reviews
 		WHERE venue_id = $1
 		ORDER BY created_at DESC
@@ -79,14 +88,63 @@ func (r *ReviewRepo) ListByVenue(ctx context.Context, venueID string, page, page
 	for rows.Next() {
 		rev := &domain.Review{}
 		if err := rows.Scan(
-			&rev.ID, &rev.UserID, &rev.VenueID,
-			&rev.Rating, &rev.Text, &rev.IsVerified, &rev.CreatedAt,
+			&rev.ID, &rev.UserID, &rev.UserName, &rev.VenueID, &rev.MasterID,
+			&rev.Rating, &rev.Text, &rev.IsVerified, &rev.IsAnonymous, &rev.CreatedAt,
 		); err != nil {
 			return nil, 0, err
 		}
 		reviews = append(reviews, rev)
 	}
 	return reviews, total, rows.Err()
+}
+
+func (r *ReviewRepo) ListByMaster(ctx context.Context, masterID string, page, pageSize int32) ([]*domain.Review, int32, error) {
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 || pageSize > 50 {
+		pageSize = 20
+	}
+	offset := (page - 1) * pageSize
+
+	var total int32
+	err := r.pool.QueryRow(ctx,
+		`SELECT COUNT(*) FROM reviews WHERE master_id = $1`, masterID,
+	).Scan(&total)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	rows, err := r.pool.Query(ctx, `
+		SELECT id, user_id, user_name, COALESCE(venue_id::text, ''), COALESCE(master_id::text, ''), rating, text, is_verified, is_anonymous, created_at
+		FROM reviews
+		WHERE master_id = $1
+		ORDER BY created_at DESC
+		LIMIT $2 OFFSET $3`, masterID, pageSize, offset)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+
+	var reviews []*domain.Review
+	for rows.Next() {
+		rev := &domain.Review{}
+		if err := rows.Scan(
+			&rev.ID, &rev.UserID, &rev.UserName, &rev.VenueID, &rev.MasterID,
+			&rev.Rating, &rev.Text, &rev.IsVerified, &rev.IsAnonymous, &rev.CreatedAt,
+		); err != nil {
+			return nil, 0, err
+		}
+		reviews = append(reviews, rev)
+	}
+	return reviews, total, rows.Err()
+}
+
+func nullableText(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
 }
 
 func (r *ReviewRepo) GetVenueRating(ctx context.Context, venueID string) (*domain.VenueRating, error) {

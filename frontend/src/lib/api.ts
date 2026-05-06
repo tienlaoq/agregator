@@ -16,9 +16,17 @@ import type {
   Venue,
   MasterProfile,
   MasterBooking,
+  ChatThread,
+  ChatMessage,
+  SupportContactRequest,
+  SupportContactResponse,
+  SupportTicketReplyRequest,
+  SupportTicketReplyResponse,
+  SupportTicketsListResponse,
 } from "./types";
 import { userMessageForGatewayError } from "./api-user-messages";
 import { packCitiesForQuery } from "./cities-http";
+import { chatV2Paths } from "./chat-paths";
 
 /** Base URL браузера (и публичные ссылки на медиа). */
 const PUBLIC_API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080";
@@ -332,6 +340,21 @@ export async function createReview(
   data: CreateReviewRequest,
 ): Promise<Review> {
   return fetchAPI<Review>(`/api/v1/venues/${venueId}/reviews`, {
+    method: "POST",
+    body: JSON.stringify(data),
+  });
+}
+
+export async function getMasterReviews(masterId: string): Promise<Review[]> {
+  const data = await fetchAPI<{ reviews: Review[]; total: number }>(`/api/v1/masters/${masterId}/reviews`);
+  return data.reviews ?? [];
+}
+
+export async function createMasterReview(
+  masterId: string,
+  data: CreateReviewRequest,
+): Promise<Review> {
+  return fetchAPI<Review>(`/api/v1/masters/${masterId}/reviews`, {
     method: "POST",
     body: JSON.stringify(data),
   });
@@ -868,6 +891,126 @@ export async function createMasterBooking(
       body: JSON.stringify(data),
     },
   );
+}
+
+export async function getMyClientMasterBookings(params?: {
+  status?: string;
+}): Promise<{ bookings: MasterBooking[] }> {
+  const search = new URLSearchParams();
+  if (params?.status) search.set("status", params.status);
+  const qs = search.toString();
+  return fetchAPI<{ bookings: MasterBooking[] }>(
+    `/api/v1/my/master-bookings${qs ? `?${qs}` : ""}`,
+  );
+}
+
+/** Короткоживущий билет для WebSocket (если Redis недоступен на gateway — вернётся ошибка, клиент падает на access_token). */
+export async function issueChatWsTicket(): Promise<{
+  ticket: string;
+  expires_in_sec: number;
+} | null> {
+  try {
+    return await fetchAPI<{ ticket: string; expires_in_sec: number }>(chatV2Paths.wsTicket, {
+      method: "POST",
+      body: JSON.stringify({}),
+    });
+  } catch {
+    return null;
+  }
+}
+
+export async function ensureChatThreadV2(data: {
+  kind: "venue_booking" | "master_booking";
+  ref_id: string;
+}): Promise<{ thread: ChatThread }> {
+  return fetchAPI<{ thread: ChatThread }>(chatV2Paths.threadsEnsure, {
+    method: "POST",
+    body: JSON.stringify(data),
+  });
+}
+
+export async function listChatThreadsV2(params?: {
+  limit?: number;
+  offset?: number;
+}): Promise<{ threads: ChatThread[]; total: number }> {
+  const q = new URLSearchParams();
+  if (params?.limit) q.set("limit", String(params.limit));
+  if (params?.offset) q.set("offset", String(params.offset));
+  const qs = q.toString();
+  return fetchAPI<{ threads: ChatThread[]; total: number }>(
+    `${chatV2Paths.threads}${qs ? `?${qs}` : ""}`,
+  );
+}
+
+export async function listChatMessagesV2(
+  threadId: string,
+  params?: { limit?: number; offset?: number },
+): Promise<{ messages: ChatMessage[]; total: number }> {
+  const q = new URLSearchParams();
+  if (params?.limit) q.set("limit", String(params.limit));
+  if (params?.offset) q.set("offset", String(params.offset));
+  const qs = q.toString();
+  return fetchAPI<{ messages: ChatMessage[]; total: number }>(
+    `${chatV2Paths.threadMessages(threadId)}${qs ? `?${qs}` : ""}`,
+  );
+}
+
+export async function sendChatMessageV2(
+  threadId: string,
+  text: string,
+  clientMsgId?: string,
+): Promise<{ thread: ChatThread; message: ChatMessage }> {
+  return fetchAPI<{ thread: ChatThread; message: ChatMessage }>(
+    chatV2Paths.threadMessages(threadId),
+    { method: "POST", body: JSON.stringify({ text, client_msg_id: clientMsgId ?? "" }) },
+  );
+}
+
+export async function markChatThreadReadV2(
+  threadId: string,
+  read_upto_message_id?: string,
+): Promise<{ thread: ChatThread }> {
+  return fetchAPI<{ thread: ChatThread }>(
+    chatV2Paths.threadRead(threadId),
+    { method: "POST", body: JSON.stringify({ read_upto_message_id: read_upto_message_id ?? "" }) },
+  );
+}
+
+export async function submitSupportContact(
+  data: SupportContactRequest,
+): Promise<SupportContactResponse> {
+  return fetchAPI<SupportContactResponse>("/api/v1/support/contact", {
+    method: "POST",
+    body: JSON.stringify(data),
+  });
+}
+
+export async function submitSupportTicketReply(
+  data: SupportTicketReplyRequest,
+): Promise<SupportTicketReplyResponse> {
+  const body: Record<string, string> = {
+    user_email: data.user_email.trim(),
+    reply: data.reply.trim(),
+  };
+  const tn = data.ticket_number?.trim();
+  const rid = data.request_id?.trim();
+  if (tn) body.ticket_number = tn;
+  if (rid) body.request_id = rid;
+  return fetchAPI<SupportTicketReplyResponse>("/api/v1/admin/support/reply", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export async function listAdminSupportTickets(params?: {
+  limit?: number;
+  offset?: number;
+}): Promise<SupportTicketsListResponse> {
+  const q = new URLSearchParams();
+  if (params?.limit != null) q.set("limit", String(params.limit));
+  if (params?.offset != null) q.set("offset", String(params.offset));
+  const qs = q.toString();
+  return fetchAPI<SupportTicketsListResponse>(`/api/v1/admin/support/tickets${qs ? `?${qs}` : ""}`);
 }
 
 // Admin API

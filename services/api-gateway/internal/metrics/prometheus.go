@@ -32,10 +32,19 @@ var (
 		},
 		[]string{"method", "status_class", "route"},
 	)
+
+	supportWebhookDeliveries = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Name:      "support_webhook_deliveries_total",
+			Help:      "Support webhook delivery attempts by result.",
+		},
+		[]string{"result"},
+	)
 )
 
 func init() {
-	registry.MustRegister(httpRequests, httpDuration)
+	registry.MustRegister(httpRequests, httpDuration, supportWebhookDeliveries)
 }
 
 // Registry returns the dedicated prometheus registry (not global).
@@ -92,4 +101,14 @@ func HTTPMiddleware(next http.Handler) http.Handler {
 		httpRequests.WithLabelValues(r.Method, sc, route).Inc()
 		httpDuration.WithLabelValues(r.Method, sc, route).Observe(time.Since(start).Seconds())
 	})
+}
+
+// ObserveSupportWebhookDelivery increments support webhook delivery counter.
+// result should be one of: success, error.
+func ObserveSupportWebhookDelivery(result string) {
+	result = strings.TrimSpace(strings.ToLower(result))
+	if result == "" {
+		result = "error"
+	}
+	supportWebhookDeliveries.WithLabelValues(result).Inc()
 }

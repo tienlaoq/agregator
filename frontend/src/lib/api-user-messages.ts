@@ -26,6 +26,7 @@ export const USER_FACING_MESSAGE_BY_GATEWAY_CODE: Record<string, string> = {
   "GATEWAY.STORAGE.FAILED": "Не удалось сохранить файл. Попробуйте позже.",
   "GATEWAY.BOOKING.TIME_FROM_REQUIRED": "Укажите время начала бронирования.",
   "GATEWAY.REVIEW.VENUE_ID_REQUIRED": "Не удалось определить заведение для отзыва.",
+  "GATEWAY.REVIEW.BOOKING_NOT_VERIFIED": "Ваша бронь не подтверждена платформой.",
   "GATEWAY.REQUEST.BODY_READ_FAILED": "Не удалось обработать запрос. Обновите страницу и попробуйте снова.",
   "GATEWAY.REQUEST.METHOD_NOT_ALLOWED": "Это действие сейчас недоступно.",
   "GATEWAY.ANALYTICS.INVALID_EVENT_NAME": "Не удалось записать действие. Обновите страницу.",
