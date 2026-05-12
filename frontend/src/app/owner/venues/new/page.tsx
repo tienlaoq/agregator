@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { createVenue } from "@/lib/api";
 import { useAuthStore } from "@/store/auth";
@@ -13,9 +14,11 @@ import {
   partnerVenueStepCanProceed,
   type PartnerVenueFormValues,
 } from "@/lib/partner-venue";
+import type { Venue } from "@/lib/types";
 
 export default function CreateVenuePage() {
   const router = useRouter();
+  const queryClient = useQueryClient();
   const { token, user, hydrated } = useAuthStore();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -54,9 +57,15 @@ export default function CreateVenuePage() {
     setError("");
     setLoading(true);
     try {
-      await createVenue(
+      const venue = await createVenue(
         buildPartnerStyleCreateVenueRequest(venueFields, rawVenuePhone),
       );
+      queryClient.setQueryData<Venue[]>(["owner-venues"], (prev) => {
+        const list = prev ?? [];
+        if (list.some((v) => v.id === venue.id)) return list;
+        return [venue, ...list];
+      });
+      void queryClient.invalidateQueries({ queryKey: ["owner-venues"] });
       router.push("/owner/venues");
     } catch {
       setError("Не удалось создать заведение. Попробуйте позже.");

@@ -170,7 +170,7 @@ func main() {
 	if suspendMail.Enabled() {
 		log.Info().Msg("SMTP configured: при приостановке и возобновлении заведения владельцу и персоналу уйдут письма")
 	}
-	bookingHandler := handler.NewBookingHandler(bookingClient, venueClient)
+	bookingHandler := handler.NewBookingHandler(bookingClient, venueClient, userClient)
 	reviewHandler := handler.NewReviewHandler(reviewClient, userClient)
 	paymentHandler := handler.NewPaymentHandler(paymentClient)
 	masterHandler := handler.NewMasterHandler(masterClient, uploadRoot)

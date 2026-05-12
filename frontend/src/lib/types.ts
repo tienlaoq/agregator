@@ -351,6 +351,7 @@ export interface BookingStaffNote {
 export interface Booking {
   id: string;
   user_id?: string;
+  user_name?: string;
   venue_id: string;
   venue_name: string;
   service_id?: string;

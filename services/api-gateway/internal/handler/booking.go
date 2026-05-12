@@ -8,6 +8,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	bookingv1 "github.com/tienlao/agregator/gen/go/booking/v1"
+	userv1 "github.com/tienlao/agregator/gen/go/user/v1"
 	venuev1 "github.com/tienlao/agregator/gen/go/venue/v1"
 	"github.com/tienlao/agregator/services/api-gateway/internal/apicatalog"
 	"github.com/tienlao/agregator/services/api-gateway/internal/middleware"
@@ -16,10 +17,15 @@ import (
 type BookingHandler struct {
 	client      bookingv1.BookingServiceClient
 	venueClient venuev1.VenueServiceClient
+	userClient  userv1.UserServiceClient
 }
 
-func NewBookingHandler(client bookingv1.BookingServiceClient, venueClient venuev1.VenueServiceClient) *BookingHandler {
-	return &BookingHandler{client: client, venueClient: venueClient}
+func NewBookingHandler(
+	client bookingv1.BookingServiceClient,
+	venueClient venuev1.VenueServiceClient,
+	userClient userv1.UserServiceClient,
+) *BookingHandler {
+	return &BookingHandler{client: client, venueClient: venueClient, userClient: userClient}
 }
 
 func (h *BookingHandler) Create(w http.ResponseWriter, r *http.Request) {
@@ -177,10 +183,41 @@ func (h *BookingHandler) ListVenueBookings(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{
-		"bookings": bookingList(resp.GetBookings()),
-		"total":    resp.GetTotal(),
-	})
+	out := bookingList(resp.GetBookings())
+	names := h.resolveUserNames(r, out)
+	for _, b := range out {
+		uid, _ := b["user_id"].(string)
+		if n := names[uid]; n != "" {
+			b["user_name"] = n
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"bookings": out, "total": resp.GetTotal()})
+}
+
+func (h *BookingHandler) resolveUserNames(r *http.Request, bookings []map[string]any) map[string]string {
+	out := make(map[string]string, len(bookings))
+	if h.userClient == nil {
+		return out
+	}
+	seen := map[string]struct{}{}
+	for _, b := range bookings {
+		uid, _ := b["user_id"].(string)
+		if uid == "" {
+			continue
+		}
+		if _, ok := seen[uid]; ok {
+			continue
+		}
+		seen[uid] = struct{}{}
+		u, err := h.userClient.GetUser(r.Context(), &userv1.GetUserRequest{Id: uid})
+		if err != nil {
+			continue
+		}
+		if name := u.GetName(); name != "" {
+			out[uid] = name
+		}
+	}
+	return out
 }
 
 func bookingToJSON(b *bookingv1.BookingResponse) map[string]any {

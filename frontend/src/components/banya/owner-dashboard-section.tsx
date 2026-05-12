@@ -184,6 +184,8 @@ function formatBookingDate(dateStr: string): string {
 }
 
 function guestLabel(_b: Booking): string {
+  const name = _b.user_name?.trim();
+  if (name) return name;
   return "Клиент";
 }
 

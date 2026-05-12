@@ -1,0 +1,110 @@
+global:
+  registry: ycr.io/CHANGE_ME/agregator
+  imageTag: latest
+  imagePullSecrets: []
+
+services:
+  auth-service:
+    enabled: true
+    replicas: 1
+    port: 50051
+    image:
+      name: auth-service
+      pullPolicy: IfNotPresent
+    env: {}
+    envFromSecrets:
+      - auth-service-env
+
+  user-service:
+    enabled: true
+    replicas: 1
+    port: 50052
+    image:
+      name: user-service
+      pullPolicy: IfNotPresent
+    env: {}
+    envFromSecrets:
+      - user-service-env
+
+  venue-service:
+    enabled: true
+    replicas: 1
+    port: 50053
+    image:
+      name: venue-service
+      pullPolicy: IfNotPresent
+    env: {}
+    envFromSecrets:
+      - venue-service-env
+
+  booking-service:
+    enabled: true
+    replicas: 1
+    port: 50054
+    image:
+      name: booking-service
+      pullPolicy: IfNotPresent
+    env: {}
+    envFromSecrets:
+      - booking-service-env
+
+  review-service:
+    enabled: true
+    replicas: 1
+    port: 50055
+    image:
+      name: review-service
+      pullPolicy: IfNotPresent
+    env: {}
+    envFromSecrets:
+      - review-service-env
+
+  payment-service:
+    enabled: true
+    replicas: 1
+    port: 50056
+    image:
+      name: payment-service
+      pullPolicy: IfNotPresent
+    env: {}
+    envFromSecrets:
+      - payment-service-env
+
+  master-service:
+    enabled: true
+    replicas: 1
+    port: 50057
+    image:
+      name: master-service
+      pullPolicy: IfNotPresent
+    env: {}
+    envFromSecrets:
+      - master-service-env
+
+  chat-service:
+    enabled: true
+    replicas: 1
+    port: 50058
+    image:
+      name: chat-service
+      pullPolicy: IfNotPresent
+    env: {}
+    envFromSecrets:
+      - chat-service-env
+
+  api-gateway:
+    enabled: true
+    replicas: 1
+    port: 8080
+    image:
+      name: api-gateway
+      pullPolicy: IfNotPresent
+    env: {}
+    envFromSecrets:
+      - api-gateway-env
+
+ingress:
+  enabled: false
+  className: nginx
+  host: api.example.com
+  tlsSecretName: ""
