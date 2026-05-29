@@ -1,11 +1,14 @@
 package usecase
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/google/uuid"
 	goredis "github.com/redis/go-redis/v9"
+	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
@@ -37,6 +40,7 @@ func TestCreate_SetsPendingReview(t *testing.T) {
 		OwnerID:          uuid.New(),
 		Slug:             "banya-1",
 		Name:             "Test",
+		Type:             domain.VenueTypeBanya,
 		Status:           domain.StatusPendingReview,
 		LegalEntityName:  "ИП Тестов Тест Тестович",
 		INN:              "7707083893",
@@ -117,6 +121,45 @@ func TestModerate_Reject(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, out)
 	assert.Equal(t, domain.StatusRejected, out.Status)
+}
+
+func TestModerate_LogsHistoryInsertFailure(t *testing.T) {
+	ctx := context.Background()
+	venueID := uuid.New()
+	moderatorID := uuid.New()
+	var logBuf bytes.Buffer
+	log := zerolog.New(&logBuf)
+	var getCalls int
+	repo := &mockVenueRepo{
+		GetByIDFn: func(_ context.Context, id uuid.UUID) (*domain.Venue, error) {
+			require.Equal(t, venueID, id)
+			getCalls++
+			if getCalls == 1 {
+				return &domain.Venue{ID: venueID, Status: domain.StatusPendingReview, Slug: "history-fail"}, nil
+			}
+			return &domain.Venue{ID: venueID, Status: domain.StatusActive, Slug: "history-fail"}, nil
+		},
+		UpdateStatusFn: func(_ context.Context, id uuid.UUID, status, comment string, by uuid.UUID) error {
+			require.Equal(t, venueID, id)
+			require.Equal(t, domain.StatusActive, status)
+			require.Equal(t, moderatorID, by)
+			return nil
+		},
+		InsertModerationHistoryFn: func(_ context.Context, entry *domain.ModerationHistoryEntry) error {
+			require.Equal(t, domain.StatusPendingReview, entry.OldStatus)
+			require.Equal(t, domain.StatusActive, entry.NewStatus)
+			return errors.New("audit write failed")
+		},
+	}
+	uc := NewVenueUseCaseWithLogger(repo, dummyRedis(t), log)
+
+	out, err := uc.Moderate(ctx, venueID, "approve", "", moderatorID)
+	require.NoError(t, err)
+	require.NotNil(t, out)
+	assert.Contains(t, logBuf.String(), "moderation history insert failed")
+	assert.Contains(t, logBuf.String(), "audit write failed")
+	assert.Contains(t, logBuf.String(), venueID.String())
+	assert.Contains(t, logBuf.String(), moderatorID.String())
 }
 
 func TestModerate_Suspend(t *testing.T) {
@@ -280,7 +323,7 @@ func TestModerate_VenueNotFound(t *testing.T) {
 	uc := NewVenueUseCase(repo, dummyRedis(t))
 	_, err := uc.Moderate(ctx, venueID, "approve", "", uuid.New())
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "venue not found")
+	assert.Contains(t, err.Error(), "площадка не найдена")
 }
 
 func TestUpdate_RejectedResetsToReview(t *testing.T) {
@@ -289,6 +332,7 @@ func TestUpdate_RejectedResetsToReview(t *testing.T) {
 	v := &domain.Venue{
 		ID:     id,
 		Slug:   "re-edit",
+		Type:   domain.VenueTypeBanya,
 		Status: domain.StatusRejected,
 	}
 
@@ -319,6 +363,7 @@ func TestUpdate_ActiveResetsToReview(t *testing.T) {
 	v := &domain.Venue{
 		ID:       id,
 		Slug:     "active-edit",
+		Type:     domain.VenueTypeBanya,
 		Status:   domain.StatusActive,
 		IsActive: true,
 	}
@@ -347,6 +392,7 @@ func TestUpdate_PendingStaysPending(t *testing.T) {
 	v := &domain.Venue{
 		ID:     id,
 		Slug:   "pending-edit",
+		Type:   domain.VenueTypeBanya,
 		Status: domain.StatusPendingReview,
 	}
 
@@ -364,6 +410,155 @@ func TestUpdate_PendingStaysPending(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, resetCalled)
 	assert.Equal(t, domain.StatusPendingReview, v.Status)
+}
+
+func TestOwnerMutationMethods_OwnerChangedDuringWrite(t *testing.T) {
+	ctx := context.Background()
+	ownerID := uuid.New()
+	venueID := uuid.New()
+	photoID := uuid.New()
+
+	tests := []struct {
+		name string
+		run  func(*VenueUseCase) error
+		repo *mockVenueRepo
+	}{
+		{
+			name: "replace services",
+			run: func(uc *VenueUseCase) error {
+				return uc.ReplaceVenueServices(ctx, venueID, ownerID, []domain.VenueService{{Name: "Парение"}})
+			},
+			repo: &mockVenueRepo{
+				ReplaceVenueServicesFn: func(_ context.Context, _, _ uuid.UUID, _ []domain.VenueService) error {
+					return repository.ErrVenueOwnershipMismatch
+				},
+			},
+		},
+		{
+			name: "add photo",
+			run: func(uc *VenueUseCase) error {
+				_, err := uc.AddVenuePhoto(ctx, venueID, ownerID, "https://example.com/photo.jpg")
+				return err
+			},
+			repo: &mockVenueRepo{
+				AddVenuePhotoFn: func(_ context.Context, _, _ uuid.UUID, _ string) (*domain.VenuePhoto, error) {
+					return nil, repository.ErrVenueOwnershipMismatch
+				},
+			},
+		},
+		{
+			name: "delete photo",
+			run: func(uc *VenueUseCase) error {
+				_, err := uc.DeleteVenuePhoto(ctx, venueID, ownerID, photoID)
+				return err
+			},
+			repo: &mockVenueRepo{
+				DeleteVenuePhotoFn: func(_ context.Context, _, _, _ uuid.UUID) (string, error) {
+					return "", repository.ErrVenueOwnershipMismatch
+				},
+			},
+		},
+		{
+			name: "set cover photo",
+			run: func(uc *VenueUseCase) error {
+				_, err := uc.SetVenueCoverPhoto(ctx, venueID, ownerID, photoID)
+				return err
+			},
+			repo: &mockVenueRepo{
+				SetVenueCoverPhotoFn: func(_ context.Context, _, _, _ uuid.UUID) error {
+					return repository.ErrVenueOwnershipMismatch
+				},
+			},
+		},
+		{
+			name: "replace halls",
+			run: func(uc *VenueUseCase) error {
+				return uc.ReplaceVenueHalls(ctx, venueID, ownerID, []domain.VenueHallUpsert{{Name: "Зал"}})
+			},
+			repo: &mockVenueRepo{
+				ReplaceVenueHallsFn: func(_ context.Context, _, _ uuid.UUID, _ []domain.VenueHallUpsert) error {
+					return repository.ErrVenueOwnershipMismatch
+				},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tt.repo.GetByIDFn = func(_ context.Context, id uuid.UUID) (*domain.Venue, error) {
+				assert.Equal(t, venueID, id)
+				return &domain.Venue{ID: venueID, OwnerID: ownerID}, nil
+			}
+			uc := NewVenueUseCase(tt.repo, dummyRedis(t))
+
+			err := tt.run(uc)
+			require.Error(t, err)
+			st, ok := status.FromError(err)
+			require.True(t, ok)
+			assert.Equal(t, codes.PermissionDenied, st.Code())
+		})
+	}
+}
+
+func TestUpdateRating_AllowsNilRedis(t *testing.T) {
+	ctx := context.Background()
+	venueID := uuid.New()
+	repo := &mockVenueRepo{
+		UpdateRatingFn: func(_ context.Context, gotVenueID uuid.UUID, avgRating float64, reviewCount int32) error {
+			assert.Equal(t, venueID, gotVenueID)
+			assert.Equal(t, 4.7, avgRating)
+			assert.Equal(t, int32(12), reviewCount)
+			return nil
+		},
+	}
+	uc := NewVenueUseCase(repo, nil)
+
+	require.NoError(t, uc.UpdateRating(ctx, venueID, 4.7, 12))
+}
+
+func TestUpdateRating_Validation(t *testing.T) {
+	ctx := context.Background()
+	venueID := uuid.New()
+
+	tests := []struct {
+		name        string
+		avgRating   float64
+		reviewCount int32
+		wantErr     bool
+		wantCode    codes.Code
+	}{
+		{name: "ok_zero_rating_zero_count", avgRating: 0, reviewCount: 0},
+		{name: "ok_max_rating", avgRating: 5, reviewCount: 100},
+		{name: "ok_fractional", avgRating: 4.7, reviewCount: 12},
+		{name: "err_rating_negative", avgRating: -0.1, reviewCount: 1, wantErr: true, wantCode: codes.InvalidArgument},
+		{name: "err_rating_above_5", avgRating: 5.0001, reviewCount: 1, wantErr: true, wantCode: codes.InvalidArgument},
+		{name: "err_rating_far_negative", avgRating: -100, reviewCount: 0, wantErr: true, wantCode: codes.InvalidArgument},
+		{name: "err_review_count_negative", avgRating: 4.5, reviewCount: -1, wantErr: true, wantCode: codes.InvalidArgument},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var repoCalled bool
+			repo := &mockVenueRepo{
+				UpdateRatingFn: func(_ context.Context, _ uuid.UUID, _ float64, _ int32) error {
+					repoCalled = true
+					return nil
+				},
+			}
+			uc := NewVenueUseCase(repo, nil)
+			err := uc.UpdateRating(ctx, venueID, tt.avgRating, tt.reviewCount)
+			if !tt.wantErr {
+				require.NoError(t, err)
+				assert.True(t, repoCalled, "repo should be called on valid input")
+				return
+			}
+			require.Error(t, err)
+			assert.False(t, repoCalled, "repo must not be called on invalid input")
+			st, ok := status.FromError(err)
+			require.True(t, ok, "expected gRPC status, got %T: %v", err, err)
+			assert.Equal(t, tt.wantCode, st.Code())
+		})
+	}
 }
 
 func TestCreateManualSlotBlock_NotOwner(t *testing.T) {

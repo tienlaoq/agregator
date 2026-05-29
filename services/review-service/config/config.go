@@ -1,6 +1,8 @@
 package config
 
 import (
+	"time"
+
 	"github.com/tienlao/agregator/pkg/config"
 )
 
@@ -12,6 +14,9 @@ type Config struct {
 	BookingServiceAddr string
 	VenueServiceAddr   string
 	MasterServiceAddr  string
+	// Outbox worker tuning — override via OUTBOX_BATCH_SIZE / OUTBOX_INTERVAL.
+	OutboxBatchSize int
+	OutboxInterval  time.Duration
 }
 
 func Load() Config {
@@ -26,5 +31,7 @@ func Load() Config {
 		BookingServiceAddr: config.GetEnv("BOOKING_SERVICE_ADDR", "localhost:50054"),
 		VenueServiceAddr:   config.GetEnv("VENUE_SERVICE_ADDR", "localhost:50053"),
 		MasterServiceAddr:  config.GetEnv("MASTER_SERVICE_ADDR", "localhost:50057"),
+		OutboxBatchSize:    config.GetEnvInt("OUTBOX_BATCH_SIZE", 50),
+		OutboxInterval:     config.GetEnvDuration("OUTBOX_INTERVAL", 5*time.Second),
 	}
 }

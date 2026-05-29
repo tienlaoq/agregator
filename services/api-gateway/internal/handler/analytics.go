@@ -18,6 +18,41 @@ const analyticsSubject = "analytics.web"
 
 var analyticsEventName = regexp.MustCompile(`^[a-z][a-z0-9_]{0,62}$`)
 
+// analyticsAllowedKeys is the server-side whitelist of prop keys that may be
+// logged and forwarded to NATS. Any key absent from this set is silently
+// dropped before the event leaves the gateway — regardless of client-side
+// "no PII" conventions.
+//
+// Allowed key rules:
+//   - utm_* — any UTM parameter (utm_source, utm_medium, utm_campaign, …)
+//   - fixed keys below — non-PII dimensions used by product analytics
+//
+// To add a new dimension: extend the map here AND update the frontend contract.
+var analyticsAllowedKeys = map[string]bool{
+	"page":           true,
+	"path":           true,
+	"referrer":       true,
+	"event_category": true,
+	"event_label":    true,
+	"value":          true,
+	"locale":         true,
+	"screen":         true,
+	"duration_ms":    true,
+}
+
+// filterProps returns a copy of props containing only whitelisted keys.
+// utm_* keys are always allowed; all others are checked against analyticsAllowedKeys.
+func filterProps(props map[string]any) map[string]any {
+	out := make(map[string]any, len(props))
+	for k, v := range props {
+		if strings.HasPrefix(k, "utm_") || analyticsAllowedKeys[k] {
+			out[k] = v
+		}
+		// unknown / potentially PII-bearing keys are silently dropped
+	}
+	return out
+}
+
 // AnalyticsHandler accepts lightweight product events from the browser (JSON logs + optional NATS).
 type AnalyticsHandler struct {
 	log  zerolog.Logger
@@ -57,7 +92,11 @@ func (h *AnalyticsHandler) CollectEvent(w http.ResponseWriter, r *http.Request) 
 	if req.Props == nil {
 		req.Props = map[string]any{}
 	}
-	propsJSON, err := json.Marshal(req.Props)
+	// Server-side whitelist: drop any key not in analyticsAllowedKeys / utm_*.
+	// This is a hard guarantee — we do not rely on the client honouring the
+	// "no PII in props" contract.
+	safeProps := filterProps(req.Props)
+	propsJSON, err := json.Marshal(safeProps)
 	if err != nil || len(propsJSON) > 4096 {
 		writeCatalog(w, apicatalog.GatewayAnalyticsPropsInvalidOrTooLarge)
 		return
@@ -73,7 +112,7 @@ func (h *AnalyticsHandler) CollectEvent(w http.ResponseWriter, r *http.Request) 
 	if h.nats != nil && h.nats.IsConnected() {
 		payload := map[string]any{
 			"event":      name,
-			"props":      req.Props,
+			"props":      safeProps, // filtered — never raw client input
 			"request_id": rid,
 		}
 		b, mErr := json.Marshal(payload)

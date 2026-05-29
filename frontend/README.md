@@ -18,6 +18,13 @@ Open [http://localhost:3000](http://localhost:3000) with your browser to see the
 
 You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
 
+## SEO (продакшен)
+
+- **`NEXT_PUBLIC_SITE_URL`** — публичный origin без хвоста `/` (например `https://example.com`). Нужен для canonical, Open Graph и `sitemap.xml`.
+- Опционально **`NEXT_PUBLIC_YANDEX_METRIKA_ID`** — числовой id [Яндекс.Метрики](https://metrika.yandex.ru/).
+- После деплоя: [Яндекс.Вебмастер](https://webmaster.yandex.ru/) и [Google Search Console](https://search.google.com/search-console) — верификация домена, отправка `sitemap.xml`, при необходимости регион сайта.
+- Позиции в поиске **не гарантируются**; зависят от конкуренции, возраста домена, контента и внешних ссылок.
+
 This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
 
 ## Learn More

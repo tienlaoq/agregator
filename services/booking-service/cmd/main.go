@@ -11,6 +11,7 @@ import (
 	"google.golang.org/grpc"
 
 	bookingv1 "github.com/tienlao/agregator/gen/go/booking/v1"
+	crmv1 "github.com/tienlao/agregator/gen/go/crm/v1"
 	paymentv1 "github.com/tienlao/agregator/gen/go/payment/v1"
 	venuev1 "github.com/tienlao/agregator/gen/go/venue/v1"
 	"github.com/tienlao/agregator/pkg/grpcutil"
@@ -57,7 +58,12 @@ func main() {
 		log.Fatal().Err(err).Msg("failed to ensure PAYMENTS stream")
 	}
 
-	venueConn, err := grpc.NewClient(cfg.VenueServiceAddr, grpcutil.InsecureDialOptions()...)
+	dialOpts, err := grpcutil.DialOptions()
+	if err != nil {
+		log.Fatal().Err(err).Msg("gRPC transport config error")
+	}
+
+	venueConn, err := grpc.NewClient(cfg.VenueServiceAddr, dialOpts...)
 	if err != nil {
 		log.Fatal().Err(err).Msg("failed to dial venue-service")
 	}
@@ -65,7 +71,24 @@ func main() {
 	venueClient := venuev1.NewVenueServiceClient(venueConn)
 	log.Info().Str("addr", cfg.VenueServiceAddr).Msg("venue-service client ready")
 
-	paymentConn, err := grpc.NewClient(cfg.PaymentServiceAddr, grpcutil.InsecureDialOptions()...)
+	// crm-service owns staff & management-access (extracted from venue-service).
+	// booking-service consults it on staff-side endpoints (ListVenueBookings,
+	// staff notes) before serving private data to a non-owner.
+	crmConn, err := grpc.NewClient(cfg.CRMServiceAddr, dialOpts...)
+	if err != nil {
+		log.Fatal().Err(err).Msg("failed to dial crm-service")
+	}
+	defer crmConn.Close()
+	crmClient := crmv1.NewCRMServiceClient(crmConn)
+	log.Info().Str("addr", cfg.CRMServiceAddr).Msg("crm-service client ready")
+
+	if cfg.InternalServiceToken == "" {
+		log.Warn().Msg("INTERNAL_SERVICE_TOKEN not set — outbound auth to payment-service disabled (dev/CI only)")
+	}
+	paymentDialOpts := append(dialOpts,
+		grpc.WithUnaryInterceptor(grpcutil.ServiceTokenClientInterceptor(cfg.InternalServiceToken)),
+	)
+	paymentConn, err := grpc.NewClient(cfg.PaymentServiceAddr, paymentDialOpts...)
 	if err != nil {
 		log.Fatal().Err(err).Msg("failed to dial payment-service")
 	}
@@ -73,10 +96,13 @@ func main() {
 	paymentClient := paymentv1.NewPaymentServiceClient(paymentConn)
 	log.Info().Str("addr", cfg.PaymentServiceAddr).Msg("payment-service client ready")
 
-	bookingRepo := repository.NewBookingRepo(pgPool)
+	if cfg.CursorHMACKey == "" {
+		log.Warn().Msg("CURSOR_HMAC_KEY not set — using insecure fallback key for cursor signing; set in production")
+	}
+	bookingRepo := repository.NewBookingRepo(pgPool, cfg.CursorHMACKey)
 	publisher := events.NewPublisher(js)
 
-	uc := usecase.NewBookingUseCase(bookingRepo, venueClient, paymentClient, publisher, cfg.VisitTimeZone)
+	uc := usecase.NewBookingUseCase(bookingRepo, venueClient, crmClient, paymentClient, publisher, log, cfg.VisitTimeZone, cfg.CancelDeadlineHours)
 
 	autoCompleteCtx, autoCompleteCancel := context.WithCancel(ctx)
 	defer autoCompleteCancel()
@@ -106,7 +132,21 @@ func main() {
 	}
 	log.Info().Msg("subscribed to payment events")
 
-	grpcServer := grpc.NewServer(grpcutil.ServerOptions()...)
+	srvOpts, err := grpcutil.ServerOptionsFromEnv()
+	if err != nil {
+		log.Fatal().Err(err).Msg("gRPC server transport config error")
+	}
+	// Interceptor chain (innermost last = executes first on the way in):
+	//   PgErrorUnaryInterceptor — maps PostgreSQL 22P02/22023/22007/22008 → InvalidArgument
+	//                             so "invalid uuid syntax" never surfaces as Internal.
+	//   CallerIDServerInterceptor — reads "x-caller-id" from gRPC metadata (set by
+	//                             api-gateway after JWT verification) into context;
+	//                             handlers call grpcutil.CallerIDFromCtx(ctx) for authz.
+	srvOpts = append(srvOpts, grpc.ChainUnaryInterceptor(
+		grpcutil.PgErrorUnaryInterceptor(),
+		grpcutil.CallerIDServerInterceptor(),
+	))
+	grpcServer := grpc.NewServer(srvOpts...)
 	bookingv1.RegisterBookingServiceServer(grpcServer, delivery.NewServer(uc))
 
 	lis, err := net.Listen("tcp", ":"+cfg.GRPCPort)

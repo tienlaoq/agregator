@@ -3,25 +3,71 @@ package usecase
 import (
 	"context"
 
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"google.golang.org/grpc"
 
 	bookingv1 "github.com/tienlao/agregator/gen/go/booking/v1"
-	venuev1 "github.com/tienlao/agregator/gen/go/venue/v1"
+	masterv1 "github.com/tienlao/agregator/gen/go/master/v1"
 	"github.com/tienlao/agregator/services/review-service/internal/domain"
 )
 
-type mockReviewRepo struct {
-	CreateFunc            func(ctx context.Context, review *domain.Review) error
-	GetByIDFunc           func(ctx context.Context, id string) (*domain.Review, error)
-	ListByVenueFunc       func(ctx context.Context, venueID string, page, pageSize int32) ([]*domain.Review, int32, error)
-	ListByMasterFunc      func(ctx context.Context, masterID string, page, pageSize int32) ([]*domain.Review, int32, error)
-	GetVenueRatingFunc    func(ctx context.Context, venueID string) (*domain.VenueRating, error)
-	UpdateVenueRatingFunc func(ctx context.Context, venueID string) error
+// ---------------------------------------------------------------------------
+// mockTx — minimal pgx.Tx stub; only Commit/Rollback are exercised by tests.
+// ---------------------------------------------------------------------------
+
+type mockTx struct {
+	committed  bool
+	rolledBack bool
+	commitErr  error
 }
 
-func (m *mockReviewRepo) Create(ctx context.Context, review *domain.Review) error {
-	if m.CreateFunc != nil {
-		return m.CreateFunc(ctx, review)
+func (m *mockTx) Begin(ctx context.Context) (pgx.Tx, error)  { return m, nil }
+func (m *mockTx) Commit(ctx context.Context) error           { m.committed = true; return m.commitErr }
+func (m *mockTx) Rollback(ctx context.Context) error         { m.rolledBack = true; return nil }
+func (m *mockTx) CopyFrom(ctx context.Context, tableName pgx.Identifier, columnNames []string, rowSrc pgx.CopyFromSource) (int64, error) {
+	return 0, nil
+}
+func (m *mockTx) SendBatch(ctx context.Context, b *pgx.Batch) pgx.BatchResults { return nil }
+func (m *mockTx) LargeObjects() pgx.LargeObjects                               { return pgx.LargeObjects{} }
+func (m *mockTx) Prepare(ctx context.Context, name, sql string) (*pgconn.StatementDescription, error) {
+	return nil, nil
+}
+func (m *mockTx) Exec(ctx context.Context, sql string, arguments ...any) (pgconn.CommandTag, error) {
+	return pgconn.CommandTag{}, nil
+}
+func (m *mockTx) Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error) {
+	return nil, nil
+}
+func (m *mockTx) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row { return nil }
+func (m *mockTx) Conn() *pgx.Conn                                               { return nil }
+
+// ---------------------------------------------------------------------------
+// mockReviewRepo
+// ---------------------------------------------------------------------------
+
+type mockReviewRepo struct {
+	tx                       *mockTx
+	CreateTxFunc             func(ctx context.Context, tx pgx.Tx, review *domain.Review) error
+	GetByIDFunc              func(ctx context.Context, id string) (*domain.Review, error)
+	ListByVenueFunc          func(ctx context.Context, venueID string, page, pageSize int32) ([]*domain.Review, int32, error)
+	ListByMasterFunc         func(ctx context.Context, masterID string, page, pageSize int32) ([]*domain.Review, int32, error)
+	GetVenueRatingFunc       func(ctx context.Context, venueID string) (*domain.VenueRating, error)
+	UpdateVenueRatingTxFunc  func(ctx context.Context, tx pgx.Tx, venueID string, rating int32) error
+	GetMasterRatingFunc      func(ctx context.Context, masterID string) (*domain.MasterRating, error)
+	UpdateMasterRatingTxFunc func(ctx context.Context, tx pgx.Tx, masterID string, rating int32) error
+}
+
+func (m *mockReviewRepo) BeginTx(ctx context.Context) (pgx.Tx, error) {
+	if m.tx == nil {
+		m.tx = &mockTx{}
+	}
+	return m.tx, nil
+}
+
+func (m *mockReviewRepo) CreateTx(ctx context.Context, tx pgx.Tx, review *domain.Review) error {
+	if m.CreateTxFunc != nil {
+		return m.CreateTxFunc(ctx, tx, review)
 	}
 	return nil
 }
@@ -54,12 +100,75 @@ func (m *mockReviewRepo) GetVenueRating(ctx context.Context, venueID string) (*d
 	return nil, nil
 }
 
-func (m *mockReviewRepo) UpdateVenueRating(ctx context.Context, venueID string) error {
-	if m.UpdateVenueRatingFunc != nil {
-		return m.UpdateVenueRatingFunc(ctx, venueID)
+func (m *mockReviewRepo) UpdateVenueRatingTx(ctx context.Context, tx pgx.Tx, venueID string, rating int32) error {
+	if m.UpdateVenueRatingTxFunc != nil {
+		return m.UpdateVenueRatingTxFunc(ctx, tx, venueID, rating)
 	}
 	return nil
 }
+
+func (m *mockReviewRepo) GetMasterRating(ctx context.Context, masterID string) (*domain.MasterRating, error) {
+	if m.GetMasterRatingFunc != nil {
+		return m.GetMasterRatingFunc(ctx, masterID)
+	}
+	return &domain.MasterRating{MasterID: masterID}, nil
+}
+
+func (m *mockReviewRepo) UpdateMasterRatingTx(ctx context.Context, tx pgx.Tx, masterID string, rating int32) error {
+	if m.UpdateMasterRatingTxFunc != nil {
+		return m.UpdateMasterRatingTxFunc(ctx, tx, masterID, rating)
+	}
+	return nil
+}
+
+// ---------------------------------------------------------------------------
+// mockOutboxRepo
+// ---------------------------------------------------------------------------
+
+type mockOutboxRepo struct {
+	CreateTxFunc        func(ctx context.Context, tx pgx.Tx, entry *domain.OutboxEntry) error
+	ClaimBatchFunc      func(ctx context.Context, tx pgx.Tx, limit int) ([]*domain.OutboxEntry, error)
+	MarkPublishedFunc   func(ctx context.Context, ids []string) error
+	ResetStaleLocksFunc func(ctx context.Context) error
+	entries             []*domain.OutboxEntry
+}
+
+func (m *mockOutboxRepo) BeginTx(ctx context.Context) (pgx.Tx, error) {
+	return &mockTx{}, nil
+}
+
+func (m *mockOutboxRepo) CreateTx(ctx context.Context, tx pgx.Tx, entry *domain.OutboxEntry) error {
+	if m.CreateTxFunc != nil {
+		return m.CreateTxFunc(ctx, tx, entry)
+	}
+	m.entries = append(m.entries, entry)
+	return nil
+}
+
+func (m *mockOutboxRepo) ClaimBatch(ctx context.Context, tx pgx.Tx, limit int) ([]*domain.OutboxEntry, error) {
+	if m.ClaimBatchFunc != nil {
+		return m.ClaimBatchFunc(ctx, tx, limit)
+	}
+	return nil, nil
+}
+
+func (m *mockOutboxRepo) MarkPublished(ctx context.Context, ids []string) error {
+	if m.MarkPublishedFunc != nil {
+		return m.MarkPublishedFunc(ctx, ids)
+	}
+	return nil
+}
+
+func (m *mockOutboxRepo) ResetStaleLocks(ctx context.Context) error {
+	if m.ResetStaleLocksFunc != nil {
+		return m.ResetStaleLocksFunc(ctx)
+	}
+	return nil
+}
+
+// ---------------------------------------------------------------------------
+// mockBookingClient
+// ---------------------------------------------------------------------------
 
 type mockBookingClient struct {
 	CreateBookingFunc       func(ctx context.Context, in *bookingv1.CreateBookingRequest, opts ...grpc.CallOption) (*bookingv1.BookingResponse, error)
@@ -78,199 +187,118 @@ func (m *mockBookingClient) CreateBooking(ctx context.Context, in *bookingv1.Cre
 	}
 	return nil, nil
 }
-
 func (m *mockBookingClient) GetBooking(ctx context.Context, in *bookingv1.GetBookingRequest, opts ...grpc.CallOption) (*bookingv1.BookingResponse, error) {
 	if m.GetBookingFunc != nil {
 		return m.GetBookingFunc(ctx, in, opts...)
 	}
 	return nil, nil
 }
-
 func (m *mockBookingClient) ListUserBookings(ctx context.Context, in *bookingv1.ListUserBookingsRequest, opts ...grpc.CallOption) (*bookingv1.ListBookingsResponse, error) {
 	if m.ListUserBookingsFunc != nil {
 		return m.ListUserBookingsFunc(ctx, in, opts...)
 	}
 	return nil, nil
 }
-
 func (m *mockBookingClient) ListVenueBookings(ctx context.Context, in *bookingv1.ListVenueBookingsRequest, opts ...grpc.CallOption) (*bookingv1.ListBookingsResponse, error) {
 	if m.ListVenueBookingsFunc != nil {
 		return m.ListVenueBookingsFunc(ctx, in, opts...)
 	}
 	return nil, nil
 }
-
 func (m *mockBookingClient) CancelBooking(ctx context.Context, in *bookingv1.CancelBookingRequest, opts ...grpc.CallOption) (*bookingv1.BookingResponse, error) {
 	if m.CancelBookingFunc != nil {
 		return m.CancelBookingFunc(ctx, in, opts...)
 	}
 	return nil, nil
 }
-
 func (m *mockBookingClient) ConfirmBooking(ctx context.Context, in *bookingv1.ConfirmBookingRequest, opts ...grpc.CallOption) (*bookingv1.BookingResponse, error) {
 	if m.ConfirmBookingFunc != nil {
 		return m.ConfirmBookingFunc(ctx, in, opts...)
 	}
 	return nil, nil
 }
-
 func (m *mockBookingClient) CompleteBooking(ctx context.Context, in *bookingv1.CompleteBookingRequest, opts ...grpc.CallOption) (*bookingv1.BookingResponse, error) {
 	if m.CompleteBookingFunc != nil {
 		return m.CompleteBookingFunc(ctx, in, opts...)
 	}
 	return nil, nil
 }
-
 func (m *mockBookingClient) HasCompletedBooking(ctx context.Context, in *bookingv1.HasCompletedBookingRequest, opts ...grpc.CallOption) (*bookingv1.HasCompletedBookingResponse, error) {
 	if m.HasCompletedBookingFunc != nil {
 		return m.HasCompletedBookingFunc(ctx, in, opts...)
 	}
 	return &bookingv1.HasCompletedBookingResponse{}, nil
 }
-
+func (m *mockBookingClient) GetBookingsBatch(ctx context.Context, in *bookingv1.GetBookingsBatchRequest, opts ...grpc.CallOption) (*bookingv1.GetBookingsBatchResponse, error) {
+	return &bookingv1.GetBookingsBatchResponse{}, nil
+}
 func (m *mockBookingClient) AddBookingStaffNote(ctx context.Context, in *bookingv1.AddBookingStaffNoteRequest, opts ...grpc.CallOption) (*bookingv1.AddBookingStaffNoteResponse, error) {
 	return &bookingv1.AddBookingStaffNoteResponse{}, nil
 }
-
 func (m *mockBookingClient) ListBookingStaffNotes(ctx context.Context, in *bookingv1.ListBookingStaffNotesRequest, opts ...grpc.CallOption) (*bookingv1.ListBookingStaffNotesResponse, error) {
 	return &bookingv1.ListBookingStaffNotesResponse{}, nil
 }
 
-type mockVenueClient struct {
-	CheckSlotAvailabilityFunc func(ctx context.Context, in *venuev1.CheckSlotRequest, opts ...grpc.CallOption) (*venuev1.CheckSlotResponse, error)
-	ReserveSlotFunc           func(ctx context.Context, in *venuev1.ReserveSlotRequest, opts ...grpc.CallOption) (*venuev1.ReserveSlotResponse, error)
-	ReleaseSlotFunc           func(ctx context.Context, in *venuev1.ReleaseSlotRequest, opts ...grpc.CallOption) (*venuev1.ReleaseSlotResponse, error)
-	UpdateRatingFunc          func(ctx context.Context, in *venuev1.UpdateRatingRequest, opts ...grpc.CallOption) (*venuev1.UpdateRatingResponse, error)
+// ---------------------------------------------------------------------------
+// mockMasterClient — implements masterv1.MasterServiceClient
+// ---------------------------------------------------------------------------
+
+type mockMasterClient struct {
+	hasCompleted bool
+	err          error
 }
 
-func (m *mockVenueClient) CreateVenue(ctx context.Context, in *venuev1.CreateVenueRequest, opts ...grpc.CallOption) (*venuev1.VenueResponse, error) {
+func (m *mockMasterClient) HasCompletedMasterBooking(ctx context.Context, in *masterv1.HasCompletedMasterBookingRequest, opts ...grpc.CallOption) (*masterv1.HasCompletedMasterBookingResponse, error) {
+	return &masterv1.HasCompletedMasterBookingResponse{HasCompleted: m.hasCompleted}, m.err
+}
+func (m *mockMasterClient) CreateMyProfile(ctx context.Context, in *masterv1.CreateMyProfileRequest, opts ...grpc.CallOption) (*masterv1.MasterResponse, error) {
 	return nil, nil
 }
-
-func (m *mockVenueClient) SubmitVenueForReview(ctx context.Context, in *venuev1.SubmitVenueForReviewRequest, opts ...grpc.CallOption) (*venuev1.VenueResponse, error) {
+func (m *mockMasterClient) GetMyProfile(ctx context.Context, in *masterv1.GetMyProfileRequest, opts ...grpc.CallOption) (*masterv1.MasterResponse, error) {
 	return nil, nil
 }
-
-func (m *mockVenueClient) UpdateVenue(ctx context.Context, in *venuev1.UpdateVenueRequest, opts ...grpc.CallOption) (*venuev1.VenueResponse, error) {
+func (m *mockMasterClient) UpdateMyProfile(ctx context.Context, in *masterv1.UpdateMyProfileRequest, opts ...grpc.CallOption) (*masterv1.MasterResponse, error) {
 	return nil, nil
 }
-
-func (m *mockVenueClient) GetVenue(ctx context.Context, in *venuev1.GetVenueRequest, opts ...grpc.CallOption) (*venuev1.VenueResponse, error) {
+func (m *mockMasterClient) SubmitForReview(ctx context.Context, in *masterv1.SubmitMasterForReviewRequest, opts ...grpc.CallOption) (*masterv1.MasterResponse, error) {
 	return nil, nil
 }
-
-func (m *mockVenueClient) GetVenueBySlug(ctx context.Context, in *venuev1.GetVenueBySlugRequest, opts ...grpc.CallOption) (*venuev1.VenueResponse, error) {
+func (m *mockMasterClient) ListPublicMasters(ctx context.Context, in *masterv1.ListPublicMastersRequest, opts ...grpc.CallOption) (*masterv1.ListMastersResponse, error) {
 	return nil, nil
 }
-
-func (m *mockVenueClient) ListVenues(ctx context.Context, in *venuev1.ListVenuesRequest, opts ...grpc.CallOption) (*venuev1.ListVenuesResponse, error) {
+func (m *mockMasterClient) GetPublicMaster(ctx context.Context, in *masterv1.GetPublicMasterRequest, opts ...grpc.CallOption) (*masterv1.MasterResponse, error) {
 	return nil, nil
 }
-
-func (m *mockVenueClient) SearchVenues(ctx context.Context, in *venuev1.SearchVenuesRequest, opts ...grpc.CallOption) (*venuev1.ListVenuesResponse, error) {
+func (m *mockMasterClient) ListForModeration(ctx context.Context, in *masterv1.ListForModerationRequest, opts ...grpc.CallOption) (*masterv1.ListMastersResponse, error) {
 	return nil, nil
 }
-
-func (m *mockVenueClient) ListOwnerVenues(ctx context.Context, in *venuev1.ListOwnerVenuesRequest, opts ...grpc.CallOption) (*venuev1.ListVenuesResponse, error) {
+func (m *mockMasterClient) ModerateMaster(ctx context.Context, in *masterv1.ModerateMasterRequest, opts ...grpc.CallOption) (*masterv1.MasterResponse, error) {
 	return nil, nil
 }
-
-func (m *mockVenueClient) CheckSlotAvailability(ctx context.Context, in *venuev1.CheckSlotRequest, opts ...grpc.CallOption) (*venuev1.CheckSlotResponse, error) {
-	if m.CheckSlotAvailabilityFunc != nil {
-		return m.CheckSlotAvailabilityFunc(ctx, in, opts...)
-	}
+func (m *mockMasterClient) ListModerationHistory(ctx context.Context, in *masterv1.ListModerationHistoryRequest, opts ...grpc.CallOption) (*masterv1.ListModerationHistoryResponse, error) {
 	return nil, nil
 }
-
-func (m *mockVenueClient) ReserveSlot(ctx context.Context, in *venuev1.ReserveSlotRequest, opts ...grpc.CallOption) (*venuev1.ReserveSlotResponse, error) {
-	if m.ReserveSlotFunc != nil {
-		return m.ReserveSlotFunc(ctx, in, opts...)
-	}
+func (m *mockMasterClient) CreateMasterBooking(ctx context.Context, in *masterv1.CreateMasterBookingRequest, opts ...grpc.CallOption) (*masterv1.MasterBookingResponse, error) {
 	return nil, nil
 }
-
-func (m *mockVenueClient) ReleaseSlot(ctx context.Context, in *venuev1.ReleaseSlotRequest, opts ...grpc.CallOption) (*venuev1.ReleaseSlotResponse, error) {
-	if m.ReleaseSlotFunc != nil {
-		return m.ReleaseSlotFunc(ctx, in, opts...)
-	}
+func (m *mockMasterClient) ListMyMasterBookings(ctx context.Context, in *masterv1.ListMyMasterBookingsRequest, opts ...grpc.CallOption) (*masterv1.ListMasterBookingsResponse, error) {
 	return nil, nil
 }
-
-func (m *mockVenueClient) CreateManualSlotBlock(ctx context.Context, in *venuev1.CreateManualSlotBlockRequest, opts ...grpc.CallOption) (*venuev1.CreateManualSlotBlockResponse, error) {
+func (m *mockMasterClient) ListClientMasterBookings(ctx context.Context, in *masterv1.ListClientMasterBookingsRequest, opts ...grpc.CallOption) (*masterv1.ListMasterBookingsResponse, error) {
 	return nil, nil
 }
-
-func (m *mockVenueClient) DeleteManualSlotBlock(ctx context.Context, in *venuev1.DeleteManualSlotBlockRequest, opts ...grpc.CallOption) (*venuev1.DeleteManualSlotBlockResponse, error) {
+func (m *mockMasterClient) GetMasterBooking(ctx context.Context, in *masterv1.GetMasterBookingRequest, opts ...grpc.CallOption) (*masterv1.MasterBookingResponse, error) {
 	return nil, nil
 }
-
-func (m *mockVenueClient) ListManualSlotBlocks(ctx context.Context, in *venuev1.ListManualSlotBlocksRequest, opts ...grpc.CallOption) (*venuev1.ListManualSlotBlocksResponse, error) {
+func (m *mockMasterClient) GetMasterBookingsBatch(ctx context.Context, in *masterv1.GetMasterBookingsBatchRequest, opts ...grpc.CallOption) (*masterv1.GetMasterBookingsBatchResponse, error) {
+	return &masterv1.GetMasterBookingsBatchResponse{}, nil
+}
+func (m *mockMasterClient) AddMasterPhoto(ctx context.Context, in *masterv1.AddMasterPhotoRequest, opts ...grpc.CallOption) (*masterv1.MasterResponse, error) {
 	return nil, nil
 }
-
-func (m *mockVenueClient) UpdateRating(ctx context.Context, in *venuev1.UpdateRatingRequest, opts ...grpc.CallOption) (*venuev1.UpdateRatingResponse, error) {
-	if m.UpdateRatingFunc != nil {
-		return m.UpdateRatingFunc(ctx, in, opts...)
-	}
+func (m *mockMasterClient) DeleteMasterPhoto(ctx context.Context, in *masterv1.DeleteMasterPhotoRequest, opts ...grpc.CallOption) (*masterv1.DeleteMasterPhotoResponse, error) {
 	return nil, nil
 }
-
-func (m *mockVenueClient) ModerateVenue(ctx context.Context, in *venuev1.ModerateVenueRequest, opts ...grpc.CallOption) (*venuev1.VenueResponse, error) {
-	return nil, nil
-}
-
-func (m *mockVenueClient) ListPendingVenues(ctx context.Context, in *venuev1.ListPendingVenuesRequest, opts ...grpc.CallOption) (*venuev1.ListVenuesResponse, error) {
-	return nil, nil
-}
-
-func (m *mockVenueClient) AddVenuePhoto(ctx context.Context, in *venuev1.AddVenuePhotoRequest, opts ...grpc.CallOption) (*venuev1.VenueResponse, error) {
-	return nil, nil
-}
-
-func (m *mockVenueClient) DeleteVenuePhoto(ctx context.Context, in *venuev1.DeleteVenuePhotoRequest, opts ...grpc.CallOption) (*venuev1.DeleteVenuePhotoResponse, error) {
-	return nil, nil
-}
-
-func (m *mockVenueClient) SetVenueCoverPhoto(ctx context.Context, in *venuev1.SetVenueCoverPhotoRequest, opts ...grpc.CallOption) (*venuev1.VenueResponse, error) {
-	return nil, nil
-}
-
-func (m *mockVenueClient) AddVenueHallPhoto(ctx context.Context, in *venuev1.AddVenueHallPhotoRequest, opts ...grpc.CallOption) (*venuev1.VenueResponse, error) {
-	return nil, nil
-}
-
-func (m *mockVenueClient) DeleteVenueHallPhoto(ctx context.Context, in *venuev1.DeleteVenueHallPhotoRequest, opts ...grpc.CallOption) (*venuev1.DeleteVenueHallPhotoResponse, error) {
-	return nil, nil
-}
-
-func (m *mockVenueClient) SetVenueHallCoverPhoto(ctx context.Context, in *venuev1.SetVenueHallCoverPhotoRequest, opts ...grpc.CallOption) (*venuev1.VenueResponse, error) {
-	return nil, nil
-}
-
-func (m *mockVenueClient) GetVenueManagementAccess(ctx context.Context, in *venuev1.GetVenueManagementAccessRequest, opts ...grpc.CallOption) (*venuev1.GetVenueManagementAccessResponse, error) {
-	return &venuev1.GetVenueManagementAccessResponse{Access: "owner"}, nil
-}
-
-func (m *mockVenueClient) ListVenueStaff(ctx context.Context, in *venuev1.ListVenueStaffRequest, opts ...grpc.CallOption) (*venuev1.ListVenueStaffResponse, error) {
-	return nil, nil
-}
-
-func (m *mockVenueClient) AddVenueStaff(ctx context.Context, in *venuev1.AddVenueStaffRequest, opts ...grpc.CallOption) (*venuev1.AddVenueStaffResponse, error) {
-	return &venuev1.AddVenueStaffResponse{}, nil
-}
-
-func (m *mockVenueClient) RemoveVenueStaff(ctx context.Context, in *venuev1.RemoveVenueStaffRequest, opts ...grpc.CallOption) (*venuev1.RemoveVenueStaffResponse, error) {
-	return &venuev1.RemoveVenueStaffResponse{}, nil
-}
-
-func (m *mockVenueClient) ListVenueCRMTasks(ctx context.Context, in *venuev1.ListVenueCRMTasksRequest, opts ...grpc.CallOption) (*venuev1.ListVenueCRMTasksResponse, error) {
-	return nil, nil
-}
-
-func (m *mockVenueClient) CreateVenueCRMTask(ctx context.Context, in *venuev1.CreateVenueCRMTaskRequest, opts ...grpc.CallOption) (*venuev1.CreateVenueCRMTaskResponse, error) {
-	return nil, nil
-}
-
-func (m *mockVenueClient) CompleteVenueCRMTask(ctx context.Context, in *venuev1.CompleteVenueCRMTaskRequest, opts ...grpc.CallOption) (*venuev1.CompleteVenueCRMTaskResponse, error) {
+func (m *mockMasterClient) SetMasterCoverPhoto(ctx context.Context, in *masterv1.SetMasterCoverPhotoRequest, opts ...grpc.CallOption) (*masterv1.MasterResponse, error) {
 	return nil, nil
 }

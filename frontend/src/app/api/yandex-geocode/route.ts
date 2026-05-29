@@ -1,8 +1,12 @@
 import { NextRequest, NextResponse } from "next/server"
+import { RateLimiter, getClientIp } from "@/lib/rate-limit"
 
 /** HTTP Геокодер 1 (тот же ключ, что и для JS API, если в кабинете подключён «HTTP Геокодер»). */
 const GEOCODE_BASE = "https://geocode-maps.yandex.ru/v1/"
 const MAX_QUERY_LEN = 400
+
+// Геокодирование — дорогая операция по квоте Яндекса: 10 запросов в минуту на IP.
+const limiter = new RateLimiter({ maxRequests: 10, windowMs: 60_000 })
 
 type GeoObject = {
   Point?: { pos?: string }
@@ -43,6 +47,14 @@ function parseLonLatFromPos(pos: string): { lat: number; lon: number } | null {
 }
 
 export async function GET(req: NextRequest) {
+  const ip = getClientIp(req.headers)
+  if (!limiter.check(ip)) {
+    return NextResponse.json(
+      { error: "rate_limited", message: "Слишком много запросов. Попробуйте через минуту." },
+      { status: 429, headers: { "Retry-After": "60" } },
+    )
+  }
+
   const apiKey =
     process.env.YANDEX_MAPS_SERVER_API_KEY?.trim() ||
     process.env.NEXT_PUBLIC_YANDEX_MAPS_API_KEY?.trim()

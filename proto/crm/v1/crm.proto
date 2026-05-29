@@ -1,0 +1,155 @@
+syntax = "proto3";
+
+package crm.v1;
+
+option go_package = "github.com/tienlao/agregator/gen/go/crm/v1;crmv1";
+
+import "google/protobuf/timestamp.proto";
+
+// CRMService manages venue staff (membership/RBAC) and CRM tasks.
+// Extracted from venue-service (strangler-fig phase B): shares the venue
+// Postgres database but runs as an independent process with its own gRPC.
+// Future scope: leads, deals, pipelines, customer communications log.
+service CRMService {
+  // Returns "owner" | "manager" | "staff" | "" for a single venue/user pair.
+  // Hot path: called from chat thread resolver.
+  rpc GetManagementAccess(GetManagementAccessRequest) returns (GetManagementAccessResponse);
+
+  // Batched variant: resolves access for many venues in one round-trip.
+  // Used by api-gateway to enrich Venue lists with the management_access field
+  // that used to live on the Venue proto.
+  rpc BatchGetManagementAccess(BatchGetManagementAccessRequest) returns (BatchGetManagementAccessResponse);
+
+  // Returns all venues the given user can manage as owner|manager|staff.
+  // Replaces venue-service ListOwnerVenues composition.
+  rpc ListManagedVenues(ListManagedVenuesRequest) returns (ListManagedVenuesResponse);
+
+  // Staff membership CRUD.
+  rpc ListStaff(ListStaffRequest) returns (ListStaffResponse);
+  rpc AddStaff(AddStaffRequest) returns (AddStaffResponse);
+  rpc RemoveStaff(RemoveStaffRequest) returns (RemoveStaffResponse);
+
+  // CRM task CRUD (per-venue, optionally linked to a booking).
+  rpc ListTasks(ListTasksRequest) returns (ListTasksResponse);
+  rpc CreateTask(CreateTaskRequest) returns (CreateTaskResponse);
+  rpc CompleteTask(CompleteTaskRequest) returns (CompleteTaskResponse);
+}
+
+// ---- Access ----
+
+message GetManagementAccessRequest {
+  string venue_id = 1;
+  string user_id = 2;
+}
+
+message GetManagementAccessResponse {
+  // owner | manager | staff | "" (empty when no access)
+  string access = 1;
+}
+
+message BatchGetManagementAccessRequest {
+  string user_id = 1;
+  repeated string venue_ids = 2;
+}
+
+message BatchGetManagementAccessResponse {
+  // Keyed by venue_id. Venues without access are omitted from the map.
+  map<string, string> access = 1;
+}
+
+message ManagedVenue {
+  string venue_id = 1;
+  // owner | manager | staff
+  string access = 2;
+}
+
+message ListManagedVenuesRequest {
+  string user_id = 1;
+}
+
+message ListManagedVenuesResponse {
+  repeated ManagedVenue venues = 1;
+}
+
+// ---- Staff ----
+
+message StaffMember {
+  string venue_id = 1;
+  string user_id = 2;
+  string role = 3; // manager | staff
+  string invited_by = 4;
+  google.protobuf.Timestamp created_at = 5;
+}
+
+message ListStaffRequest {
+  string venue_id = 1;
+  string actor_id = 2;
+}
+
+message ListStaffResponse {
+  repeated StaffMember members = 1;
+}
+
+message AddStaffRequest {
+  string venue_id = 1;
+  string actor_id = 2;
+  string user_id = 3;
+  string role = 4; // manager | staff
+}
+
+message AddStaffResponse {}
+
+message RemoveStaffRequest {
+  string venue_id = 1;
+  string actor_id = 2;
+  string user_id = 3;
+}
+
+message RemoveStaffResponse {}
+
+// ---- Tasks ----
+
+message Task {
+  string id = 1;
+  string venue_id = 2;
+  optional string booking_id = 3;
+  string title = 4;
+  string body = 5;
+  string status = 6; // open | done
+  optional string assignee_user_id = 7;
+  string created_by = 8;
+  google.protobuf.Timestamp created_at = 9;
+  google.protobuf.Timestamp updated_at = 10;
+}
+
+message ListTasksRequest {
+  string venue_id = 1;
+  string actor_id = 2;
+  // optional filter: "" (all) | open | done
+  string status = 3;
+}
+
+message ListTasksResponse {
+  repeated Task tasks = 1;
+}
+
+message CreateTaskRequest {
+  string venue_id = 1;
+  string actor_id = 2;
+  string title = 3;
+  string body = 4;
+  optional string booking_id = 5;
+  optional string assignee_user_id = 6;
+}
+
+message CreateTaskResponse {
+  Task task = 1;
+}
+
+message CompleteTaskRequest {
+  string venue_id = 1;
+  string actor_id = 2;
+  string task_id = 3;
+}
+
+message CompleteTaskResponse {}

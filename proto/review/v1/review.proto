@@ -12,6 +12,7 @@ service ReviewService {
   rpc ListVenueReviews(ListVenueReviewsRequest) returns (ListReviewsResponse);
   rpc ListMasterReviews(ListMasterReviewsRequest) returns (ListReviewsResponse);
   rpc GetVenueRating(GetVenueRatingRequest) returns (VenueRatingResponse);
+  rpc GetMasterRating(GetMasterRatingRequest) returns (MasterRatingResponse);
 }
 
 message CreateReviewRequest {
@@ -64,6 +65,16 @@ message GetVenueRatingRequest {
 
 message VenueRatingResponse {
   string venue_id = 1;
+  double avg_rating = 2;
+  int32 review_count = 3;
+}
+
+message GetMasterRatingRequest {
+  string master_id = 1;
+}
+
+message MasterRatingResponse {
+  string master_id = 1;
   double avg_rating = 2;
   int32 review_count = 3;
 }

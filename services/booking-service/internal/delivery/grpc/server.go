@@ -4,9 +4,12 @@ import (
 	"context"
 	"strings"
 
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	bookingv1 "github.com/tienlao/agregator/gen/go/booking/v1"
+	"github.com/tienlao/agregator/pkg/grpcutil"
 	"github.com/tienlao/agregator/services/booking-service/internal/domain"
 	"github.com/tienlao/agregator/services/booking-service/internal/usecase"
 )
@@ -21,8 +24,14 @@ func NewServer(uc *usecase.BookingUseCase) *Server {
 }
 
 func (s *Server) CreateBooking(ctx context.Context, req *bookingv1.CreateBookingRequest) (*bookingv1.BookingResponse, error) {
+	// callerID берётся из gRPC metadata ("x-caller-id"), выставленной gateway после
+	// верификации JWT — не из proto-поля req.UserId, которое клиент мог бы подменить.
+	callerID := grpcutil.CallerIDFromCtx(ctx)
+	if callerID == "" {
+		return nil, status.Error(codes.Unauthenticated, "missing caller identity")
+	}
 	b, err := s.uc.CreateBooking(ctx, usecase.CreateBookingInput{
-		UserID:     req.UserId,
+		UserID:     callerID,
 		VenueID:    req.VenueId,
 		VenueName:  req.VenueName,
 		ServiceID:  req.ServiceId,
@@ -48,8 +57,35 @@ func (s *Server) GetBooking(ctx context.Context, req *bookingv1.GetBookingReques
 	return toProto(b), nil
 }
 
+const maxBatchIDs = 200
+
+func (s *Server) GetBookingsBatch(ctx context.Context, req *bookingv1.GetBookingsBatchRequest) (*bookingv1.GetBookingsBatchResponse, error) {
+	ids := req.GetIds()
+	if len(ids) == 0 {
+		return &bookingv1.GetBookingsBatchResponse{Bookings: map[string]*bookingv1.BookingResponse{}}, nil
+	}
+	if len(ids) > maxBatchIDs {
+		return nil, status.Errorf(codes.InvalidArgument, "too many ids: got %d, max %d", len(ids), maxBatchIDs)
+	}
+	bookings, err := s.uc.GetBookingsBatch(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	resp := &bookingv1.GetBookingsBatchResponse{
+		Bookings: make(map[string]*bookingv1.BookingResponse, len(bookings)),
+	}
+	for _, b := range bookings {
+		resp.Bookings[b.ID] = toProto(b)
+	}
+	return resp, nil
+}
+
 func (s *Server) ListUserBookings(ctx context.Context, req *bookingv1.ListUserBookingsRequest) (*bookingv1.ListBookingsResponse, error) {
-	bookings, total, err := s.uc.ListUserBookings(ctx, req.UserId, req.Status, req.Page, req.PageSize)
+	callerID := grpcutil.CallerIDFromCtx(ctx)
+	if callerID == "" {
+		return nil, status.Error(codes.Unauthenticated, "missing caller identity")
+	}
+	bookings, total, err := s.uc.ListUserBookings(ctx, callerID, req.Status, req.Page, req.PageSize)
 	if err != nil {
 		return nil, err
 	}
@@ -61,11 +97,21 @@ func (s *Server) ListUserBookings(ctx context.Context, req *bookingv1.ListUserBo
 }
 
 func (s *Server) ListVenueBookings(ctx context.Context, req *bookingv1.ListVenueBookingsRequest) (*bookingv1.ListBookingsResponse, error) {
-	bookings, total, err := s.uc.ListVenueBookings(ctx, req.VenueId, req.GetOwnerId(), req.Status, req.Date, req.Page, req.PageSize)
+	// callerID берётся из gRPC metadata ("x-caller-id"), выставленной gateway
+	// после верификации JWT — не из proto-поля req.OwnerId, которое клиент
+	// мог бы подменить при прямом доступе к сервису.
+	callerID := grpcutil.CallerIDFromCtx(ctx)
+	if callerID == "" {
+		return nil, status.Error(codes.Unauthenticated, "missing caller identity")
+	}
+	bookings, total, nextCursor, err := s.uc.ListVenueBookings(ctx, req.VenueId, callerID, req.Status, req.Date, req.GetCursor(), req.PageSize)
 	if err != nil {
 		return nil, err
 	}
-	resp := &bookingv1.ListBookingsResponse{Total: int32(total)}
+	resp := &bookingv1.ListBookingsResponse{
+		Total:      int32(total),
+		NextCursor: nextCursor,
+	}
 	for _, b := range bookings {
 		resp.Bookings = append(resp.Bookings, toProto(b))
 	}
@@ -73,7 +119,11 @@ func (s *Server) ListVenueBookings(ctx context.Context, req *bookingv1.ListVenue
 }
 
 func (s *Server) ListBookingStaffNotes(ctx context.Context, req *bookingv1.ListBookingStaffNotesRequest) (*bookingv1.ListBookingStaffNotesResponse, error) {
-	notes, err := s.uc.ListBookingStaffNotes(ctx, req.GetBookingId(), req.GetRequesterUserId())
+	callerID := grpcutil.CallerIDFromCtx(ctx)
+	if callerID == "" {
+		return nil, status.Error(codes.Unauthenticated, "missing caller identity")
+	}
+	notes, err := s.uc.ListBookingStaffNotes(ctx, req.GetBookingId(), callerID)
 	if err != nil {
 		return nil, err
 	}
@@ -81,19 +131,23 @@ func (s *Server) ListBookingStaffNotes(ctx context.Context, req *bookingv1.ListB
 	for i := range notes {
 		n := &notes[i]
 		out.Notes = append(out.Notes, &bookingv1.BookingStaffNote{
-			Id:            n.ID,
-			BookingId:     n.BookingID,
-			VenueId:       n.VenueID,
-			AuthorUserId:  n.AuthorUserID,
-			Body:          n.Body,
-			CreatedAt:     timestamppb.New(n.CreatedAt),
+			Id:           n.ID,
+			BookingId:    n.BookingID,
+			VenueId:      n.VenueID,
+			AuthorUserId: n.AuthorUserID,
+			Body:         n.Body,
+			CreatedAt:    timestamppb.New(n.CreatedAt),
 		})
 	}
 	return out, nil
 }
 
 func (s *Server) AddBookingStaffNote(ctx context.Context, req *bookingv1.AddBookingStaffNoteRequest) (*bookingv1.AddBookingStaffNoteResponse, error) {
-	n, err := s.uc.AddBookingStaffNote(ctx, req.GetBookingId(), req.GetRequesterUserId(), req.GetBody())
+	callerID := grpcutil.CallerIDFromCtx(ctx)
+	if callerID == "" {
+		return nil, status.Error(codes.Unauthenticated, "missing caller identity")
+	}
+	n, err := s.uc.AddBookingStaffNote(ctx, req.GetBookingId(), callerID, req.GetBody())
 	if err != nil {
 		return nil, err
 	}
@@ -110,7 +164,11 @@ func (s *Server) AddBookingStaffNote(ctx context.Context, req *bookingv1.AddBook
 }
 
 func (s *Server) CancelBooking(ctx context.Context, req *bookingv1.CancelBookingRequest) (*bookingv1.BookingResponse, error) {
-	b, err := s.uc.CancelBooking(ctx, req.Id, req.UserId)
+	callerID := grpcutil.CallerIDFromCtx(ctx)
+	if callerID == "" {
+		return nil, status.Error(codes.Unauthenticated, "missing caller identity")
+	}
+	b, err := s.uc.CancelBooking(ctx, req.Id, callerID)
 	if err != nil {
 		return nil, err
 	}
@@ -137,6 +195,13 @@ func (s *Server) CompleteBooking(ctx context.Context, req *bookingv1.CompleteBoo
 }
 
 func (s *Server) HasCompletedBooking(ctx context.Context, req *bookingv1.HasCompletedBookingRequest) (*bookingv1.HasCompletedBookingResponse, error) {
+	// Вызывается из review-service (service-to-service): req.UserId — проверяемый пользователь,
+	// а не вызывающий сервис. callerID содержит service identity "review-service", выставленный
+	// CallerIDClientInterceptor в review-service/cmd/main.go — присутствие заголовка означает,
+	// что запрос прошёл через авторизованный internal-канал, а не напрямую.
+	if grpcutil.CallerIDFromCtx(ctx) == "" {
+		return nil, status.Error(codes.Unauthenticated, "missing caller identity")
+	}
 	has, err := s.uc.HasCompletedBooking(ctx, req.UserId, req.VenueId)
 	if err != nil {
 		return nil, err
@@ -162,11 +227,11 @@ func toProto(b *domain.Booking) *bookingv1.BookingResponse {
 		VenueName:         b.VenueName,
 		ServiceId:         svcOut,
 		Date:              b.Date.Format("2006-01-02"),
-		TimeFrom:          b.TimeFrom,
-		TimeTo:            b.TimeTo,
+		TimeFrom:          b.TimeFrom.String(),
+		TimeTo:            b.TimeTo.String(),
 		Guests:            b.Guests,
 		Comment:           b.Comment,
-		Status:            b.Status,
+		Status:            string(b.Status),
 		TotalPrice:        b.TotalPrice,
 		PaymentUrl:        b.PaymentURL,
 		CreatedAt:         timestamppb.New(b.CreatedAt),

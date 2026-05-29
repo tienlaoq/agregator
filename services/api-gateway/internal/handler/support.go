@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
@@ -17,19 +16,21 @@ import (
 	"github.com/rs/zerolog"
 	pkgmail "github.com/tienlao/agregator/pkg/mail"
 	"github.com/tienlao/agregator/services/api-gateway/internal/apicatalog"
+	"github.com/tienlao/agregator/services/api-gateway/internal/limits"
 	gwmetrics "github.com/tienlao/agregator/services/api-gateway/internal/metrics"
 	"github.com/tienlao/agregator/services/api-gateway/internal/middleware"
 	"github.com/tienlao/agregator/services/api-gateway/internal/supportstore"
 )
 
-const (
-	supportWebhookTimeout   = 6 * time.Second
-	supportMaxBodyBytes     = 8192
-	supportMaxTopicLen      = 180
-	supportMaxMessageLen    = 4000
-	supportMaxEmailLen      = 320
-	supportMaxRefFieldLen   = 128
-	supportMaxSourcePageLen = 1024
+// Support limits — canonical values in internal/limits.
+var (
+	supportWebhookTimeout   = limits.SupportWebhookTimeout
+	supportMaxBodyBytes     = limits.SupportMaxBodyBytes
+	supportMaxTopicLen      = limits.SupportMaxTopicLen
+	supportMaxMessageLen    = limits.SupportMaxMessageLen
+	supportMaxEmailLen      = limits.SupportMaxEmailLen
+	supportMaxRefFieldLen   = limits.SupportMaxRefFieldLen
+	supportMaxSourcePageLen = limits.SupportMaxSourcePageLen
 )
 
 var errHelpdeskRequestFailed = errors.New("helpdesk request failed")
@@ -96,10 +97,7 @@ func (h *SupportHandler) Contact(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req supportContactRequest
-	if err := readJSON(r, &req); err != nil {
-		writeCatalog(w, apicatalog.GatewayRequestInvalidJson)
-		return
-	}
+	if !readJSONOrRespond(w, r, &req) { return }
 
 	req.Topic = strings.TrimSpace(req.Topic)
 	req.Message = strings.TrimSpace(req.Message)
@@ -239,10 +237,7 @@ type adminSupportReplyRequest struct {
 // AdminReply POST /api/v1/admin/support/reply — отправить ответ пользователю по обращению (только SMTP).
 func (h *SupportHandler) AdminReply(w http.ResponseWriter, r *http.Request) {
 	var req adminSupportReplyRequest
-	if err := readJSON(r, &req); err != nil {
-		writeCatalog(w, apicatalog.GatewayRequestInvalidJson)
-		return
-	}
+	if !readJSONOrRespond(w, r, &req) { return }
 
 	req.TicketNumber = clampString(strings.TrimSpace(req.TicketNumber), 48)
 	req.RequestID = clampString(strings.TrimSpace(req.RequestID), 48)
@@ -337,17 +332,13 @@ func (h *SupportHandler) AdminListTickets(w http.ResponseWriter, r *http.Request
 		writeCatalog(w, apicatalog.GatewayUpstreamUnavailable.WithMessage("support ticket storage is not configured"))
 		return
 	}
-	limit := 50
-	offset := 0
-	if v := strings.TrimSpace(r.URL.Query().Get("limit")); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 100 {
-			limit = n
-		}
+	limit, ok := queryInt(w, r, "limit", 50, 1, 100)
+	if !ok {
+		return
 	}
-	if v := strings.TrimSpace(r.URL.Query().Get("offset")); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n >= 0 {
-			offset = n
-		}
+	offset, ok := queryInt(w, r, "offset", 0, 0, 0)
+	if !ok {
+		return
 	}
 	rows, total, err := h.tickets.List(r.Context(), limit, offset)
 	if err != nil {
@@ -475,14 +466,28 @@ func (h *SupportHandler) postWebhook(body []byte) error {
 	return fmt.Errorf("%w: unexpected helpdesk status: %d", errHelpdeskRequestFailed, resp.StatusCode)
 }
 
+// clampString truncates s to at most maxLen Unicode code points.
+// Truncation always falls on a valid rune boundary, so the result is always
+// well-formed UTF-8 regardless of the input encoding.
 func clampString(s string, maxLen int) string {
 	if maxLen <= 0 {
 		return ""
 	}
+	// Fast path: byte length fits — no rune counting needed.
 	if len(s) <= maxLen {
 		return s
 	}
-	return s[:maxLen]
+	// Walk runes until we've consumed maxLen of them, then slice at the byte
+	// position of the next rune.  This is O(maxLen) in the common case where
+	// the string is longer than maxLen runes.
+	n := 0
+	for i := range s {
+		if n == maxLen {
+			return s[:i]
+		}
+		n++
+	}
+	return s
 }
 
 func uniqueEmails(in []string) []string {

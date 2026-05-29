@@ -5,6 +5,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/rs/zerolog"
 	bookingv1 "github.com/tienlao/agregator/gen/go/booking/v1"
 	chatv1 "github.com/tienlao/agregator/gen/go/chat/v1"
 	masterv1 "github.com/tienlao/agregator/gen/go/master/v1"
@@ -15,59 +16,93 @@ import (
 )
 
 type countingBookingClient struct {
-	mu       sync.Mutex
-	getCalls int
-	byID     map[string]*bookingv1.BookingResponse
+	mu         sync.Mutex
+	batchCalls int
+	byID       map[string]*bookingv1.BookingResponse
 }
 
+// GetBooking is kept for completeness but peerDisplayNamesBatch no longer calls it.
 func (c *countingBookingClient) GetBooking(_ context.Context, in *bookingv1.GetBookingRequest, _ ...grpc.CallOption) (*bookingv1.BookingResponse, error) {
-	c.mu.Lock()
-	c.getCalls++
-	c.mu.Unlock()
 	if c.byID == nil {
 		return nil, nil
 	}
 	return c.byID[in.GetId()], nil
+}
+
+func (c *countingBookingClient) GetBookingsBatch(_ context.Context, in *bookingv1.GetBookingsBatchRequest, _ ...grpc.CallOption) (*bookingv1.GetBookingsBatchResponse, error) {
+	c.mu.Lock()
+	c.batchCalls++
+	c.mu.Unlock()
+	resp := &bookingv1.GetBookingsBatchResponse{
+		Bookings: make(map[string]*bookingv1.BookingResponse),
+	}
+	for _, id := range in.GetIds() {
+		if b := c.byID[id]; b != nil {
+			resp.Bookings[id] = b
+		}
+	}
+	return resp, nil
 }
 
 type countingVenueClient struct {
-	mu       sync.Mutex
-	getCalls int
-	byID     map[string]*venuev1.VenueResponse
+	mu         sync.Mutex
+	batchCalls int
+	byID       map[string]*venuev1.VenueResponse
 }
 
+// GetVenue is kept for completeness but peerDisplayNamesBatch no longer calls it.
 func (c *countingVenueClient) GetVenue(_ context.Context, in *venuev1.GetVenueRequest, _ ...grpc.CallOption) (*venuev1.VenueResponse, error) {
-	c.mu.Lock()
-	c.getCalls++
-	c.mu.Unlock()
 	if c.byID == nil {
 		return nil, nil
 	}
 	return c.byID[in.GetId()], nil
 }
 
-func (c *countingVenueClient) GetVenueManagementAccess(context.Context, *venuev1.GetVenueManagementAccessRequest, ...grpc.CallOption) (*venuev1.GetVenueManagementAccessResponse, error) {
-	return nil, nil
+func (c *countingVenueClient) GetVenuesBatch(_ context.Context, in *venuev1.GetVenuesBatchRequest, _ ...grpc.CallOption) (*venuev1.GetVenuesBatchResponse, error) {
+	c.mu.Lock()
+	c.batchCalls++
+	c.mu.Unlock()
+	resp := &venuev1.GetVenuesBatchResponse{
+		Venues: make(map[string]*venuev1.VenueResponse),
+	}
+	for _, id := range in.GetIds() {
+		if v := c.byID[id]; v != nil {
+			resp.Venues[id] = v
+		}
+	}
+	return resp, nil
 }
-func (c *countingVenueClient) ListVenueStaff(context.Context, *venuev1.ListVenueStaffRequest, ...grpc.CallOption) (*venuev1.ListVenueStaffResponse, error) {
-	return &venuev1.ListVenueStaffResponse{}, nil
-}
+
+// CRM methods removed: venueGatewayClient no longer requires them.
 
 type countingMasterClient struct {
-	mu       sync.Mutex
-	getCalls int
-	byRef    map[string]*masterv1.MasterBooking
+	mu         sync.Mutex
+	batchCalls int
+	byRef      map[string]*masterv1.MasterBooking
 }
 
+// GetMasterBooking is kept for completeness but peerDisplayNamesBatch no longer calls it.
 func (c *countingMasterClient) GetMasterBooking(_ context.Context, in *masterv1.GetMasterBookingRequest, _ ...grpc.CallOption) (*masterv1.MasterBookingResponse, error) {
-	c.mu.Lock()
-	c.getCalls++
-	c.mu.Unlock()
 	bk := c.byRef[in.GetBookingId()]
 	if bk == nil {
 		return &masterv1.MasterBookingResponse{}, nil
 	}
 	return &masterv1.MasterBookingResponse{Booking: bk}, nil
+}
+
+func (c *countingMasterClient) GetMasterBookingsBatch(_ context.Context, in *masterv1.GetMasterBookingsBatchRequest, _ ...grpc.CallOption) (*masterv1.GetMasterBookingsBatchResponse, error) {
+	c.mu.Lock()
+	c.batchCalls++
+	c.mu.Unlock()
+	resp := &masterv1.GetMasterBookingsBatchResponse{
+		Bookings: make(map[string]*masterv1.MasterBooking),
+	}
+	for _, id := range in.GetBookingIds() {
+		if bk := c.byRef[id]; bk != nil {
+			resp.Bookings[id] = bk
+		}
+	}
+	return resp, nil
 }
 
 type staticUserClient struct {
@@ -81,24 +116,40 @@ func (c *staticUserClient) GetUser(_ context.Context, in *userv1.GetUserRequest,
 	return c.byID[in.GetId()], nil
 }
 
+func (c *staticUserClient) GetUsersBatch(_ context.Context, in *userv1.GetUsersBatchRequest, _ ...grpc.CallOption) (*userv1.GetUsersBatchResponse, error) {
+	resp := &userv1.GetUsersBatchResponse{
+		Users: make(map[string]*userv1.UserResponse),
+	}
+	if c == nil || c.byID == nil {
+		return resp, nil
+	}
+	for _, id := range in.GetIds() {
+		if u := c.byID[id]; u != nil {
+			resp.Users[id] = u
+		}
+	}
+	return resp, nil
+}
+
 // TestPeerDisplayNamesBatch — table-driven сценарии для резолва peer_display_name (бывший peerDisplayNameForThread).
 func TestPeerDisplayNamesBatch(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("venue_booking", func(t *testing.T) {
 		venueCases := []struct {
-			name           string
-			threads        []*chatv1.ChatThread
-			booking        *countingBookingClient
-			venue          *countingVenueClient
-			users          *staticUserClient
-			viewer         string
-			want           map[string]string
-			wantBookCalls  int
-			wantVenueCalls int
+			name                string
+			threads             []*chatv1.ChatThread
+			booking             *countingBookingClient
+			venue               *countingVenueClient
+			users               *staticUserClient
+			viewer              string
+			want                map[string]string
+			wantBookBatchCalls  int
+			wantVenueBatchCalls int
 		}{
 			{
-				name: "partner_sees_client_name_same_booking_twice_one_GetBooking",
+				// Two threads reference the same booking → single GetBookingsBatch call.
+				name: "partner_sees_client_name_same_booking_twice_one_batch",
 				booking: &countingBookingClient{byID: map[string]*bookingv1.BookingResponse{
 					"booking-1": {Id: "booking-1", VenueId: "v1", UserId: "u-client", VenueName: "Баня Лесная"},
 				}},
@@ -115,11 +166,13 @@ func TestPeerDisplayNamesBatch(t *testing.T) {
 					"t1": "Анна Клиент",
 					"t2": "Анна Клиент",
 				},
-				wantBookCalls:  1,
-				wantVenueCalls: 0,
+				wantBookBatchCalls:  1,
+				wantVenueBatchCalls: 0,
 			},
 			{
-				name: "partner_two_bookings_two_clients_no_GetVenue_for_titles",
+				// Two different bookings for the owner → one GetBookingsBatch, no GetVenuesBatch
+				// (viewer is owner, so venue name not needed).
+				name: "partner_two_bookings_two_clients_one_batch_no_venue_batch",
 				booking: &countingBookingClient{byID: map[string]*bookingv1.BookingResponse{
 					"b-a": {Id: "b-a", VenueId: "ven-1", UserId: "c1", VenueName: ""},
 					"b-b": {Id: "b-b", VenueId: "ven-1", UserId: "c2", VenueName: ""},
@@ -140,11 +193,12 @@ func TestPeerDisplayNamesBatch(t *testing.T) {
 					"t-a": "Иван",
 					"t-b": "Мария",
 				},
-				wantBookCalls:  2,
-				wantVenueCalls: 0,
+				wantBookBatchCalls:  1,
+				wantVenueBatchCalls: 0,
 			},
 			{
-				name: "guest_sees_venue_name_fallback_GetVenue_once",
+				// Guest, venue_name absent → one GetBookingsBatch + one GetVenuesBatch.
+				name: "guest_sees_venue_name_fallback_one_venue_batch",
 				booking: &countingBookingClient{byID: map[string]*bookingv1.BookingResponse{
 					"b-guest": {Id: "b-guest", VenueId: "ven-x", UserId: "guest-u", VenueName: ""},
 				}},
@@ -159,25 +213,25 @@ func TestPeerDisplayNamesBatch(t *testing.T) {
 				want: map[string]string{
 					"tg": "Сауна у озера",
 				},
-				wantBookCalls:  1,
-				wantVenueCalls: 1,
+				wantBookBatchCalls:  1,
+				wantVenueBatchCalls: 1,
 			},
 		}
 
 		for _, tc := range venueCases {
 			t.Run(tc.name, func(t *testing.T) {
-				h := NewChatHandler(nil, tc.booking, tc.venue, &countingMasterClient{}, tc.users, nil, nil, nil)
-				got := h.peerDisplayNamesBatch(ctx, tc.viewer, tc.threads)
+				h := NewChatHandler(context.Background(), zerolog.Nop(), nil, tc.booking, tc.venue, &countingMasterClient{}, tc.users, &resolverFakeCRM{}, nil, nil, nil)
+				got := h.resolver.peerDisplayNamesBatch(ctx, tc.viewer, tc.threads)
 				for id, w := range tc.want {
 					if got[id] != w {
 						t.Fatalf("peer[%s]=%q want %q (full %v)", id, got[id], w, got)
 					}
 				}
-				if tc.booking.getCalls != tc.wantBookCalls {
-					t.Fatalf("GetBooking calls=%d want %d", tc.booking.getCalls, tc.wantBookCalls)
+				if tc.booking.batchCalls != tc.wantBookBatchCalls {
+					t.Fatalf("GetBookingsBatch calls=%d want %d", tc.booking.batchCalls, tc.wantBookBatchCalls)
 				}
-				if tc.venue.getCalls != tc.wantVenueCalls {
-					t.Fatalf("GetVenue calls=%d want %d", tc.venue.getCalls, tc.wantVenueCalls)
+				if tc.venue.batchCalls != tc.wantVenueBatchCalls {
+					t.Fatalf("GetVenuesBatch calls=%d want %d", tc.venue.batchCalls, tc.wantVenueBatchCalls)
 				}
 			})
 		}
@@ -195,7 +249,7 @@ func TestPeerDisplayNamesBatch(t *testing.T) {
 			"master-owner-1": {Id: "master-owner-1", Name: "Иван Пармастер"},
 			"client-1":       {Id: "client-1", Name: "Пётр Клиент"},
 		}}
-		h := NewChatHandler(nil, &countingBookingClient{}, &countingVenueClient{}, mb, users, nil, nil, nil)
+		h := NewChatHandler(context.Background(), zerolog.Nop(), nil, &countingBookingClient{}, &countingVenueClient{}, mb, users, &resolverFakeCRM{}, nil, nil, nil)
 		threads := []*chatv1.ChatThread{
 			{Id: "th1", Kind: "master_booking", RefId: "m1"},
 		}
@@ -212,19 +266,19 @@ func TestPeerDisplayNamesBatch(t *testing.T) {
 		for i, mc := range masterCases {
 			t.Run(mc.name, func(t *testing.T) {
 				mb.mu.Lock()
-				start := mb.getCalls
+				start := mb.batchCalls
 				mb.mu.Unlock()
 
-				got := h.peerDisplayNamesBatch(ctx, mc.viewer, threads)
+				got := h.resolver.peerDisplayNamesBatch(ctx, mc.viewer, threads)
 				if got["th1"] != mc.want {
 					t.Fatalf("got %q want %q", got["th1"], mc.want)
 				}
 
 				mb.mu.Lock()
-				delta := mb.getCalls - start
+				delta := mb.batchCalls - start
 				mb.mu.Unlock()
 				if delta != 1 {
-					t.Fatalf("GetMasterBooking calls in this batch=%d want 1 (iteration %d)", delta, i)
+					t.Fatalf("GetMasterBookingsBatch calls in this batch=%d want 1 (iteration %d)", delta, i)
 				}
 			})
 		}

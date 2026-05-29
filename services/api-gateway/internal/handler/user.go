@@ -54,10 +54,7 @@ func (h *UserHandler) UpdateMe(w http.ResponseWriter, r *http.Request) {
 		AvatarURL *string `json:"avatar_url"`
 		Bio       *string `json:"bio"`
 	}
-	if err := readJSON(r, &req); err != nil {
-		writeCatalog(w, apicatalog.GatewayRequestInvalidBody)
-		return
-	}
+	if !readJSONOrRespond(w, r, &req) { return }
 
 	grpcReq := &userv1.UpdateUserRequest{Id: userID}
 	if req.Name != nil {

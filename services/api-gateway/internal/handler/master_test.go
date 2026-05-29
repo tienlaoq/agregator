@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -16,6 +17,14 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
+
+// noopUploader satisfies storage.Uploader without touching the filesystem.
+type noopUploader struct{}
+
+func (noopUploader) Put(_ context.Context, _, _ string, _ int64, _ io.Reader) (string, error) {
+	return "", nil
+}
+func (noopUploader) Delete(_ context.Context, _ string) error { return nil }
 
 type mockMasterClient struct {
 	onListClientMasterBookings func(ctx context.Context, in *masterv1.ListClientMasterBookingsRequest, opts ...grpc.CallOption) (*masterv1.ListMasterBookingsResponse, error)
@@ -77,6 +86,10 @@ func (m *mockMasterClient) SetMasterCoverPhoto(context.Context, *masterv1.SetMas
 	return nil, status.Error(codes.Unimplemented, "SetMasterCoverPhoto")
 }
 
+func (m *mockMasterClient) GetMasterBookingsBatch(_ context.Context, in *masterv1.GetMasterBookingsBatchRequest, _ ...grpc.CallOption) (*masterv1.GetMasterBookingsBatchResponse, error) {
+	return &masterv1.GetMasterBookingsBatchResponse{Bookings: make(map[string]*masterv1.MasterBooking)}, nil
+}
+
 func TestMasterHandler_ListMyClientBookings_Success(t *testing.T) {
 	mock := &mockMasterClient{
 		onListClientMasterBookings: func(ctx context.Context, in *masterv1.ListClientMasterBookingsRequest, opts ...grpc.CallOption) (*masterv1.ListMasterBookingsResponse, error) {
@@ -102,9 +115,9 @@ func TestMasterHandler_ListMyClientBookings_Success(t *testing.T) {
 			}, nil
 		},
 	}
-	h := NewMasterHandler(mock, t.TempDir())
+	h := NewMasterHandler(mock, noopUploader{})
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/my/master-bookings?status=confirmed", nil)
-	req = req.WithContext(context.WithValue(req.Context(), middleware.CtxUserID, "user-1"))
+	req = req.WithContext(middleware.WithUserID(req.Context(), "user-1"))
 	rr := httptest.NewRecorder()
 
 	h.ListMyClientBookings(rr, req)
@@ -127,7 +140,7 @@ func TestMasterHandler_ListMyClientBookings_Success(t *testing.T) {
 }
 
 func TestMasterHandler_ListMyClientBookings_Unauthorized(t *testing.T) {
-	h := NewMasterHandler(&mockMasterClient{}, t.TempDir())
+	h := NewMasterHandler(&mockMasterClient{}, noopUploader{})
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/my/master-bookings", nil)
 	rr := httptest.NewRecorder()
 

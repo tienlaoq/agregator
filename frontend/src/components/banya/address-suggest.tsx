@@ -96,8 +96,11 @@ export function AddressSuggest({
   const [suggestions, setSuggestions] = useState<string[]>([])
   const [open, setOpen] = useState(false)
   const [loading, setLoading] = useState(false)
+  const [activeIndex, setActiveIndex] = useState(-1)
   const wrapperRef = useRef<HTMLDivElement>(null)
   const abortRef = useRef<AbortController | null>(null)
+  const listboxId = useRef(`addr-listbox-${Math.random().toString(36).slice(2)}`)
+  const optionId = (i: number) => `${listboxId.current}-opt-${i}`
 
   const fetchSuggestions = useCallback(
     async (street: string, cityName: string) => {
@@ -119,6 +122,7 @@ export function AddressSuggest({
         }
         const data = (await res.json()) as { suggestions?: string[] }
         setSuggestions(Array.isArray(data.suggestions) ? data.suggestions : [])
+        setActiveIndex(-1)
       } catch (e) {
         if ((e as Error).name === "AbortError") return
         setSuggestions([])
@@ -159,7 +163,27 @@ export function AddressSuggest({
         onChange(normalizeAddress(value))
       }
       setOpen(false)
+      setActiveIndex(-1)
     }, 200)
+  }
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (!showPanel) return
+    if (e.key === "ArrowDown") {
+      e.preventDefault()
+      setActiveIndex((i) => Math.min(i + 1, suggestions.length - 1))
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault()
+      setActiveIndex((i) => Math.max(i - 1, -1))
+    } else if (e.key === "Enter" && activeIndex >= 0) {
+      e.preventDefault()
+      onChange(suggestions[activeIndex])
+      setOpen(false)
+      setActiveIndex(-1)
+    } else if (e.key === "Escape") {
+      setOpen(false)
+      setActiveIndex(-1)
+    }
   }
 
   const cityMissing = !city?.trim()
@@ -174,32 +198,52 @@ export function AddressSuggest({
           onChange={(e) => {
             onChange(e.target.value)
             setOpen(true)
+            setActiveIndex(-1)
           }}
           onFocus={() => setOpen(true)}
           onBlur={handleBlur}
+          onKeyDown={handleKeyDown}
           placeholder={placeholder}
           autoComplete="street-address"
+          role="combobox"
+          aria-autocomplete="list"
+          aria-expanded={showPanel}
+          aria-controls={showPanel ? listboxId.current : undefined}
+          aria-activedescendant={activeIndex >= 0 ? optionId(activeIndex) : undefined}
         />
         {showPanel && (
-          <div className="absolute top-full z-50 mt-1 w-full rounded-md border bg-popover p-1 shadow-md">
+          <div
+            id={listboxId.current}
+            role="listbox"
+            aria-label="Подсказки адреса"
+            className="absolute top-full z-50 mt-1 w-full rounded-md border bg-popover p-1 shadow-md"
+          >
           {loading && suggestions.length === 0 && (
-            <div className="flex items-center gap-2 px-2 py-2 text-sm text-muted-foreground">
-              <Loader2 className="h-4 w-4 shrink-0 animate-spin" />
+            <div
+              role="status"
+              aria-live="polite"
+              className="flex items-center gap-2 px-2 py-2 text-sm text-muted-foreground"
+            >
+              <Loader2 className="h-4 w-4 shrink-0 animate-spin" aria-hidden="true" />
               Поиск адреса…
             </div>
           )}
           {suggestions.map((s, i) => (
             <button
               key={`${s}-${i}`}
+              id={optionId(i)}
               type="button"
-              className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm hover:bg-accent hover:text-accent-foreground"
+              role="option"
+              aria-selected={i === activeIndex}
+              className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm hover:bg-accent hover:text-accent-foreground aria-selected:bg-accent aria-selected:text-accent-foreground"
               onMouseDown={(e) => {
                 e.preventDefault()
                 onChange(s)
                 setOpen(false)
+                setActiveIndex(-1)
               }}
             >
-              <MapPin className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+              <MapPin className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
               <span>{s}</span>
             </button>
           ))}

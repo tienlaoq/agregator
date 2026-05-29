@@ -2,11 +2,11 @@ package usecase
 
 import (
 	"context"
-	"fmt"
+	"encoding/json"
 
+	"github.com/rs/zerolog/log"
 	bookingv1 "github.com/tienlao/agregator/gen/go/booking/v1"
 	masterv1 "github.com/tienlao/agregator/gen/go/master/v1"
-	venuev1 "github.com/tienlao/agregator/gen/go/venue/v1"
 	pkgerr "github.com/tienlao/agregator/pkg/errors"
 	"github.com/tienlao/agregator/services/review-service/internal/domain"
 	"github.com/tienlao/agregator/services/review-service/internal/events"
@@ -16,25 +16,24 @@ import (
 
 type ReviewUseCase struct {
 	repo          domain.ReviewRepository
+	outboxRepo    domain.OutboxRepository
 	bookingClient bookingv1.BookingServiceClient
-	venueClient   venuev1.VenueServiceClient
 	masterClient  masterv1.MasterServiceClient
-	publisher     *events.Publisher
 }
 
-func NewReviewUseCase(
+// NewReviewUseCaseWithOutbox constructs a ReviewUseCase.
+// outboxRepo is required for transactional outbox writes; pass a real OutboxRepository.
+func NewReviewUseCaseWithOutbox(
 	repo domain.ReviewRepository,
+	outboxRepo domain.OutboxRepository,
 	bookingClient bookingv1.BookingServiceClient,
-	venueClient venuev1.VenueServiceClient,
 	masterClient masterv1.MasterServiceClient,
-	publisher *events.Publisher,
 ) *ReviewUseCase {
 	return &ReviewUseCase{
 		repo:          repo,
+		outboxRepo:    outboxRepo,
 		bookingClient: bookingClient,
-		venueClient:   venueClient,
 		masterClient:  masterClient,
-		publisher:     publisher,
 	}
 }
 
@@ -65,7 +64,8 @@ func (uc *ReviewUseCase) CreateReview(ctx context.Context, in CreateReviewInput)
 			VenueId: in.VenueID,
 		})
 		if err != nil {
-			return nil, fmt.Errorf("check completed booking: %w", err)
+			// Preserve the upstream gRPC status (e.g. Unavailable, NotFound).
+			return nil, err
 		}
 		isVerified = hasVisited.GetHasCompleted()
 	} else if hasMaster {
@@ -75,13 +75,14 @@ func (uc *ReviewUseCase) CreateReview(ctx context.Context, in CreateReviewInput)
 				MasterId:     in.MasterID,
 			})
 			if err != nil {
-				return nil, fmt.Errorf("check completed master booking: %w", err)
+				// Preserve the upstream gRPC status.
+				return nil, err
 			}
 			isVerified = hasVisited.GetHasCompleted()
 		}
 	}
 	if !isVerified {
-		return nil, status.Error(codes.FailedPrecondition, "booking is not confirmed by platform")
+		return nil, pkgerr.FailedPrecondition("booking is not confirmed by platform")
 	}
 
 	review := &domain.Review{
@@ -95,30 +96,83 @@ func (uc *ReviewUseCase) CreateReview(ctx context.Context, in CreateReviewInput)
 		IsAnonymous: in.IsAnonymous,
 	}
 
-	if err := uc.repo.Create(ctx, review); err != nil {
-		return nil, fmt.Errorf("create review: %w", err)
+	// --- Atomic write: review + outbox entry in one transaction ---
+	tx, err := uc.repo.BeginTx(ctx)
+	if err != nil {
+		log.Error().Err(err).Msg("CreateReview: begin tx failed")
+		return nil, pkgerr.Internal("failed to begin transaction")
+	}
+	defer func() {
+		if err != nil {
+			_ = tx.Rollback(ctx)
+		}
+	}()
+
+	if err = uc.repo.CreateTx(ctx, tx, review); err != nil {
+		// AlreadyExists is already a gRPC status from the repository layer;
+		// other errors are DB-internal and must not leak details to the client.
+		if st, ok := status.FromError(err); ok && st.Code() != codes.OK {
+			return nil, err
+		}
+		log.Error().Err(err).Msg("CreateReview: persist review failed")
+		return nil, pkgerr.Internal("failed to persist review")
 	}
 
-	if hasVenue {
-		if err := uc.repo.UpdateVenueRating(ctx, in.VenueID); err != nil {
-			return nil, fmt.Errorf("update venue rating: %w", err)
+	if uc.outboxRepo != nil {
+		targetType := events.TargetTypeVenue
+		if hasMaster {
+			targetType = events.TargetTypeMaster
 		}
-
-		_ = uc.publisher.PublishReviewCreated(events.ReviewCreatedEvent{
-			ReviewID: review.ID,
-			UserID:   review.UserID,
-			VenueID:  review.VenueID,
-			Rating:   review.Rating,
+		payload, merr := json.Marshal(events.ReviewCreatedEvent{
+			ReviewID:   review.ID,
+			UserID:     review.UserID,
+			TargetType: targetType,
+			VenueID:    review.VenueID,
+			MasterID:   review.MasterID,
+			Rating:     review.Rating,
 		})
-
-		vr, err := uc.repo.GetVenueRating(ctx, in.VenueID)
-		if err == nil {
-			_, _ = uc.venueClient.UpdateRating(ctx, &venuev1.UpdateRatingRequest{
-				VenueId:     in.VenueID,
-				AvgRating:   vr.AvgRating,
-				ReviewCount: vr.ReviewCount,
-			})
+		if merr != nil {
+			// json.Marshal of a known struct should never fail; log the underlying
+			// error so the cause is visible in service logs even though the client
+			// only receives a generic Internal status.
+			log.Error().Err(merr).Str("review_id", review.ID).
+				Msg("outbox: failed to marshal ReviewCreatedEvent payload")
+			err = pkgerr.Internal("failed to marshal outbox payload")
+			return nil, err
 		}
+		outboxEntry := &domain.OutboxEntry{
+			AggregateID: review.ID,
+			EventType:   events.SubjectReviewCreated,
+			Payload:     payload,
+		}
+		if merr = uc.outboxRepo.CreateTx(ctx, tx, outboxEntry); merr != nil {
+			log.Error().Err(merr).Str("review_id", review.ID).Msg("CreateReview: write outbox entry failed")
+			err = pkgerr.Internal("failed to write outbox entry")
+			return nil, err
+		}
+	}
+
+	// Update the ratings cache inside the same transaction so that the cache
+	// increment is atomic with the review insert and outbox write.
+	// If either fails the whole transaction rolls back — no split-brain window.
+	if hasVenue {
+		if err = uc.repo.UpdateVenueRatingTx(ctx, tx, in.VenueID, in.Rating); err != nil {
+			log.Error().Err(err).Str("venue_id", in.VenueID).Msg("CreateReview: update venue rating cache failed")
+			err = pkgerr.Internal("failed to update venue rating cache")
+			return nil, err
+		}
+	}
+	if hasMaster {
+		if err = uc.repo.UpdateMasterRatingTx(ctx, tx, in.MasterID, in.Rating); err != nil {
+			log.Error().Err(err).Str("master_id", in.MasterID).Msg("CreateReview: update master rating cache failed")
+			err = pkgerr.Internal("failed to update master rating cache")
+			return nil, err
+		}
+	}
+
+	if err = tx.Commit(ctx); err != nil {
+		log.Error().Err(err).Msg("CreateReview: commit tx failed")
+		return nil, pkgerr.Internal("failed to commit transaction")
 	}
 
 	return review, nil
@@ -128,14 +182,36 @@ func (uc *ReviewUseCase) GetReview(ctx context.Context, id string) (*domain.Revi
 	return uc.repo.GetByID(ctx, id)
 }
 
+const maxPage = 1000
+
+func validatePagination(page, pageSize int32) error {
+	if page < 1 || page > maxPage {
+		return pkgerr.InvalidArgument("page must be in [1, 1000]")
+	}
+	if pageSize < 1 || pageSize > 50 {
+		return pkgerr.InvalidArgument("page_size must be in [1, 50]")
+	}
+	return nil
+}
+
 func (uc *ReviewUseCase) ListVenueReviews(ctx context.Context, venueID string, page, pageSize int32) ([]*domain.Review, int32, error) {
+	if err := validatePagination(page, pageSize); err != nil {
+		return nil, 0, err
+	}
 	return uc.repo.ListByVenue(ctx, venueID, page, pageSize)
 }
 
 func (uc *ReviewUseCase) ListMasterReviews(ctx context.Context, masterID string, page, pageSize int32) ([]*domain.Review, int32, error) {
+	if err := validatePagination(page, pageSize); err != nil {
+		return nil, 0, err
+	}
 	return uc.repo.ListByMaster(ctx, masterID, page, pageSize)
 }
 
 func (uc *ReviewUseCase) GetVenueRating(ctx context.Context, venueID string) (*domain.VenueRating, error) {
 	return uc.repo.GetVenueRating(ctx, venueID)
+}
+
+func (uc *ReviewUseCase) GetMasterRating(ctx context.Context, masterID string) (*domain.MasterRating, error) {
+	return uc.repo.GetMasterRating(ctx, masterID)
 }

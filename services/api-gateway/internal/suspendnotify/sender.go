@@ -7,24 +7,25 @@ import (
 	"time"
 
 	"github.com/rs/zerolog"
+	crmv1 "github.com/tienlao/agregator/gen/go/crm/v1"
 	userv1 "github.com/tienlao/agregator/gen/go/user/v1"
-	venuev1 "github.com/tienlao/agregator/gen/go/venue/v1"
 	pkgmail "github.com/tienlao/agregator/pkg/mail"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
 
 // Sender рассылает письма владельцу и CRM-персоналу при смене статуса в агрегаторе (если задан SMTP).
+// Staff fan-out goes through crm-service (extracted from venue-service).
 type Sender struct {
-	venue      venuev1.VenueServiceClient
+	crm        crmv1.CRMServiceClient
 	userClient userv1.UserServiceClient
 	log        zerolog.Logger
 	mail       *pkgmail.Sender
 }
 
-func NewSender(log zerolog.Logger, venue venuev1.VenueServiceClient, userClient userv1.UserServiceClient) *Sender {
+func NewSender(log zerolog.Logger, crm crmv1.CRMServiceClient, userClient userv1.UserServiceClient) *Sender {
 	return &Sender{
-		venue:      venue,
+		crm:        crm,
 		userClient: userClient,
 		log:        log.With().Str("component", "suspendnotify").Logger(),
 		mail:       pkgmail.NewSenderFromEnv(),
@@ -66,12 +67,12 @@ func (s *Sender) NotifyVenueResumed(ctx context.Context, venueID, ownerID, venue
 func (s *Sender) recipientEmails(ctx context.Context, venueID, ownerID string) ([]string, error) {
 	userIDs := []string{ownerID}
 	if ownerID != "" {
-		staff, err := s.venue.ListVenueStaff(ctx, &venuev1.ListVenueStaffRequest{
+		staff, err := s.crm.ListStaff(ctx, &crmv1.ListStaffRequest{
 			VenueId: venueID,
 			ActorId: ownerID,
 		})
 		if err != nil {
-			s.log.Warn().Err(err).Str("venue_id", venueID).Msg("ListVenueStaff for partner mail failed, owner only")
+			s.log.Warn().Err(err).Str("venue_id", venueID).Msg("crm.ListStaff for partner mail failed, owner only")
 		} else {
 			for _, m := range staff.GetMembers() {
 				uid := strings.TrimSpace(m.GetUserId())

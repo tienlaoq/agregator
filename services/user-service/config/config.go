@@ -7,8 +7,6 @@ import (
 type Config struct {
 	GRPCPort string
 	Postgres config.PostgresConfig
-	Redis    config.RedisConfig
-	NATS     config.NATSConfig
 }
 
 func Load() Config {
@@ -17,7 +15,5 @@ func Load() Config {
 	return Config{
 		GRPCPort: config.GetEnv("GRPC_PORT", "50052"),
 		Postgres: pg,
-		Redis:    config.NewRedisConfig(),
-		NATS:     config.NewNATSConfig(),
 	}
 }

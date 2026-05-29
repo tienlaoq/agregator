@@ -1,6 +1,6 @@
-.PHONY: proto-gen build build-linux docker-build docker-up docker-down test infra-up infra-down migrate help
+.PHONY: proto-gen build build-linux docker-build docker-up docker-down test test-handler infra-up infra-down migrate help
 
-SERVICES = auth-service user-service venue-service booking-service review-service payment-service master-service api-gateway
+SERVICES = auth-service user-service venue-service booking-service review-service payment-service master-service crm-service api-gateway
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
@@ -12,14 +12,14 @@ build: ## Build all services (native)
 	@mkdir -p bin
 	@for svc in $(SERVICES); do \
 		echo "Building $$svc..."; \
-		cd services/$$svc && CGO_ENABLED=0 go build -o ../../bin/$$svc ./cmd/ && cd ../..; \
+		(cd services/$$svc && CGO_ENABLED=0 go build -o ../../bin/$$svc ./cmd/) || exit $$?; \
 	done
 
 build-linux: ## Cross-compile all services for Linux (Docker)
 	@mkdir -p bin/linux
 	@for svc in $(SERVICES); do \
 		echo "Building $$svc for linux..."; \
-		cd services/$$svc && CGO_ENABLED=0 GOOS=linux go build -o ../../bin/linux/$$svc ./cmd/ && cd ../..; \
+		(cd services/$$svc && CGO_ENABLED=0 GOOS=linux go build -o ../../bin/linux/$$svc ./cmd/) || exit $$?; \
 	done
 	@echo "All services built in bin/linux/"
 
@@ -35,8 +35,22 @@ docker-down: ## Stop all containers
 test: ## Run tests for all services
 	@for svc in $(SERVICES); do \
 		echo "Testing $$svc..."; \
-		cd services/$$svc && go test ./... && cd ../..; \
+		(cd services/$$svc && go test ./...) || exit $$?; \
 	done
+
+# golang:latest может быть старше 1.25; GOTOOLCHAIN=auto позволяет Go
+# скачать нужную версию самому (требует выход в сеть из контейнера).
+# Переопределить образ: make test-handler GO_DOCKER_IMAGE=golang:1.25rc2
+GO_DOCKER_IMAGE ?= golang:latest
+
+test-handler: ## Run api-gateway handler tests inside Docker (no local Go required)
+	docker run --rm \
+		-v "$(shell pwd)":/workspace \
+		-w /workspace \
+		-e GOTOOLCHAIN=auto \
+		-e GOFLAGS=-mod=mod \
+		$(GO_DOCKER_IMAGE) \
+		go test -v -count=1 ./services/api-gateway/internal/handler/...
 
 infra-up: ## Start infrastructure (PG, Redis, NATS, MinIO)
 	docker compose -f deploy/docker-compose.infra.yml up -d
@@ -54,13 +68,13 @@ tidy: ## Run go mod tidy for all modules
 	cd pkg && go mod tidy
 	@for svc in $(SERVICES); do \
 		echo "Tidying $$svc..."; \
-		cd services/$$svc && go mod tidy && cd ../..; \
+		(cd services/$$svc && go mod tidy) || exit $$?; \
 	done
 
 lint: ## Run golangci-lint on all services
 	@for svc in $(SERVICES); do \
 		echo "Linting $$svc..."; \
-		cd services/$$svc && golangci-lint run ./... && cd ../..; \
+		(cd services/$$svc && golangci-lint run ./...) || exit $$?; \
 	done
 
 run-auth: ## Run auth-service locally
@@ -83,6 +97,9 @@ run-payment: ## Run payment-service locally
 
 run-master: ## Run master-service locally
 	cd services/master-service && go run ./cmd/
+
+run-crm: ## Run crm-service locally
+	cd services/crm-service && go run ./cmd/
 
 run-gateway: ## Run api-gateway locally
 	cd services/api-gateway && go run ./cmd/

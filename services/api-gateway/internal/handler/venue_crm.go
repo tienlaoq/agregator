@@ -6,13 +6,17 @@ import (
 	"strings"
 
 	"github.com/go-chi/chi/v5"
+	crmv1 "github.com/tienlao/agregator/gen/go/crm/v1"
 	userv1 "github.com/tienlao/agregator/gen/go/user/v1"
-	venuev1 "github.com/tienlao/agregator/gen/go/venue/v1"
 	"github.com/tienlao/agregator/services/api-gateway/internal/apicatalog"
 	"github.com/tienlao/agregator/services/api-gateway/internal/middleware"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
+
+// CRM-related HTTP handlers proxy to crm-service. They live on VenueHandler
+// because routes nest under /owner/venues/{venueId}/... — the URL space is
+// venue-scoped even though the backing service is now separate.
 
 type venueStaffUserDisplay struct {
 	name  string
@@ -61,7 +65,7 @@ func (h *VenueHandler) ListVenueStaff(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	venueID := chi.URLParam(r, "venueId")
-	resp, err := h.client.ListVenueStaff(r.Context(), &venuev1.ListVenueStaffRequest{
+	resp, err := h.crm.ListStaff(r.Context(), &crmv1.ListStaffRequest{
 		VenueId: venueID,
 		ActorId: actorID,
 	})
@@ -125,8 +129,7 @@ func (h *VenueHandler) AddVenueStaffByEmail(w http.ResponseWriter, r *http.Reque
 		Email string `json:"email"`
 		Role  string `json:"role"`
 	}
-	if err := readJSON(r, &req); err != nil {
-		writeCatalog(w, apicatalog.GatewayRequestInvalidBody)
+	if !readJSONOrRespond(w, r, &req) {
 		return
 	}
 	email := strings.TrimSpace(strings.ToLower(req.Email))
@@ -149,7 +152,7 @@ func (h *VenueHandler) AddVenueStaffByEmail(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	_, err = h.client.AddVenueStaff(r.Context(), &venuev1.AddVenueStaffRequest{
+	_, err = h.crm.AddStaff(r.Context(), &crmv1.AddStaffRequest{
 		VenueId: venueID,
 		ActorId: actorID,
 		UserId:  u.GetId(),
@@ -171,7 +174,7 @@ func (h *VenueHandler) RemoveVenueStaff(w http.ResponseWriter, r *http.Request) 
 	venueID := chi.URLParam(r, "venueId")
 	targetID := chi.URLParam(r, "userId")
 
-	_, err := h.client.RemoveVenueStaff(r.Context(), &venuev1.RemoveVenueStaffRequest{
+	_, err := h.crm.RemoveStaff(r.Context(), &crmv1.RemoveStaffRequest{
 		VenueId: venueID,
 		ActorId: actorID,
 		UserId:  targetID,
@@ -190,12 +193,12 @@ func (h *VenueHandler) ListVenueCRMTasks(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	venueID := chi.URLParam(r, "venueId")
-	status := r.URL.Query().Get("status")
+	statusFilter := r.URL.Query().Get("status")
 
-	resp, err := h.client.ListVenueCRMTasks(r.Context(), &venuev1.ListVenueCRMTasksRequest{
+	resp, err := h.crm.ListTasks(r.Context(), &crmv1.ListTasksRequest{
 		VenueId: venueID,
 		ActorId: actorID,
-		Status:  status,
+		Status:  statusFilter,
 	})
 	if err != nil {
 		grpcErrorToHTTP(w, err)
@@ -238,12 +241,11 @@ func (h *VenueHandler) CreateVenueCRMTask(w http.ResponseWriter, r *http.Request
 		BookingID      *string `json:"booking_id"`
 		AssigneeUserID *string `json:"assignee_user_id"`
 	}
-	if err := readJSON(r, &req); err != nil {
-		writeCatalog(w, apicatalog.GatewayRequestInvalidBody)
+	if !readJSONOrRespond(w, r, &req) {
 		return
 	}
 
-	grpcReq := &venuev1.CreateVenueCRMTaskRequest{
+	grpcReq := &crmv1.CreateTaskRequest{
 		VenueId: venueID,
 		ActorId: actorID,
 		Title:   req.Title,
@@ -256,7 +258,7 @@ func (h *VenueHandler) CreateVenueCRMTask(w http.ResponseWriter, r *http.Request
 		grpcReq.AssigneeUserId = req.AssigneeUserID
 	}
 
-	resp, err := h.client.CreateVenueCRMTask(r.Context(), grpcReq)
+	resp, err := h.crm.CreateTask(r.Context(), grpcReq)
 	if err != nil {
 		grpcErrorToHTTP(w, err)
 		return
@@ -282,7 +284,7 @@ func (h *VenueHandler) CompleteVenueCRMTask(w http.ResponseWriter, r *http.Reque
 	venueID := chi.URLParam(r, "venueId")
 	taskID := chi.URLParam(r, "taskId")
 
-	_, err := h.client.CompleteVenueCRMTask(r.Context(), &venuev1.CompleteVenueCRMTaskRequest{
+	_, err := h.crm.CompleteTask(r.Context(), &crmv1.CompleteTaskRequest{
 		VenueId: venueID,
 		ActorId: actorID,
 		TaskId:  taskID,

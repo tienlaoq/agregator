@@ -13,6 +13,12 @@ const (
 	StatusRejected      = "rejected"
 	StatusSuspended     = "suspended"
 
+	VenueTypeBanya  = "banya"
+	VenueTypeSauna  = "sauna"
+	VenueTypeHammam = "hammam"
+
+	MaxVenuePhotos = 24
+
 	PayoutLegalFormEmpty        = ""
 	PayoutLegalFormIP           = "ip"
 	PayoutLegalFormOOO          = "ooo"
@@ -56,10 +62,8 @@ type Venue struct {
 	Services    []VenueService
 	Photos            []VenuePhoto
 	Halls             []VenueHall
-	CreatedAt         time.Time
-	UpdatedAt         time.Time
-	// ManagementAccess is set only for ListForManagingUser (owner | manager | staff).
-	ManagementAccess string
+	CreatedAt time.Time
+	UpdatedAt time.Time
 }
 
 type ModerationHistoryEntry struct {

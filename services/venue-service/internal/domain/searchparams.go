@@ -4,14 +4,7 @@ import "strings"
 
 // EffectiveCities — уникальные непустые города для фильтра (ИЛИ).
 func (p SearchParams) EffectiveCities() []string {
-	if len(p.Cities) > 0 {
-		return normalizeCityList(p.Cities)
-	}
-	c := strings.TrimSpace(p.City)
-	if c != "" {
-		return []string{c}
-	}
-	return nil
+	return normalizeCityList(p.Cities)
 }
 
 func normalizeCityList(in []string) []string {

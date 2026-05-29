@@ -3,7 +3,6 @@ package handler
 import (
 	"fmt"
 	"net/http"
-	"strconv"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -47,10 +46,7 @@ func (h *BookingHandler) Create(w http.ResponseWriter, r *http.Request) {
 		Guests     int32    `json:"guests"`
 		Comment    string   `json:"comment"`
 	}
-	if err := readJSON(r, &req); err != nil {
-		writeCatalog(w, apicatalog.GatewayRequestInvalidBody)
-		return
-	}
+	if !readJSONOrRespond(w, r, &req) { return }
 
 	timeFrom := req.TimeFrom
 	if timeFrom == "" {
@@ -104,8 +100,14 @@ func (h *BookingHandler) ListMy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	q := r.URL.Query()
-	page, _ := strconv.Atoi(q.Get("page"))
-	pageSize, _ := strconv.Atoi(q.Get("page_size"))
+	page, ok := queryInt(w, r, "page", 0, 0, 10000)
+	if !ok {
+		return
+	}
+	pageSize, ok := queryInt(w, r, "page_size", 0, 0, 200)
+	if !ok {
+		return
+	}
 
 	resp, err := h.client.ListUserBookings(r.Context(), &bookingv1.ListUserBookingsRequest{
 		UserId:   userID,
@@ -167,16 +169,19 @@ func (h *BookingHandler) ListVenueBookings(w http.ResponseWriter, r *http.Reques
 	venueID := chi.URLParam(r, "venueId")
 
 	q := r.URL.Query()
-	page, _ := strconv.Atoi(q.Get("page"))
-	pageSize, _ := strconv.Atoi(q.Get("page_size"))
+	pageSize, ok := queryInt(w, r, "page_size", 20, 1, 200)
+	if !ok {
+		return
+	}
+	cursor := q.Get("cursor") // keyset token; empty = first page
 
 	resp, err := h.client.ListVenueBookings(r.Context(), &bookingv1.ListVenueBookingsRequest{
 		VenueId:  venueID,
 		OwnerId:  ownerID,
 		Status:   q.Get("status"),
 		Date:     q.Get("date"),
-		Page:     int32(page),
 		PageSize: int32(pageSize),
+		Cursor:   cursor,
 	})
 	if err != nil {
 		grpcErrorToHTTP(w, err)
@@ -191,7 +196,11 @@ func (h *BookingHandler) ListVenueBookings(w http.ResponseWriter, r *http.Reques
 			b["user_name"] = n
 		}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"bookings": out, "total": resp.GetTotal()})
+	result := map[string]any{"bookings": out, "total": resp.GetTotal()}
+	if nc := resp.GetNextCursor(); nc != "" {
+		result["next_cursor"] = nc
+	}
+	writeJSON(w, http.StatusOK, result)
 }
 
 func (h *BookingHandler) resolveUserNames(r *http.Request, bookings []map[string]any) map[string]string {
@@ -303,10 +312,7 @@ func (h *BookingHandler) AddBookingStaffNote(w http.ResponseWriter, r *http.Requ
 	var req struct {
 		Body string `json:"body"`
 	}
-	if err := readJSON(r, &req); err != nil {
-		writeCatalog(w, apicatalog.GatewayRequestInvalidBody)
-		return
-	}
+	if !readJSONOrRespond(w, r, &req) { return }
 
 	resp, err := h.client.AddBookingStaffNote(r.Context(), &bookingv1.AddBookingStaffNoteRequest{
 		BookingId:       bookingID,

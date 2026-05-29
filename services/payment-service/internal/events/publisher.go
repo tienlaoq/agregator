@@ -1,52 +1,12 @@
+// Deleted: Publisher and all direct-publish helpers have been removed.
+//
+// Payment status events are now published exclusively via the transactional
+// outbox pattern: PaymentUseCase writes an OutboxEvent row in the same DB
+// transaction as the status UPDATE, and internal/outbox/worker.go relays it
+// to NATS asynchronously.  This eliminates the race where a DB write succeeded
+// but the in-process NATS publish was lost (service crash, network partition).
+//
+// Do NOT re-add a synchronous Publisher here.  If you need a new event type,
+// add it to domain/outbox.go (OutboxSubject constant + subject string) and wire
+// it through UpdateStatusWithOutbox in the usecase.
 package events
-
-import (
-	"context"
-	"encoding/json"
-	"fmt"
-
-	"github.com/nats-io/nats.go"
-
-	"github.com/tienlao/agregator/services/payment-service/internal/domain"
-)
-
-type Publisher struct {
-	js nats.JetStreamContext
-}
-
-func NewPublisher(js nats.JetStreamContext) *Publisher {
-	return &Publisher{js: js}
-}
-
-type paymentEvent struct {
-	PaymentID              string `json:"payment_id"`
-	BookingID              string `json:"booking_id"`
-	Amount                 int64  `json:"amount"`
-	Status                 string `json:"status"`
-	PlatformFeeKopecks     int64  `json:"platform_fee_kopecks,omitempty"`
-	CounterpartyNetKopecks int64  `json:"counterparty_net_kopecks,omitempty"`
-}
-
-func (p *Publisher) PublishPaymentCompleted(ctx context.Context, payment *domain.Payment) error {
-	return p.publish("payment.completed", payment)
-}
-
-func (p *Publisher) PublishPaymentFailed(ctx context.Context, payment *domain.Payment) error {
-	return p.publish("payment.failed", payment)
-}
-
-func (p *Publisher) publish(subject string, payment *domain.Payment) error {
-	data, err := json.Marshal(paymentEvent{
-		PaymentID:              payment.ID,
-		BookingID:              payment.BookingID,
-		Amount:                 payment.Amount,
-		Status:                 payment.Status,
-		PlatformFeeKopecks:     payment.PlatformFeeKopecks,
-		CounterpartyNetKopecks: payment.CounterpartyNetKopecks,
-	})
-	if err != nil {
-		return fmt.Errorf("marshal event: %w", err)
-	}
-	_, err = p.js.Publish(subject, data)
-	return err
-}

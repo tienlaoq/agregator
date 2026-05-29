@@ -10,9 +10,11 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	crmv1 "github.com/tienlao/agregator/gen/go/crm/v1"
 	userv1 "github.com/tienlao/agregator/gen/go/user/v1"
 	venuev1 "github.com/tienlao/agregator/gen/go/venue/v1"
 	pkgcities "github.com/tienlao/agregator/pkg/cities"
+	"github.com/tienlao/agregator/pkg/storage"
 	"github.com/tienlao/agregator/services/api-gateway/internal/apicatalog"
 	"github.com/tienlao/agregator/services/api-gateway/internal/middleware"
 	"github.com/tienlao/agregator/services/api-gateway/internal/suspendnotify"
@@ -22,8 +24,9 @@ import (
 type VenueHandler struct {
 	client          venuev1.VenueServiceClient
 	userClient      userv1.UserServiceClient // optional; used for staff invite by email
-	uploadRoot      string                   // absolute or cwd-relative; files under uploadRoot/venues/{venueID}/
-	suspendNotifier *suspendnotify.Sender    // optional; письма владельцу и персоналу при приостановке (SMTP)
+	crm             crmv1.CRMServiceClient   // staff & CRM tasks (extracted from venue-service)
+	storage         storage.Uploader
+	suspendNotifier *suspendnotify.Sender // optional; письма владельцу и персоналу при приостановке (SMTP)
 }
 
 type VenueHandlerOption func(*VenueHandler)
@@ -34,8 +37,11 @@ func WithSuspendNotifier(n *suspendnotify.Sender) VenueHandlerOption {
 	}
 }
 
-func NewVenueHandler(client venuev1.VenueServiceClient, userClient userv1.UserServiceClient, uploadRoot string, opts ...VenueHandlerOption) *VenueHandler {
-	h := &VenueHandler{client: client, userClient: userClient, uploadRoot: uploadRoot}
+// NewVenueHandler creates a VenueHandler. The crm client serves the owner
+// cabinet (staff CRUD, CRM tasks) and the management_access composition for
+// owner-facing venue lists.
+func NewVenueHandler(client venuev1.VenueServiceClient, userClient userv1.UserServiceClient, crm crmv1.CRMServiceClient, up storage.Uploader, opts ...VenueHandlerOption) *VenueHandler {
+	h := &VenueHandler{client: client, userClient: userClient, crm: crm, storage: up}
 	for _, o := range opts {
 		o(h)
 	}
@@ -55,8 +61,14 @@ func socialLinksMapForJSON(s string) map[string]any {
 }
 
 func (h *VenueHandler) List(w http.ResponseWriter, r *http.Request) {
-	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
-	pageSize, _ := strconv.Atoi(r.URL.Query().Get("page_size"))
+	page, ok := queryInt(w, r, "page", 0, 0, 10000)
+	if !ok {
+		return
+	}
+	pageSize, ok := queryInt(w, r, "page_size", 0, 0, 200)
+	if !ok {
+		return
+	}
 
 	resp, err := h.client.ListVenues(r.Context(), &venuev1.ListVenuesRequest{
 		Page:     int32(page),
@@ -85,8 +97,14 @@ func (h *VenueHandler) Search(w http.ResponseWriter, r *http.Request) {
 	priceMin, _ := strconv.ParseInt(q.Get("price_min"), 10, 64)
 	priceMax, _ := strconv.ParseInt(q.Get("price_max"), 10, 64)
 	ratingMin, _ := strconv.ParseFloat(q.Get("rating_min"), 64)
-	page, _ := strconv.Atoi(q.Get("page"))
-	pageSize, _ := strconv.Atoi(q.Get("page_size"))
+	page, ok := queryInt(w, r, "page", 0, 0, 10000)
+	if !ok {
+		return
+	}
+	pageSize, ok := queryInt(w, r, "page_size", 0, 0, 200)
+	if !ok {
+		return
+	}
 
 	var amenities []string
 	if v := q.Get("amenities"); v != "" {
@@ -219,11 +237,9 @@ func (h *VenueHandler) AvailabilityBySlug(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	durationMin := 120
-	if d := r.URL.Query().Get("duration_min"); d != "" {
-		if n, err := strconv.Atoi(d); err == nil && n >= 30 && n <= 720 {
-			durationMin = n
-		}
+	durationMin, ok := queryInt(w, r, "duration_min", 120, 30, 720)
+	if !ok {
+		return
 	}
 
 	v, err := h.client.GetVenueBySlug(r.Context(), &venuev1.GetVenueBySlugRequest{Slug: slug})
@@ -238,23 +254,31 @@ func (h *VenueHandler) AvailabilityBySlug(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	vid := v.GetId()
-	slots := bookingCandidateStartTimes()
-	available := make([]string, 0, len(slots))
-	ctx := r.Context()
-	for _, start := range slots {
-		timeTo := slotEndFromDuration(start, durationMin)
-		resp, err := h.client.CheckSlotAvailability(ctx, &venuev1.CheckSlotRequest{
-			VenueId:  vid,
-			Date:     date,
+	starts := bookingCandidateStartTimes()
+
+	// Build batch request: one interval per candidate start time.
+	batchSlots := make([]*venuev1.SlotInterval, len(starts))
+	for i, start := range starts {
+		batchSlots[i] = &venuev1.SlotInterval{
 			TimeFrom: start,
-			TimeTo:   timeTo,
-		})
-		if err != nil {
-			grpcErrorToHTTP(w, err)
-			return
+			TimeTo:   slotEndFromDuration(start, durationMin),
 		}
-		if resp.GetAvailable() {
+	}
+
+	batchResp, err := h.client.BatchCheckSlotAvailability(r.Context(), &venuev1.BatchCheckSlotRequest{
+		VenueId: v.GetId(),
+		Date:    date,
+		Slots:   batchSlots,
+	})
+	if err != nil {
+		grpcErrorToHTTP(w, err)
+		return
+	}
+
+	avail := batchResp.GetAvailable()
+	available := make([]string, 0, len(starts))
+	for i, start := range starts {
+		if i < len(avail) && avail[i] {
 			available = append(available, start)
 		}
 	}
@@ -297,10 +321,7 @@ func (h *VenueHandler) Create(w http.ResponseWriter, r *http.Request) {
 		PayoutLegalForm         string                `json:"payout_legal_form"`
 		YookassaSellerAccountID string                `json:"yookassa_seller_account_id"`
 	}
-	if err := readJSON(r, &req); err != nil {
-		writeCatalog(w, apicatalog.GatewayRequestInvalidBody)
-		return
-	}
+	if !readJSONOrRespond(w, r, &req) { return }
 
 	grpcServices := make([]*venuev1.VenueServiceItem, len(req.Services))
 	for i, s := range req.Services {
@@ -405,10 +426,7 @@ func (h *VenueHandler) Update(w http.ResponseWriter, r *http.Request) {
 		PayoutLegalForm         *string                `json:"payout_legal_form"`
 		YookassaSellerAccountID *string                `json:"yookassa_seller_account_id"`
 	}
-	if err := readJSON(r, &req); err != nil {
-		writeCatalog(w, apicatalog.GatewayRequestInvalidBody)
-		return
-	}
+	if !readJSONOrRespond(w, r, &req) { return }
 
 	grpcReq := &venuev1.UpdateVenueRequest{
 		Id:      venueID,
@@ -504,19 +522,64 @@ func (h *VenueHandler) ListOwnerVenues(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resp, err := h.client.ListOwnerVenues(r.Context(), &venuev1.ListOwnerVenuesRequest{
-		OwnerId: userID,
+	// 1) Ask CRM which venues this user can manage (and in what role).
+	// CRM owns the staff / management-access model; venue-service no longer
+	// knows about ownership beyond the owner_id column.
+	managed, err := h.crm.ListManagedVenues(r.Context(), &crmv1.ListManagedVenuesRequest{
+		UserId: userID,
 	})
 	if err != nil {
 		grpcErrorToHTTP(w, err)
 		return
 	}
+	mvs := managed.GetVenues()
+	if len(mvs) == 0 {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"venues":    []map[string]any{},
+			"total":     0,
+			"page":      1,
+			"page_size": 0,
+		})
+		return
+	}
+
+	// 2) Fetch the venue cards in a single batch RPC.
+	ids := make([]string, 0, len(mvs))
+	accessByID := make(map[string]string, len(mvs))
+	for _, mv := range mvs {
+		id := mv.GetVenueId()
+		if id == "" {
+			continue
+		}
+		ids = append(ids, id)
+		accessByID[id] = mv.GetAccess()
+	}
+	batch, err := h.client.GetVenuesBatch(r.Context(), &venuev1.GetVenuesBatchRequest{Ids: ids})
+	if err != nil {
+		grpcErrorToHTTP(w, err)
+		return
+	}
+
+	// 3) Compose the response preserving CRM's ordering (newest first).
+	venues := batch.GetVenues()
+	out := make([]map[string]any, 0, len(ids))
+	for _, id := range ids {
+		v := venues[id]
+		if v == nil {
+			continue
+		}
+		m := venueToJSON(v, true)
+		if access := accessByID[id]; access != "" {
+			m["management_access"] = access
+		}
+		out = append(out, m)
+	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"venues":    venueList(resp.GetVenues(), true),
-		"total":     resp.GetTotal(),
-		"page":      resp.GetPage(),
-		"page_size": resp.GetPageSize(),
+		"venues":    out,
+		"total":     int32(len(out)),
+		"page":      int32(1),
+		"page_size": int32(len(out)),
 	})
 }
 
@@ -569,10 +632,7 @@ func (h *VenueHandler) CreateOwnerSlotBlock(w http.ResponseWriter, r *http.Reque
 		TimeTo   string `json:"time_to"`
 		Note     string `json:"note"`
 	}
-	if err := readJSON(r, &req); err != nil {
-		writeCatalog(w, apicatalog.GatewayRequestInvalidBody)
-		return
-	}
+	if !readJSONOrRespond(w, r, &req) { return }
 
 	resp, err := h.client.CreateManualSlotBlock(r.Context(), &venuev1.CreateManualSlotBlockRequest{
 		OwnerId:  ownerID,
@@ -668,8 +728,14 @@ func venueHallItemsToProto(items []venueHallItemReq) []*venuev1.VenueHallInput {
 }
 
 func (h *VenueHandler) ListPending(w http.ResponseWriter, r *http.Request) {
-	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
-	pageSize, _ := strconv.Atoi(r.URL.Query().Get("page_size"))
+	page, ok := queryInt(w, r, "page", 0, 0, 10000)
+	if !ok {
+		return
+	}
+	pageSize, ok := queryInt(w, r, "page_size", 0, 0, 200)
+	if !ok {
+		return
+	}
 	status := r.URL.Query().Get("status")
 	nameQuery := strings.TrimSpace(r.URL.Query().Get("q"))
 
@@ -705,10 +771,7 @@ func (h *VenueHandler) Moderate(w http.ResponseWriter, r *http.Request) {
 		Action  string `json:"action"`
 		Comment string `json:"comment"`
 	}
-	if err := readJSON(r, &req); err != nil {
-		writeCatalog(w, apicatalog.GatewayRequestInvalidBody)
-		return
-	}
+	if !readJSONOrRespond(w, r, &req) { return }
 
 	resp, err := h.client.ModerateVenue(r.Context(), &venuev1.ModerateVenueRequest{
 		VenueId:     venueID,
@@ -853,9 +916,9 @@ func venueToJSON(v *venuev1.VenueResponse, includeVerification bool) map[string]
 		result["yookassa_seller_account_id"] = v.GetYookassaSellerAccountId()
 	}
 
-	if ma := strings.TrimSpace(v.GetManagementAccess()); ma != "" {
-		result["management_access"] = ma
-	}
+	// management_access is no longer carried inside the Venue proto: it is a
+	// CRM concern. ListOwnerVenues composes it via crm.ListManagedVenues; other
+	// venue endpoints intentionally omit it.
 
 	return result
 }

@@ -2,7 +2,6 @@ package handler
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -33,9 +32,9 @@ func TestSupportContactSuccess(t *testing.T) {
 
 	body := []byte(`{"topic":"Оплата","message":"Не прошел платеж","booking_id":"b1","payment_id":"p1","source_page":"/my/bookings"}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/support/contact", bytes.NewReader(body))
-	ctx := context.WithValue(req.Context(), middleware.CtxUserID, "u-1")
-	ctx = context.WithValue(ctx, middleware.CtxRole, "user")
-	ctx = context.WithValue(ctx, middleware.CtxEmail, "user@example.com")
+	ctx := middleware.WithUserID(req.Context(), "u-1")
+	ctx = middleware.WithRole(ctx, "user")
+	ctx = middleware.WithEmail(ctx, "user@example.com")
 	req = req.WithContext(ctx)
 	rec := httptest.NewRecorder()
 

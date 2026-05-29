@@ -34,11 +34,13 @@ func (m *mockRepo) ListThreadsForUser(ctx context.Context, userID uuid.UUID, lim
 func (m *mockRepo) ListMessages(ctx context.Context, threadID uuid.UUID, limit, offset int32) ([]domain.Message, int32, error) {
 	return nil, 0, nil
 }
-func (m *mockRepo) InsertMessage(ctx context.Context, threadID, authorUserID uuid.UUID, text, clientMsgID string) (*domain.Message, error) {
+func (m *mockRepo) InsertMessage(ctx context.Context, threadID, authorUserID uuid.UUID, text, clientMsgID string) (*domain.Message, *domain.Thread, error) {
 	m.lastClientMsgID = clientMsgID
-	return &domain.Message{
+	msg := &domain.Message{
 		ID: uuid.New(), ThreadID: threadID, AuthorUserID: authorUserID, Text: text, ClientMsgID: clientMsgID, CreatedAt: time.Now(),
-	}, nil
+	}
+	// Return the current thread so SendMessage usecase doesn't need a second fetch.
+	return msg, m.thread, nil
 }
 func (m *mockRepo) MarkRead(ctx context.Context, threadID, userID uuid.UUID) error { return nil }
 
@@ -47,7 +49,8 @@ func TestEnsureThread_SortsParticipants(t *testing.T) {
 	uc := New(r)
 	a := uuid.New().String()
 	b := uuid.New().String()
-	_, err := uc.EnsureThread(context.Background(), domain.ThreadKindVenueBooking, uuid.New().String(), []string{b, a, b})
+	// actor must be one of the participants.
+	_, err := uc.EnsureThread(context.Background(), domain.ThreadKindVenueBooking, uuid.New().String(), a, []string{b, a, b})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -59,6 +62,18 @@ func TestEnsureThread_SortsParticipants(t *testing.T) {
 	}
 	if !slices.Contains(r.thread.ParticipantUserIDs, a) || !slices.Contains(r.thread.ParticipantUserIDs, b) {
 		t.Fatalf("participants are not sorted/deduped: %#v", r.thread.ParticipantUserIDs)
+	}
+}
+
+func TestEnsureThread_DeniesActorNotInParticipants(t *testing.T) {
+	r := &mockRepo{}
+	uc := New(r)
+	a := uuid.New().String()
+	b := uuid.New().String()
+	outsider := uuid.New().String()
+	_, err := uc.EnsureThread(context.Background(), domain.ThreadKindVenueBooking, uuid.New().String(), outsider, []string{a, b})
+	if err == nil {
+		t.Fatal("expected permission denied when actor is not a participant")
 	}
 }
 

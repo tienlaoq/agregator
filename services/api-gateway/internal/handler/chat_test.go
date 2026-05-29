@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/rs/zerolog"
 	bookingv1 "github.com/tienlao/agregator/gen/go/booking/v1"
 	chatv1 "github.com/tienlao/agregator/gen/go/chat/v1"
 	masterv1 "github.com/tienlao/agregator/gen/go/master/v1"
@@ -50,8 +51,20 @@ type fakeBookingClient struct {
 	booking *bookingv1.BookingResponse
 }
 
-func (f *fakeBookingClient) GetBooking(context.Context, *bookingv1.GetBookingRequest, ...grpc.CallOption) (*bookingv1.BookingResponse, error) {
+func (f *fakeBookingClient) GetBooking(_ context.Context, in *bookingv1.GetBookingRequest, _ ...grpc.CallOption) (*bookingv1.BookingResponse, error) {
 	return f.booking, nil
+}
+
+func (f *fakeBookingClient) GetBookingsBatch(_ context.Context, in *bookingv1.GetBookingsBatchRequest, _ ...grpc.CallOption) (*bookingv1.GetBookingsBatchResponse, error) {
+	resp := &bookingv1.GetBookingsBatchResponse{Bookings: make(map[string]*bookingv1.BookingResponse)}
+	if f.booking != nil {
+		for _, id := range in.GetIds() {
+			if id == f.booking.GetId() {
+				resp.Bookings[id] = f.booking
+			}
+		}
+	}
+	return resp, nil
 }
 
 type fakeVenueClient struct {
@@ -63,16 +76,12 @@ type fakeVenueClient struct {
 func (f *fakeVenueClient) GetVenue(context.Context, *venuev1.GetVenueRequest, ...grpc.CallOption) (*venuev1.VenueResponse, error) {
 	return &venuev1.VenueResponse{OwnerId: f.ownerID}, nil
 }
-func (f *fakeVenueClient) GetVenueManagementAccess(context.Context, *venuev1.GetVenueManagementAccessRequest, ...grpc.CallOption) (*venuev1.GetVenueManagementAccessResponse, error) {
-	return &venuev1.GetVenueManagementAccessResponse{Access: f.access}, nil
+func (f *fakeVenueClient) GetVenuesBatch(_ context.Context, in *venuev1.GetVenuesBatchRequest, _ ...grpc.CallOption) (*venuev1.GetVenuesBatchResponse, error) {
+	return &venuev1.GetVenuesBatchResponse{Venues: make(map[string]*venuev1.VenueResponse)}, nil
 }
-func (f *fakeVenueClient) ListVenueStaff(context.Context, *venuev1.ListVenueStaffRequest, ...grpc.CallOption) (*venuev1.ListVenueStaffResponse, error) {
-	out := make([]*venuev1.VenueStaffMember, 0, len(f.staff))
-	for _, id := range f.staff {
-		out = append(out, &venuev1.VenueStaffMember{UserId: id, Role: "staff"})
-	}
-	return &venuev1.ListVenueStaffResponse{Members: out}, nil
-}
+// Note: f.access / f.staff drive the resolverFakeCRM mirrored at the
+// NewChatHandler call site (see TestChatEnsureThread_ACLMatrix), since
+// CRM RPCs no longer live on venue.proto.
 
 type fakeMasterClient struct {
 	booking *masterv1.MasterBooking
@@ -84,6 +93,21 @@ func (f *fakeMasterClient) GetMasterBooking(context.Context, *masterv1.GetMaster
 		return nil, f.err
 	}
 	return &masterv1.MasterBookingResponse{Booking: f.booking}, nil
+}
+
+func (f *fakeMasterClient) GetMasterBookingsBatch(_ context.Context, in *masterv1.GetMasterBookingsBatchRequest, _ ...grpc.CallOption) (*masterv1.GetMasterBookingsBatchResponse, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	resp := &masterv1.GetMasterBookingsBatchResponse{Bookings: make(map[string]*masterv1.MasterBooking)}
+	if f.booking != nil {
+		for _, id := range in.GetBookingIds() {
+			if id == f.booking.GetId() {
+				resp.Bookings[id] = f.booking
+			}
+		}
+	}
+	return resp, nil
 }
 
 func TestChatEnsureThread_ACLMatrix(t *testing.T) {
@@ -181,10 +205,15 @@ func TestChatEnsureThread_ACLMatrix(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			h := NewChatHandler(&fakeChatClient{}, &fakeBookingClient{booking: tc.booking}, tc.venue, tc.master, nil, nil, nil, nil)
+			// The CRM extraction moved access / staff out of venue-service.
+			// Tests still drive the scenario from fakeVenueClient.access/staff
+			// — mirror those into a resolverFakeCRM so the handler observes the
+			// same world.
+			crm := &resolverFakeCRM{access: tc.venue.access, staff: tc.venue.staff}
+			h := NewChatHandler(context.Background(), zerolog.Nop(), &fakeChatClient{}, &fakeBookingClient{booking: tc.booking}, tc.venue, tc.master, nil, crm, nil, nil, nil)
 			body := []byte(`{"kind":"` + tc.kind + `","ref_id":"` + tc.refID + `"}`)
 			req := httptest.NewRequest(http.MethodPost, "/api/v1/chat/threads", bytes.NewReader(body))
-			req = req.WithContext(context.WithValue(req.Context(), middleware.CtxUserID, tc.userID))
+			req = req.WithContext(middleware.WithUserID(req.Context(), tc.userID))
 			rec := httptest.NewRecorder()
 			h.EnsureThread(rec, req)
 			if rec.Code != tc.status {
@@ -219,10 +248,10 @@ func (f *fakeChatClientSendCapture) MarkRead(context.Context, *chatv1.MarkReadRe
 }
 
 func TestChatSendMessage_PropagatesClientMsgID(t *testing.T) {
-	h := NewChatHandler(&fakeChatClientSendCapture{}, &fakeBookingClient{}, &fakeVenueClient{}, &fakeMasterClient{}, nil, nil, nil, nil)
+	h := NewChatHandler(context.Background(), zerolog.Nop(), &fakeChatClientSendCapture{}, &fakeBookingClient{}, &fakeVenueClient{}, &fakeMasterClient{}, nil, &resolverFakeCRM{}, nil, nil, nil)
 	body := []byte(`{"text":"hi","client_msg_id":"c-123"}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/v2/chat/threads/t1/messages", bytes.NewReader(body))
-	req = req.WithContext(context.WithValue(req.Context(), middleware.CtxUserID, "u1"))
+	req = req.WithContext(middleware.WithUserID(req.Context(), "u1"))
 	rec := httptest.NewRecorder()
 	// URL param emulation for chi
 	rctx := chi.NewRouteContext()

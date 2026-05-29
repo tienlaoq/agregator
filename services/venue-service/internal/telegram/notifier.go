@@ -1,6 +1,7 @@
 package telegram
 
 import (
+	"context"
 	"fmt"
 	"html"
 	"strings"
@@ -17,9 +18,6 @@ type Notifier struct {
 
 func NewNotifier(botToken, chatID, adminURL string) *Notifier {
 	adminURL = strings.TrimSuffix(strings.TrimSpace(adminURL), "/")
-	if adminURL == "" {
-		adminURL = "http://localhost:3000"
-	}
 	return &Notifier{
 		client:   pkgtelegram.NewClient(botToken, chatID),
 		adminURL: adminURL,
@@ -31,7 +29,7 @@ func (n *Notifier) Enabled() bool {
 	return n.client.Enabled()
 }
 
-func (n *Notifier) NotifyNewVenue(venue *domain.Venue) error {
+func (n *Notifier) NotifyNewVenue(ctx context.Context, venue *domain.Venue) error {
 	if !n.client.Enabled() {
 		return nil
 	}
@@ -83,10 +81,10 @@ func (n *Notifier) NotifyNewVenue(venue *domain.Venue) error {
 		html.EscapeString(adminLink),
 	)
 
-	return n.client.SendHTML(text)
+	return n.client.SendHTML(ctx, text)
 }
 
-func (n *Notifier) NotifyModerated(venue *domain.Venue) error {
+func (n *Notifier) NotifyModerated(ctx context.Context, venue *domain.Venue) error {
 	if !n.client.Enabled() {
 		return nil
 	}
@@ -124,5 +122,5 @@ func (n *Notifier) NotifyModerated(venue *domain.Venue) error {
 		text += fmt.Sprintf("\nКомментарий: %s", html.EscapeString(venue.ModerationComment))
 	}
 
-	return n.client.SendHTML(text)
+	return n.client.SendHTML(ctx, text)
 }

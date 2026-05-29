@@ -2,10 +2,12 @@ package usecase
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
@@ -13,13 +15,33 @@ import (
 	"google.golang.org/grpc/status"
 
 	bookingv1 "github.com/tienlao/agregator/gen/go/booking/v1"
+	pkgerr "github.com/tienlao/agregator/pkg/errors"
 	"github.com/tienlao/agregator/services/review-service/internal/domain"
 	"github.com/tienlao/agregator/services/review-service/internal/events"
 )
 
+// newUC is a convenience constructor used by most tests.
+// It wires a mockOutboxRepo so outbox writes are captured but never hit Postgres.
+func newUC(repo *mockReviewRepo, outbox *mockOutboxRepo, booking *mockBookingClient) *ReviewUseCase {
+	return NewReviewUseCaseWithOutbox(repo, outbox, booking, nil)
+}
+
+// confirmedBooking returns a booking client that always says "completed".
+func confirmedBooking() *mockBookingClient {
+	return &mockBookingClient{
+		HasCompletedBookingFunc: func(_ context.Context, _ *bookingv1.HasCompletedBookingRequest, _ ...grpc.CallOption) (*bookingv1.HasCompletedBookingResponse, error) {
+			return &bookingv1.HasCompletedBookingResponse{HasCompleted: true}, nil
+		},
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Validation
+// ---------------------------------------------------------------------------
+
 func TestCreateReview_InvalidRating(t *testing.T) {
 	ctx := context.Background()
-	uc := NewReviewUseCase(&mockReviewRepo{}, &mockBookingClient{}, &mockVenueClient{}, nil, events.NewPublisher(nil))
+	uc := newUC(&mockReviewRepo{}, &mockOutboxRepo{}, &mockBookingClient{})
 
 	for _, rating := range []int32{0, 6, -1} {
 		t.Run(fmt.Sprintf("rating_%d", rating), func(t *testing.T) {
@@ -40,156 +62,485 @@ func TestCreateReview_InvalidRating(t *testing.T) {
 
 func TestCreateReview_InvalidTargetCombination(t *testing.T) {
 	ctx := context.Background()
-	uc := NewReviewUseCase(&mockReviewRepo{}, &mockBookingClient{}, &mockVenueClient{}, nil, nil)
+	uc := newUC(&mockReviewRepo{}, &mockOutboxRepo{}, &mockBookingClient{})
 
-	_, err := uc.CreateReview(ctx, CreateReviewInput{
-		UserID:   "u1",
-		Rating:   5,
-		Text:     "ok",
-		VenueID:  "",
-		MasterID: "",
-	})
+	// both empty
+	_, err := uc.CreateReview(ctx, CreateReviewInput{UserID: "u1", Rating: 5, Text: "ok"})
 	require.Error(t, err)
 	st, ok := status.FromError(err)
 	require.True(t, ok)
 	assert.Equal(t, codes.InvalidArgument, st.Code())
 
-	_, err = uc.CreateReview(ctx, CreateReviewInput{
-		UserID:   "u1",
-		Rating:   5,
-		Text:     "ok",
-		VenueID:  "v1",
-		MasterID: "m1",
-	})
+	// both set
+	_, err = uc.CreateReview(ctx, CreateReviewInput{UserID: "u1", Rating: 5, Text: "ok", VenueID: "v1", MasterID: "m1"})
 	require.Error(t, err)
 	st, ok = status.FromError(err)
 	require.True(t, ok)
 	assert.Equal(t, codes.InvalidArgument, st.Code())
 }
 
-func TestCreateReview_Success(t *testing.T) {
+func TestCreateReview_UnconfirmedVenueBooking(t *testing.T) {
 	ctx := context.Background()
-	var gotCreate *domain.Review
-	var bookingReq *bookingv1.HasCompletedBookingRequest
-	var updateVenueRatingCalls []string
-
-	repo := &mockReviewRepo{
-		CreateFunc: func(ctx context.Context, review *domain.Review) error {
-			gotCreate = review
-			review.ID = "review-id-1"
-			return nil
+	uc := newUC(&mockReviewRepo{}, &mockOutboxRepo{}, &mockBookingClient{
+		HasCompletedBookingFunc: func(_ context.Context, _ *bookingv1.HasCompletedBookingRequest, _ ...grpc.CallOption) (*bookingv1.HasCompletedBookingResponse, error) {
+			return &bookingv1.HasCompletedBookingResponse{HasCompleted: false}, nil
 		},
-		UpdateVenueRatingFunc: func(ctx context.Context, venueID string) error {
-			updateVenueRatingCalls = append(updateVenueRatingCalls, venueID)
-			return nil
-		},
-	}
-	bookingClient := &mockBookingClient{
-		HasCompletedBookingFunc: func(ctx context.Context, in *bookingv1.HasCompletedBookingRequest, opts ...grpc.CallOption) (*bookingv1.HasCompletedBookingResponse, error) {
-			bookingReq = in
-			return &bookingv1.HasCompletedBookingResponse{HasCompleted: true}, nil
-		},
-	}
-
-	uc := NewReviewUseCase(repo, bookingClient, &mockVenueClient{}, nil, events.NewPublisher(nil))
-
-	var panicked any
-	func() {
-		defer func() { panicked = recover() }()
-		_, _ = uc.CreateReview(ctx, CreateReviewInput{
-			UserID:  "user-1",
-			VenueID: "venue-1",
-			Rating:  4,
-			Text:    "great",
-		})
-	}()
-
-	require.NotNil(t, panicked, "nil JetStreamContext: PublishReviewCreated panics after repo work")
-	require.NotNil(t, bookingReq)
-	assert.Equal(t, "user-1", bookingReq.UserId)
-	assert.Equal(t, "venue-1", bookingReq.VenueId)
-	require.NotNil(t, gotCreate)
-	assert.Equal(t, "user-1", gotCreate.UserID)
-	assert.Equal(t, "venue-1", gotCreate.VenueID)
-	assert.Equal(t, int32(4), gotCreate.Rating)
-	assert.Equal(t, "great", gotCreate.Text)
-	assert.True(t, gotCreate.IsVerified)
-	assert.Equal(t, "review-id-1", gotCreate.ID)
-	assert.Equal(t, []string{"venue-1"}, updateVenueRatingCalls)
+	})
+	got, err := uc.CreateReview(ctx, CreateReviewInput{UserID: "u1", VenueID: "v1", Rating: 5, Text: "ok"})
+	require.Error(t, err)
+	require.Nil(t, got)
+	st, ok := status.FromError(err)
+	require.True(t, ok)
+	assert.Equal(t, codes.FailedPrecondition, st.Code())
 }
 
-func TestCreateReview_MasterTarget_SkipsVenueOps(t *testing.T) {
+// ---------------------------------------------------------------------------
+// Success path: review + outbox written atomically
+// ---------------------------------------------------------------------------
+
+func TestCreateReview_Success_AtomicOutbox(t *testing.T) {
 	ctx := context.Background()
-	var gotCreate *domain.Review
-	var bookingCalls int
-	var venueRatingUpdates int
+
+	var createdReview *domain.Review
+	var outboxEntry *domain.OutboxEntry
+	type ratingUpdate struct {
+		venueID string
+		rating  int32
+	}
+	var ratingUpdates []ratingUpdate
+
 	repo := &mockReviewRepo{
-		CreateFunc: func(ctx context.Context, review *domain.Review) error {
-			gotCreate = review
-			review.ID = "r-master-1"
+		CreateTxFunc: func(ctx context.Context, tx pgx.Tx, review *domain.Review) error {
+			review.ID = "review-id-1"
+			createdReview = review
 			return nil
 		},
-		UpdateVenueRatingFunc: func(ctx context.Context, venueID string) error {
+		UpdateVenueRatingTxFunc: func(ctx context.Context, tx pgx.Tx, venueID string, rating int32) error {
+			ratingUpdates = append(ratingUpdates, ratingUpdate{venueID, rating})
+			return nil
+		},
+	}
+	outboxRepo := &mockOutboxRepo{
+		CreateTxFunc: func(ctx context.Context, tx pgx.Tx, entry *domain.OutboxEntry) error {
+			outboxEntry = entry
+			return nil
+		},
+	}
+
+	got, err := newUC(repo, outboxRepo, confirmedBooking()).CreateReview(ctx, CreateReviewInput{
+		UserID:  "user-1",
+		VenueID: "venue-1",
+		Rating:  4,
+		Text:    "great",
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, "review-id-1", got.ID)
+	assert.Equal(t, "user-1", got.UserID)
+	assert.Equal(t, "venue-1", got.VenueID)
+	assert.Equal(t, int32(4), got.Rating)
+	assert.True(t, got.IsVerified)
+
+	// Review persisted
+	require.NotNil(t, createdReview)
+
+	// Outbox entry created in the same transaction
+	require.NotNil(t, outboxEntry, "outbox entry must be written for venue reviews")
+	assert.Equal(t, events.SubjectReviewCreated, outboxEntry.EventType)
+	assert.Equal(t, "review-id-1", outboxEntry.AggregateID)
+
+	// Payload is valid JSON with the right fields
+	var evt events.ReviewCreatedEvent
+	require.NoError(t, json.Unmarshal(outboxEntry.Payload, &evt))
+	assert.Equal(t, "review-id-1", evt.ReviewID)
+	assert.Equal(t, "user-1", evt.UserID)
+	assert.Equal(t, "venue-1", evt.VenueID)
+	assert.Equal(t, int32(4), evt.Rating)
+	assert.Equal(t, events.TargetTypeVenue, evt.TargetType)
+
+	// Transaction committed
+	require.NotNil(t, repo.tx)
+	assert.True(t, repo.tx.committed, "transaction must be committed on success")
+	assert.False(t, repo.tx.rolledBack)
+
+	// Rating cache updated (post-commit, best-effort) with the correct rating value.
+	require.Len(t, ratingUpdates, 1)
+	assert.Equal(t, "venue-1", ratingUpdates[0].venueID)
+	assert.Equal(t, int32(4), ratingUpdates[0].rating, "rating forwarded to incremental cache update")
+}
+
+// ---------------------------------------------------------------------------
+// Idempotency: AlreadyExists from the repository reaches the caller unchanged.
+// This pins the passthrough in usecase so that wrapping the error (e.g. with
+// fmt.Errorf) is caught immediately as a regression.
+// ---------------------------------------------------------------------------
+
+func TestCreateReview_AlreadyExists_PassedThrough(t *testing.T) {
+	ctx := context.Background()
+
+	repo := &mockReviewRepo{
+		CreateTxFunc: func(_ context.Context, _ pgx.Tx, _ *domain.Review) error {
+			// Simulate the unique-constraint mapping done by the repository layer.
+			return pkgerr.AlreadyExists("review already exists for this target")
+		},
+	}
+
+	_, err := newUC(repo, &mockOutboxRepo{}, confirmedBooking()).CreateReview(ctx, CreateReviewInput{
+		UserID:  "user-1",
+		VenueID: "venue-1",
+		Rating:  5,
+		Text:    "duplicate",
+	})
+
+	require.Error(t, err)
+	st, ok := status.FromError(err)
+	require.True(t, ok, "error must be a gRPC status; got %T: %v", err, err)
+	assert.Equal(t, codes.AlreadyExists, st.Code(),
+		"AlreadyExists must not be swallowed or replaced by Internal/Unknown")
+
+	// Transaction must have been rolled back (no commit after the failed insert).
+	require.NotNil(t, repo.tx)
+	assert.True(t, repo.tx.rolledBack)
+	assert.False(t, repo.tx.committed)
+}
+
+// ---------------------------------------------------------------------------
+// Atomicity: repo error rolls back the transaction; outbox entry not written
+// ---------------------------------------------------------------------------
+
+func TestCreateReview_RepoError_RollsBackTx(t *testing.T) {
+	ctx := context.Background()
+
+	repo := &mockReviewRepo{
+		CreateTxFunc: func(ctx context.Context, tx pgx.Tx, review *domain.Review) error {
+			return fmt.Errorf("db: connection reset")
+		},
+	}
+	outboxRepo := &mockOutboxRepo{}
+
+	got, err := newUC(repo, outboxRepo, confirmedBooking()).CreateReview(ctx, CreateReviewInput{
+		UserID:  "user-1",
+		VenueID: "venue-1",
+		Rating:  3,
+		Text:    "meh",
+	})
+
+	require.Error(t, err)
+	assert.Nil(t, got)
+	assert.Empty(t, outboxRepo.entries, "outbox must not be written when review insert fails")
+
+	require.NotNil(t, repo.tx)
+	assert.True(t, repo.tx.rolledBack, "tx must be rolled back on repo error")
+	assert.False(t, repo.tx.committed)
+}
+
+// ---------------------------------------------------------------------------
+// Atomicity: outbox error rolls back the transaction
+// ---------------------------------------------------------------------------
+
+func TestCreateReview_OutboxError_RollsBackTx(t *testing.T) {
+	ctx := context.Background()
+
+	repo := &mockReviewRepo{
+		CreateTxFunc: func(ctx context.Context, tx pgx.Tx, review *domain.Review) error {
+			review.ID = "r-1"
+			return nil
+		},
+	}
+	outboxRepo := &mockOutboxRepo{
+		CreateTxFunc: func(ctx context.Context, tx pgx.Tx, entry *domain.OutboxEntry) error {
+			return fmt.Errorf("outbox insert failed")
+		},
+	}
+
+	got, err := newUC(repo, outboxRepo, confirmedBooking()).CreateReview(ctx, CreateReviewInput{
+		UserID:  "user-1",
+		VenueID: "venue-1",
+		Rating:  5,
+		Text:    "perfect but outbox broke",
+	})
+
+	require.Error(t, err)
+	assert.Nil(t, got)
+
+	require.NotNil(t, repo.tx)
+	assert.True(t, repo.tx.rolledBack, "tx must roll back when outbox insert fails")
+	assert.False(t, repo.tx.committed)
+}
+
+// ---------------------------------------------------------------------------
+// Atomicity: rating cache error inside the transaction rolls it back entirely.
+// This is the key invariant of the refactor: the cache update now happens
+// before tx.Commit, so a cache failure prevents the review from being
+// committed — no split-brain between reviews table and ratings_cache.
+// ---------------------------------------------------------------------------
+
+func TestCreateReview_RatingCacheError_RollsBackTx(t *testing.T) {
+	ctx := context.Background()
+
+	repo := &mockReviewRepo{
+		CreateTxFunc: func(_ context.Context, _ pgx.Tx, review *domain.Review) error {
+			review.ID = "r-cache-fail"
+			return nil
+		},
+		UpdateVenueRatingTxFunc: func(_ context.Context, _ pgx.Tx, _ string, _ int32) error {
+			return fmt.Errorf("db: deadlock detected")
+		},
+	}
+	outboxRepo := &mockOutboxRepo{}
+
+	got, err := newUC(repo, outboxRepo, confirmedBooking()).CreateReview(ctx, CreateReviewInput{
+		UserID:  "user-1",
+		VenueID: "venue-1",
+		Rating:  5,
+		Text:    "cache will fail",
+	})
+
+	require.Error(t, err)
+	assert.Nil(t, got)
+
+	st, ok := status.FromError(err)
+	require.True(t, ok)
+	assert.Equal(t, codes.Internal, st.Code())
+
+	// Transaction must be rolled back — the review insert is undone together
+	// with the failed cache update, so ratings_cache stays consistent.
+	require.NotNil(t, repo.tx)
+	assert.True(t, repo.tx.rolledBack, "tx must roll back when cache update fails inside the transaction")
+	assert.False(t, repo.tx.committed, "tx must NOT commit when cache update fails")
+}
+
+// confirmedMasterBooking returns a master client that always says "completed".
+func confirmedMasterBooking() *mockMasterClient {
+	return &mockMasterClient{hasCompleted: true}
+}
+
+// ---------------------------------------------------------------------------
+// Master target: success — outbox entry written, master rating updated,
+//                          no venue ops touched.
+// ---------------------------------------------------------------------------
+
+func TestCreateReview_MasterTarget_Success(t *testing.T) {
+	ctx := context.Background()
+
+	var createdReview *domain.Review
+	var outboxEntry *domain.OutboxEntry
+	var venueRatingUpdates int
+	type masterUpdate struct {
+		masterID string
+		rating   int32
+	}
+	var masterRatingUpdates []masterUpdate
+
+	repo := &mockReviewRepo{
+		CreateTxFunc: func(_ context.Context, _ pgx.Tx, review *domain.Review) error {
+			review.ID = "r-master-1"
+			createdReview = review
+			return nil
+		},
+		UpdateVenueRatingTxFunc: func(_ context.Context, _ pgx.Tx, _ string, _ int32) error {
 			venueRatingUpdates++
 			return nil
 		},
+		UpdateMasterRatingTxFunc: func(_ context.Context, _ pgx.Tx, masterID string, rating int32) error {
+			masterRatingUpdates = append(masterRatingUpdates, masterUpdate{masterID, rating})
+			return nil
+		},
 	}
-	bookingClient := &mockBookingClient{
-		HasCompletedBookingFunc: func(ctx context.Context, in *bookingv1.HasCompletedBookingRequest, opts ...grpc.CallOption) (*bookingv1.HasCompletedBookingResponse, error) {
-			bookingCalls++
-			return &bookingv1.HasCompletedBookingResponse{HasCompleted: true}, nil
+	outboxRepo := &mockOutboxRepo{
+		CreateTxFunc: func(_ context.Context, _ pgx.Tx, entry *domain.OutboxEntry) error {
+			outboxEntry = entry
+			return nil
 		},
 	}
 
-	uc := NewReviewUseCase(repo, bookingClient, &mockVenueClient{}, nil, nil)
+	uc := NewReviewUseCaseWithOutbox(repo, outboxRepo, &mockBookingClient{}, confirmedMasterBooking())
+	got, err := uc.CreateReview(ctx, CreateReviewInput{
+		UserID:   "user-1",
+		MasterID: "master-1",
+		Rating:   5,
+		Text:     "excellent",
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, "r-master-1", got.ID)
+	assert.Equal(t, "master-1", got.MasterID)
+	assert.Equal(t, "", got.VenueID)
+	assert.True(t, got.IsVerified)
+
+	// Review persisted
+	require.NotNil(t, createdReview)
+
+	// Outbox entry written with MasterID populated
+	require.NotNil(t, outboxEntry, "outbox entry must be written for master reviews")
+	assert.Equal(t, events.SubjectReviewCreated, outboxEntry.EventType)
+	assert.Equal(t, "r-master-1", outboxEntry.AggregateID)
+
+	var evt events.ReviewCreatedEvent
+	require.NoError(t, json.Unmarshal(outboxEntry.Payload, &evt))
+	assert.Equal(t, "r-master-1", evt.ReviewID)
+	assert.Equal(t, "master-1", evt.MasterID)
+	assert.Equal(t, "", evt.VenueID)
+	assert.Equal(t, int32(5), evt.Rating)
+	assert.Equal(t, events.TargetTypeMaster, evt.TargetType)
+
+	// Master rating cache updated with the correct rating value (incremental O(1) path).
+	require.Len(t, masterRatingUpdates, 1)
+	assert.Equal(t, "master-1", masterRatingUpdates[0].masterID)
+	assert.Equal(t, int32(5), masterRatingUpdates[0].rating, "rating forwarded to incremental cache update")
+
+	// Venue rating NOT touched
+	assert.Equal(t, 0, venueRatingUpdates, "venue rating must not be updated for master reviews")
+
+	// Transaction committed
+	require.NotNil(t, repo.tx)
+	assert.True(t, repo.tx.committed)
+}
+
+// ---------------------------------------------------------------------------
+// Master target: no masterClient → FailedPrecondition, no side effects
+// ---------------------------------------------------------------------------
+
+func TestCreateReview_MasterTarget_NoMasterClient_FailedPrecondition(t *testing.T) {
+	ctx := context.Background()
+
+	var venueRatingUpdates, masterRatingUpdates int
+	repo := &mockReviewRepo{
+		UpdateVenueRatingTxFunc:  func(_ context.Context, _ pgx.Tx, _ string, _ int32) error { venueRatingUpdates++; return nil },
+		UpdateMasterRatingTxFunc: func(_ context.Context, _ pgx.Tx, _ string, _ int32) error { masterRatingUpdates++; return nil },
+	}
+	outboxRepo := &mockOutboxRepo{}
+
+	// masterClient nil → guard skips HasCompletedMasterBooking → isVerified=false
+	uc := NewReviewUseCaseWithOutbox(repo, outboxRepo, &mockBookingClient{}, nil)
 	got, err := uc.CreateReview(ctx, CreateReviewInput{
 		UserID:   "user-1",
 		MasterID: "master-1",
 		Rating:   5,
 		Text:     "solid session",
 	})
+
 	require.Error(t, err)
 	require.Nil(t, got)
 	st, ok := status.FromError(err)
 	require.True(t, ok)
 	assert.Equal(t, codes.FailedPrecondition, st.Code())
-	assert.Nil(t, gotCreate)
-	assert.Equal(t, 0, bookingCalls)
 	assert.Equal(t, 0, venueRatingUpdates)
+	assert.Equal(t, 0, masterRatingUpdates)
+	assert.Empty(t, outboxRepo.entries)
 }
 
-func TestCreateReview_UnconfirmedVenueBooking(t *testing.T) {
+// ---------------------------------------------------------------------------
+// Venue event payload carries VenueID, not MasterID
+// ---------------------------------------------------------------------------
+
+func TestCreateReview_VenueTarget_EventPayload(t *testing.T) {
 	ctx := context.Background()
-	uc := NewReviewUseCase(&mockReviewRepo{}, &mockBookingClient{
-		HasCompletedBookingFunc: func(ctx context.Context, in *bookingv1.HasCompletedBookingRequest, opts ...grpc.CallOption) (*bookingv1.HasCompletedBookingResponse, error) {
-			return &bookingv1.HasCompletedBookingResponse{HasCompleted: false}, nil
+
+	var outboxEntry *domain.OutboxEntry
+	repo := &mockReviewRepo{
+		CreateTxFunc: func(_ context.Context, _ pgx.Tx, review *domain.Review) error {
+			review.ID = "r-venue-1"
+			return nil
 		},
-	}, &mockVenueClient{}, nil, nil)
-	got, err := uc.CreateReview(ctx, CreateReviewInput{
-		UserID:  "u1",
-		VenueID: "v1",
-		Rating:  5,
+	}
+	outboxRepo := &mockOutboxRepo{
+		CreateTxFunc: func(_ context.Context, _ pgx.Tx, entry *domain.OutboxEntry) error {
+			outboxEntry = entry
+			return nil
+		},
+	}
+
+	_, err := newUC(repo, outboxRepo, confirmedBooking()).CreateReview(ctx, CreateReviewInput{
+		UserID:  "user-1",
+		VenueID: "venue-1",
+		Rating:  3,
 		Text:    "ok",
 	})
-	require.Error(t, err)
-	require.Nil(t, got)
-	st, ok := status.FromError(err)
-	require.True(t, ok)
-	assert.Equal(t, codes.FailedPrecondition, st.Code())
+	require.NoError(t, err)
+
+	require.NotNil(t, outboxEntry)
+	var evt events.ReviewCreatedEvent
+	require.NoError(t, json.Unmarshal(outboxEntry.Payload, &evt))
+	assert.Equal(t, "venue-1", evt.VenueID)
+	assert.Equal(t, "", evt.MasterID, "MasterID must be empty for venue reviews")
+	assert.Equal(t, events.TargetTypeVenue, evt.TargetType)
 }
+
+// ---------------------------------------------------------------------------
+// Pagination validation
+// ---------------------------------------------------------------------------
+
+func TestListVenueReviews_InvalidPagination(t *testing.T) {
+	ctx := context.Background()
+	uc := NewReviewUseCaseWithOutbox(&mockReviewRepo{}, &mockOutboxRepo{}, &mockBookingClient{}, nil)
+
+	cases := []struct {
+		name     string
+		page     int32
+		pageSize int32
+	}{
+		{"page zero", 0, 10},
+		{"page negative", -1, 10},
+		{"page over cap", 1001, 10},
+		{"pageSize zero", 1, 0},
+		{"pageSize negative", 1, -1},
+		{"pageSize over max", 1, 51},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, _, err := uc.ListVenueReviews(ctx, "v1", tc.page, tc.pageSize)
+			require.Error(t, err)
+			st, ok := status.FromError(err)
+			require.True(t, ok)
+			assert.Equal(t, codes.InvalidArgument, st.Code(), "expected InvalidArgument for page=%d pageSize=%d", tc.page, tc.pageSize)
+		})
+	}
+}
+
+func TestListMasterReviews_InvalidPagination(t *testing.T) {
+	ctx := context.Background()
+	uc := NewReviewUseCaseWithOutbox(&mockReviewRepo{}, &mockOutboxRepo{}, &mockBookingClient{}, nil)
+
+	cases := []struct {
+		name     string
+		page     int32
+		pageSize int32
+	}{
+		{"page zero", 0, 10},
+		{"pageSize zero", 1, 0},
+		{"pageSize over max", 1, 51},
+		{"page over cap", 1001, 10},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, _, err := uc.ListMasterReviews(ctx, "m1", tc.page, tc.pageSize)
+			require.Error(t, err)
+			st, ok := status.FromError(err)
+			require.True(t, ok)
+			assert.Equal(t, codes.InvalidArgument, st.Code())
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Read operations
+// ---------------------------------------------------------------------------
 
 func TestListVenueReviews(t *testing.T) {
 	ctx := context.Background()
 	want := []*domain.Review{{ID: "r1", VenueID: "v1"}}
 	repo := &mockReviewRepo{
-		ListByVenueFunc: func(ctx context.Context, venueID string, page, pageSize int32) ([]*domain.Review, int32, error) {
+		ListByVenueFunc: func(_ context.Context, venueID string, page, pageSize int32) ([]*domain.Review, int32, error) {
 			assert.Equal(t, "v1", venueID)
 			assert.Equal(t, int32(2), page)
 			assert.Equal(t, int32(10), pageSize)
 			return want, 99, nil
 		},
 	}
-	uc := NewReviewUseCase(repo, &mockBookingClient{}, &mockVenueClient{}, nil, nil)
+	uc := NewReviewUseCaseWithOutbox(repo, &mockOutboxRepo{}, &mockBookingClient{}, nil)
 
 	got, total, err := uc.ListVenueReviews(ctx, "v1", 2, 10)
 	require.NoError(t, err)
@@ -201,12 +552,12 @@ func TestGetReview(t *testing.T) {
 	ctx := context.Background()
 	want := &domain.Review{ID: "r1", Text: "ok"}
 	repo := &mockReviewRepo{
-		GetByIDFunc: func(ctx context.Context, id string) (*domain.Review, error) {
+		GetByIDFunc: func(_ context.Context, id string) (*domain.Review, error) {
 			assert.Equal(t, "r1", id)
 			return want, nil
 		},
 	}
-	uc := NewReviewUseCase(repo, &mockBookingClient{}, &mockVenueClient{}, nil, nil)
+	uc := NewReviewUseCaseWithOutbox(repo, &mockOutboxRepo{}, &mockBookingClient{}, nil)
 
 	got, err := uc.GetReview(ctx, "r1")
 	require.NoError(t, err)
@@ -217,12 +568,12 @@ func TestGetVenueRating(t *testing.T) {
 	ctx := context.Background()
 	want := &domain.VenueRating{VenueID: "v1", AvgRating: 4.5, ReviewCount: 3, UpdatedAt: time.Unix(1, 0).UTC()}
 	repo := &mockReviewRepo{
-		GetVenueRatingFunc: func(ctx context.Context, venueID string) (*domain.VenueRating, error) {
+		GetVenueRatingFunc: func(_ context.Context, venueID string) (*domain.VenueRating, error) {
 			assert.Equal(t, "v1", venueID)
 			return want, nil
 		},
 	}
-	uc := NewReviewUseCase(repo, &mockBookingClient{}, &mockVenueClient{}, nil, nil)
+	uc := NewReviewUseCaseWithOutbox(repo, &mockOutboxRepo{}, &mockBookingClient{}, nil)
 
 	got, err := uc.GetVenueRating(ctx, "v1")
 	require.NoError(t, err)

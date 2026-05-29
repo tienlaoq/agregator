@@ -20,8 +20,29 @@ import (
 // ErrSlotUnavailable is returned when the requested interval overlaps an existing reservation.
 var ErrSlotUnavailable = errors.New("slot unavailable")
 
-// ErrVenueStaffNotFound is returned when DELETE venue_staff affects no rows.
-var ErrVenueStaffNotFound = errors.New("venue staff not found")
+// ErrVenueNotFound is returned when a locked venue row no longer exists.
+var ErrVenueNotFound = errors.New("venue not found")
+
+// ErrVenueOwnershipMismatch is returned when a locked venue is no longer owned by the actor.
+var ErrVenueOwnershipMismatch = errors.New("venue ownership mismatch")
+
+// ErrPhotoNotFound is returned when a venue or hall photo row does not exist.
+var ErrPhotoNotFound = errors.New("photo not found")
+
+// ErrHallNotFound is returned when a venue hall row does not exist.
+var ErrHallNotFound = errors.New("hall not found")
+
+// ErrHallNotInVenue is returned when a hall exists but belongs to a different venue.
+var ErrHallNotInVenue = errors.New("hall does not belong to venue")
+
+// ErrHallNameRequired is returned when a hall upsert is missing a name.
+var ErrHallNameRequired = errors.New("hall name is required")
+
+// ErrVenuePhotosLimit is returned when adding a venue photo would exceed MaxVenuePhotos.
+var ErrVenuePhotosLimit = errors.New("venue photos limit reached")
+
+// ErrHallPhotosLimit is returned when adding a hall photo would exceed the per-hall limit.
+var ErrHallPhotosLimit = errors.New("hall photos limit reached")
 
 type venueRepo struct {
 	pool *pgxpool.Pool
@@ -29,6 +50,20 @@ type venueRepo struct {
 
 func NewVenueRepo(pool *pgxpool.Pool) domain.VenueRepository {
 	return &venueRepo{pool: pool}
+}
+
+func lockVenueForOwner(ctx context.Context, tx pgx.Tx, venueID, ownerID uuid.UUID) error {
+	var currentOwnerID uuid.UUID
+	if err := tx.QueryRow(ctx, `SELECT owner_id FROM venues WHERE id = $1 FOR UPDATE`, venueID).Scan(&currentOwnerID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrVenueNotFound
+		}
+		return fmt.Errorf("lock venue: %w", err)
+	}
+	if currentOwnerID != ownerID {
+		return ErrVenueOwnershipMismatch
+	}
+	return nil
 }
 
 func (r *venueRepo) Create(ctx context.Context, venue *domain.Venue) error {
@@ -92,12 +127,16 @@ func (r *venueRepo) Create(ctx context.Context, venue *domain.Venue) error {
 	return tx.Commit(ctx)
 }
 
-func (r *venueRepo) ReplaceVenueServices(ctx context.Context, venueID uuid.UUID, services []domain.VenueService) error {
+func (r *venueRepo) ReplaceVenueServices(ctx context.Context, venueID, ownerID uuid.UUID, services []domain.VenueService) error {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("begin tx: %w", err)
 	}
 	defer tx.Rollback(ctx)
+
+	if err := lockVenueForOwner(ctx, tx, venueID, ownerID); err != nil {
+		return err
+	}
 
 	if _, err := tx.Exec(ctx, `DELETE FROM venue_services WHERE venue_id = $1`, venueID); err != nil {
 		return fmt.Errorf("delete venue_services: %w", err)
@@ -157,6 +196,52 @@ func (r *venueRepo) GetByID(ctx context.Context, id uuid.UUID) (*domain.Venue, e
 	return r.getVenue(ctx, "WHERE v.id = $1", id)
 }
 
+func (r *venueRepo) GetByIDs(ctx context.Context, ids []uuid.UUID) ([]domain.Venue, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	rows, err := r.pool.Query(ctx, `
+		SELECT v.id, v.owner_id, v.slug, v.name, v.type, v.description, v.address, v.city,
+			ST_Y(v.location::geometry) AS latitude, ST_X(v.location::geometry) AS longitude,
+			v.price_from, v.capacity, v.amenities, v.working_hours, v.phone,
+			v.avg_rating, v.review_count, v.is_active, v.status, v.moderation_comment,
+			v.moderated_at, v.moderated_by,
+			v.legal_entity_name, v.inn, v.ogrn, v.public_listing_url, v.verification_note,
+			v.social_links::text,
+			COALESCE(v.payout_legal_form, ''), COALESCE(v.yookassa_seller_account_id, ''),
+			v.created_at, v.updated_at
+		FROM venues v WHERE v.id = ANY($1::uuid[])`, ids)
+	if err != nil {
+		return nil, fmt.Errorf("get venues batch: %w", err)
+	}
+	defer rows.Close()
+	var venues []domain.Venue
+	for rows.Next() {
+		var v domain.Venue
+		if err := rows.Scan(
+			&v.ID, &v.OwnerID, &v.Slug, &v.Name, &v.Type, &v.Description, &v.Address, &v.City,
+			&v.Latitude, &v.Longitude,
+			&v.PriceFrom, &v.Capacity, &v.Amenities, &v.WorkingHours, &v.Phone,
+			&v.AvgRating, &v.ReviewCount, &v.IsActive, &v.Status, &v.ModerationComment,
+			&v.ModeratedAt, &v.ModeratedBy,
+			&v.LegalEntityName, &v.INN, &v.OGRN, &v.PublicListingURL, &v.VerificationNote,
+			&v.SocialLinks,
+			&v.PayoutLegalForm, &v.YooKassaSellerAccountID,
+			&v.CreatedAt, &v.UpdatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scan venue batch: %w", err)
+		}
+		venues = append(venues, v)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := r.attachVenueDetailsBatch(ctx, venues); err != nil {
+		return nil, err
+	}
+	return venues, nil
+}
+
 func (r *venueRepo) GetBySlug(ctx context.Context, s string) (*domain.Venue, error) {
 	return r.getVenue(ctx, "WHERE v.slug = $1", s)
 }
@@ -185,7 +270,7 @@ func (r *venueRepo) getVenue(ctx context.Context, where string, arg any) (*domai
 		&v.PayoutLegalForm, &v.YooKassaSellerAccountID,
 		&v.CreatedAt, &v.UpdatedAt,
 	)
-	if err == pgx.ErrNoRows {
+	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
@@ -348,7 +433,7 @@ func (r *venueRepo) getHallsWithPhotosByVenueIDs(ctx context.Context, venueIDs [
 	byHall := make(map[uuid.UUID][]domain.VenueHallPhoto)
 	for prows.Next() {
 		var p domain.VenueHallPhoto
-		if err := rows.Scan(&p.ID, &p.HallID, &p.URL, &p.SortOrder, &p.IsCover); err != nil {
+		if err := prows.Scan(&p.ID, &p.HallID, &p.URL, &p.SortOrder, &p.IsCover); err != nil {
 			return nil, fmt.Errorf("scan venue_hall_photo: %w", err)
 		}
 		byHall[p.HallID] = append(byHall[p.HallID], p)
@@ -525,20 +610,22 @@ func (r *venueRepo) Search(ctx context.Context, params domain.SearchParams) (*do
 	args := []any{}
 	argIdx := 1
 
-	if params.Query != "" {
+	if pat, ok := escapedILikePattern(params.Query); ok {
 		conditions = append(conditions, fmt.Sprintf(
-			"(to_tsvector('russian', name || ' ' || COALESCE(description, '') || ' ' || address || ' ' || COALESCE(city, '')) @@ plainto_tsquery('russian', $%d) OR name ILIKE '%%' || $%d || '%%' OR address ILIKE '%%' || $%d || '%%' OR city ILIKE '%%' || $%d || '%%')",
+			"(to_tsvector('russian', name || ' ' || COALESCE(description, '') || ' ' || address || ' ' || COALESCE(city, '')) @@ plainto_tsquery('russian', $%d) OR name ILIKE $%d ESCAPE '\\' OR address ILIKE $%d ESCAPE '\\' OR city ILIKE $%d ESCAPE '\\')",
 			argIdx, argIdx+1, argIdx+2, argIdx+3))
-		args = append(args, params.Query, params.Query, params.Query, params.Query)
+		args = append(args, params.Query, pat, pat, pat)
 		argIdx += 4
 	}
 
 	if eff := params.EffectiveCities(); len(eff) > 0 {
 		var ors []string
 		for _, cc := range eff {
-			ors = append(ors, fmt.Sprintf("city ILIKE $%d", argIdx))
-			args = append(args, "%"+cc+"%")
-			argIdx++
+			if pat, ok := escapedILikePattern(cc); ok {
+				ors = append(ors, fmt.Sprintf("city ILIKE $%d ESCAPE '\\'", argIdx))
+				args = append(args, pat)
+				argIdx++
+			}
 		}
 		if len(ors) == 1 {
 			conditions = append(conditions, ors[0])
@@ -643,161 +730,53 @@ func (r *venueRepo) ListByOwner(ctx context.Context, ownerID uuid.UUID) ([]domai
 	return venues, nil
 }
 
-func (r *venueRepo) ListForManagingUser(ctx context.Context, userID uuid.UUID) ([]domain.Venue, error) {
-	rows, err := r.pool.Query(ctx, `
-		SELECT v.id, v.owner_id, v.slug, v.name, v.type, v.description, v.address, v.city,
-			ST_Y(v.location::geometry) AS latitude, ST_X(v.location::geometry) AS longitude,
-			v.price_from, v.capacity, v.amenities, v.working_hours, v.phone,
-			v.avg_rating, v.review_count, v.is_active, v.status, v.moderation_comment,
-			v.moderated_at, v.moderated_by,
-			v.legal_entity_name, v.inn, v.ogrn, v.public_listing_url, v.verification_note,
-			v.social_links::text,
-			COALESCE(v.payout_legal_form, ''), COALESCE(v.yookassa_seller_account_id, ''),
-			v.created_at, v.updated_at,
-			CASE WHEN v.owner_id = $1 THEN 'owner' ELSE vs.role END AS management_access
-		FROM venues v
-		INNER JOIN (
-			SELECT id AS vid FROM venues WHERE owner_id = $1
-			UNION
-			SELECT venue_id AS vid FROM venue_staff WHERE user_id = $1
-		) x ON x.vid = v.id
-		LEFT JOIN venue_staff vs ON vs.venue_id = v.id AND vs.user_id = $1
-		ORDER BY v.created_at DESC`, userID)
-	if err != nil {
-		return nil, fmt.Errorf("list for managing user: %w", err)
-	}
-	defer rows.Close()
-
-	var venues []domain.Venue
-	for rows.Next() {
-		var v domain.Venue
-		if err := rows.Scan(
-			&v.ID, &v.OwnerID, &v.Slug, &v.Name, &v.Type, &v.Description, &v.Address, &v.City,
-			&v.Latitude, &v.Longitude,
-			&v.PriceFrom, &v.Capacity, &v.Amenities, &v.WorkingHours, &v.Phone,
-			&v.AvgRating, &v.ReviewCount, &v.IsActive, &v.Status, &v.ModerationComment,
-			&v.ModeratedAt, &v.ModeratedBy,
-			&v.LegalEntityName, &v.INN, &v.OGRN, &v.PublicListingURL, &v.VerificationNote,
-			&v.SocialLinks,
-			&v.PayoutLegalForm, &v.YooKassaSellerAccountID,
-			&v.CreatedAt, &v.UpdatedAt,
-			&v.ManagementAccess,
-		); err != nil {
-			return nil, fmt.Errorf("scan venue (managing): %w", err)
-		}
-		venues = append(venues, v)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	if err := r.attachVenueDetailsBatch(ctx, venues); err != nil {
-		return nil, err
-	}
-	return venues, nil
-}
-
-func (r *venueRepo) GetVenueManagementAccess(ctx context.Context, venueID, userID uuid.UUID) (string, error) {
-	var access string
+// IsVenueMember returns true when userID is the venue owner or a row in
+// venue_staff. Strangler-fig phase B: we still read venue_staff directly here
+// because the table physically lives in the same Postgres database as venues.
+// When crm-service gets its own database, replace this with a gRPC call to
+// crm.GetManagementAccess.
+func (r *venueRepo) IsVenueMember(ctx context.Context, venueID, userID uuid.UUID) (bool, error) {
+	var found int
 	err := r.pool.QueryRow(ctx, `
-		SELECT CASE WHEN v.owner_id = $2 THEN 'owner' ELSE vs.role END
+		SELECT 1
 		FROM venues v
 		LEFT JOIN venue_staff vs ON vs.venue_id = v.id AND vs.user_id = $2
-		WHERE v.id = $1 AND (v.owner_id = $2 OR vs.user_id IS NOT NULL)`,
+		WHERE v.id = $1 AND (v.owner_id = $2 OR vs.user_id IS NOT NULL)
+		LIMIT 1`,
 		venueID, userID,
-	).Scan(&access)
+	).Scan(&found)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return "", nil
+		return false, nil
 	}
 	if err != nil {
-		return "", fmt.Errorf("get venue management access: %w", err)
+		return false, fmt.Errorf("is venue member: %w", err)
 	}
-	return access, nil
+	return true, nil
 }
 
-func (r *venueRepo) AddVenueStaff(ctx context.Context, venueID, userID uuid.UUID, role string, invitedBy uuid.UUID) error {
-	_, err := r.pool.Exec(ctx, `
-		INSERT INTO venue_staff (venue_id, user_id, role, invited_by)
-		VALUES ($1, $2, $3, $4)
-		ON CONFLICT (venue_id, user_id) DO UPDATE SET role = EXCLUDED.role, invited_by = EXCLUDED.invited_by`,
-		venueID, userID, role, invitedBy,
-	)
+// StaffUserIDsForVenue returns staff user_ids (excluding the owner) so the
+// notifier can fan out moderation emails. Same phase-B caveat as
+// IsVenueMember — read directly from the shared venue_staff table.
+func (r *venueRepo) StaffUserIDsForVenue(ctx context.Context, venueID uuid.UUID) ([]uuid.UUID, error) {
+	rows, err := r.pool.Query(ctx,
+		`SELECT user_id FROM venue_staff WHERE venue_id = $1`, venueID)
 	if err != nil {
-		return fmt.Errorf("add venue staff: %w", err)
-	}
-	return nil
-}
-
-func (r *venueRepo) RemoveVenueStaff(ctx context.Context, venueID, userID uuid.UUID) error {
-	tag, err := r.pool.Exec(ctx, `DELETE FROM venue_staff WHERE venue_id = $1 AND user_id = $2`, venueID, userID)
-	if err != nil {
-		return fmt.Errorf("remove venue staff: %w", err)
-	}
-	if tag.RowsAffected() == 0 {
-		return ErrVenueStaffNotFound
-	}
-	return nil
-}
-
-func (r *venueRepo) ListVenueStaff(ctx context.Context, venueID uuid.UUID) ([]domain.VenueStaff, error) {
-	rows, err := r.pool.Query(ctx, `
-		SELECT user_id, role, invited_by, created_at
-		FROM venue_staff WHERE venue_id = $1 ORDER BY created_at ASC`, venueID)
-	if err != nil {
-		return nil, fmt.Errorf("list venue staff: %w", err)
+		return nil, fmt.Errorf("staff user ids: %w", err)
 	}
 	defer rows.Close()
-	var out []domain.VenueStaff
+	var out []uuid.UUID
 	for rows.Next() {
-		var s domain.VenueStaff
-		if err := rows.Scan(&s.UserID, &s.Role, &s.InvitedBy, &s.CreatedAt); err != nil {
-			return nil, err
+		var u uuid.UUID
+		if err := rows.Scan(&u); err != nil {
+			return nil, fmt.Errorf("scan staff user id: %w", err)
 		}
-		out = append(out, s)
+		out = append(out, u)
 	}
 	return out, rows.Err()
 }
 
-func (r *venueRepo) CreateVenueCRMTask(ctx context.Context, t *domain.VenueCRMTask) error {
-	err := r.pool.QueryRow(ctx, `
-		INSERT INTO venue_crm_tasks (venue_id, booking_id, title, body, status, assignee_user_id, created_by)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)
-		RETURNING id, created_at, updated_at`,
-		t.VenueID, t.BookingID, t.Title, t.Body, t.Status, t.AssigneeUserID, t.CreatedBy,
-	).Scan(&t.ID, &t.CreatedAt, &t.UpdatedAt)
-	if err != nil {
-		return fmt.Errorf("create crm task: %w", err)
-	}
-	return nil
-}
-
-func (r *venueRepo) ListVenueCRMTasks(ctx context.Context, venueID uuid.UUID, status string) ([]domain.VenueCRMTask, error) {
-	q := `
-		SELECT id, venue_id, booking_id, title, body, status, assignee_user_id, created_by, created_at, updated_at
-		FROM venue_crm_tasks WHERE venue_id = $1`
-	args := []any{venueID}
-	if status != "" {
-		q += ` AND status = $2`
-		args = append(args, status)
-	}
-	q += ` ORDER BY created_at DESC`
-	rows, err := r.pool.Query(ctx, q, args...)
-	if err != nil {
-		return nil, fmt.Errorf("list crm tasks: %w", err)
-	}
-	defer rows.Close()
-	var out []domain.VenueCRMTask
-	for rows.Next() {
-		var t domain.VenueCRMTask
-		if err := rows.Scan(&t.ID, &t.VenueID, &t.BookingID, &t.Title, &t.Body, &t.Status, &t.AssigneeUserID, &t.CreatedBy, &t.CreatedAt, &t.UpdatedAt); err != nil {
-			return nil, err
-		}
-		out = append(out, t)
-	}
-	return out, rows.Err()
-}
-
-// adminNameILikePattern builds a LIKE pattern with ILIKE ESCAPE '\' (wildcards in user input neutralized).
-func adminNameILikePattern(q string) (pattern string, ok bool) {
+// escapedILikePattern builds a LIKE pattern with ILIKE ESCAPE '\' (wildcards in user input neutralized).
+func escapedILikePattern(q string) (pattern string, ok bool) {
 	q = strings.TrimSpace(q)
 	if q == "" {
 		return "", false
@@ -806,16 +785,6 @@ func adminNameILikePattern(q string) (pattern string, ok bool) {
 	q = strings.ReplaceAll(q, `%`, `\%`)
 	q = strings.ReplaceAll(q, `_`, `\_`)
 	return "%" + q + "%", true
-}
-
-func (r *venueRepo) CompleteVenueCRMTask(ctx context.Context, venueID, taskID uuid.UUID) (bool, error) {
-	tag, err := r.pool.Exec(ctx, `
-		UPDATE venue_crm_tasks SET status = 'done', updated_at = now()
-		WHERE id = $1 AND venue_id = $2 AND status = 'open'`, taskID, venueID)
-	if err != nil {
-		return false, fmt.Errorf("complete crm task: %w", err)
-	}
-	return tag.RowsAffected() > 0, nil
 }
 
 func (r *venueRepo) ListByStatus(ctx context.Context, status string, page, pageSize int32, nameQuery string) (*domain.ListResult, error) {
@@ -829,7 +798,7 @@ func (r *venueRepo) ListByStatus(ctx context.Context, status string, page, pageS
 		status = domain.StatusPendingReview
 	}
 
-	pat, filterName := adminNameILikePattern(nameQuery)
+	pat, filterName := escapedILikePattern(nameQuery)
 
 	const venueAdminSelect = `
 		SELECT id, owner_id, slug, name, type, description, address, city,
@@ -925,23 +894,23 @@ func (r *venueRepo) SubmitDraftForReview(ctx context.Context, venueID, ownerID u
 	return tag.RowsAffected() > 0, nil
 }
 
-func (r *venueRepo) AddVenuePhoto(ctx context.Context, venueID uuid.UUID, url string) (*domain.VenuePhoto, error) {
+func (r *venueRepo) AddVenuePhoto(ctx context.Context, venueID, ownerID uuid.UUID, url string) (*domain.VenuePhoto, error) {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("begin tx: %w", err)
 	}
 	defer tx.Rollback(ctx)
 
-	if _, err := tx.Exec(ctx, `SELECT id FROM venues WHERE id = $1 FOR UPDATE`, venueID); err != nil {
-		return nil, fmt.Errorf("lock venue: %w", err)
+	if err := lockVenueForOwner(ctx, tx, venueID, ownerID); err != nil {
+		return nil, err
 	}
 
 	var n int
 	if err := tx.QueryRow(ctx, `SELECT COUNT(*) FROM venue_photos WHERE venue_id = $1`, venueID).Scan(&n); err != nil {
 		return nil, fmt.Errorf("count photos: %w", err)
 	}
-	if n >= 24 {
-		return nil, fmt.Errorf("maximum number of photos reached")
+	if n >= domain.MaxVenuePhotos {
+		return nil, ErrVenuePhotosLimit
 	}
 
 	var sortOrder int32
@@ -968,12 +937,16 @@ func (r *venueRepo) AddVenuePhoto(ctx context.Context, venueID uuid.UUID, url st
 	return &p, nil
 }
 
-func (r *venueRepo) DeleteVenuePhoto(ctx context.Context, venueID, photoID uuid.UUID) (string, error) {
+func (r *venueRepo) DeleteVenuePhoto(ctx context.Context, venueID, ownerID, photoID uuid.UUID) (string, error) {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
 		return "", fmt.Errorf("begin tx: %w", err)
 	}
 	defer tx.Rollback(ctx)
+
+	if err := lockVenueForOwner(ctx, tx, venueID, ownerID); err != nil {
+		return "", err
+	}
 
 	var deletedURL string
 	err = tx.QueryRow(ctx, `
@@ -981,8 +954,8 @@ func (r *venueRepo) DeleteVenuePhoto(ctx context.Context, venueID, photoID uuid.
 		photoID, venueID,
 	).Scan(&deletedURL)
 	if err != nil {
-		if err == pgx.ErrNoRows {
-			return "", fmt.Errorf("photo not found")
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", ErrPhotoNotFound
 		}
 		return "", fmt.Errorf("delete venue_photo: %w", err)
 	}
@@ -1004,12 +977,16 @@ func (r *venueRepo) DeleteVenuePhoto(ctx context.Context, venueID, photoID uuid.
 	return deletedURL, nil
 }
 
-func (r *venueRepo) SetVenueCoverPhoto(ctx context.Context, venueID, photoID uuid.UUID) error {
+func (r *venueRepo) SetVenueCoverPhoto(ctx context.Context, venueID, ownerID, photoID uuid.UUID) error {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("begin tx: %w", err)
 	}
 	defer tx.Rollback(ctx)
+
+	if err := lockVenueForOwner(ctx, tx, venueID, ownerID); err != nil {
+		return err
+	}
 
 	if _, err := tx.Exec(ctx, `UPDATE venue_photos SET is_cover = false WHERE venue_id = $1`, venueID); err != nil {
 		return fmt.Errorf("clear covers: %w", err)
@@ -1022,7 +999,7 @@ func (r *venueRepo) SetVenueCoverPhoto(ctx context.Context, venueID, photoID uui
 		return fmt.Errorf("set cover: %w", err)
 	}
 	if ct.RowsAffected() == 0 {
-		return fmt.Errorf("photo not found")
+		return ErrPhotoNotFound
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("commit: %w", err)
@@ -1057,74 +1034,29 @@ func derivedVenueFieldsFromHalls(halls []domain.VenueHall) (priceFrom int64, cap
 }
 
 func (r *venueRepo) getHallsWithPhotos(ctx context.Context, venueID uuid.UUID) ([]domain.VenueHall, error) {
-	rows, err := r.pool.Query(ctx, `
-		SELECT id, venue_id, name, price_from, capacity, amenities, sort_order
-		FROM venue_halls WHERE venue_id = $1
-		ORDER BY sort_order ASC, id ASC`, venueID)
+	m, err := r.getHallsWithPhotosByVenueIDs(ctx, []uuid.UUID{venueID})
 	if err != nil {
-		return nil, fmt.Errorf("get venue_halls: %w", err)
-	}
-	defer rows.Close()
-
-	var halls []domain.VenueHall
-	var hallIDs []uuid.UUID
-	for rows.Next() {
-		var h domain.VenueHall
-		if err := rows.Scan(&h.ID, &h.VenueID, &h.Name, &h.PriceFrom, &h.Capacity, &h.Amenities, &h.SortOrder); err != nil {
-			return nil, fmt.Errorf("scan venue_hall: %w", err)
-		}
-		halls = append(halls, h)
-		hallIDs = append(hallIDs, h.ID)
-	}
-	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	if len(hallIDs) == 0 {
-		return halls, nil
-	}
-
-	prows, err := r.pool.Query(ctx, `
-		SELECT id, hall_id, url, sort_order, is_cover
-		FROM venue_hall_photos WHERE hall_id = ANY($1)
-		ORDER BY hall_id, sort_order ASC, id ASC`, hallIDs)
-	if err != nil {
-		return nil, fmt.Errorf("get venue_hall_photos: %w", err)
-	}
-	defer prows.Close()
-
-	byHall := make(map[uuid.UUID][]domain.VenueHallPhoto)
-	for prows.Next() {
-		var p domain.VenueHallPhoto
-		if err := prows.Scan(&p.ID, &p.HallID, &p.URL, &p.SortOrder, &p.IsCover); err != nil {
-			return nil, fmt.Errorf("scan venue_hall_photo: %w", err)
-		}
-		byHall[p.HallID] = append(byHall[p.HallID], p)
-	}
-	if err := prows.Err(); err != nil {
-		return nil, err
-	}
-	for i := range halls {
-		halls[i].Photos = byHall[halls[i].ID]
-	}
-	return halls, nil
+	return m[venueID], nil
 }
 
-func (r *venueRepo) ReplaceVenueHalls(ctx context.Context, venueID uuid.UUID, items []domain.VenueHallUpsert) error {
+func (r *venueRepo) ReplaceVenueHalls(ctx context.Context, venueID, ownerID uuid.UUID, items []domain.VenueHallUpsert) error {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("begin tx: %w", err)
 	}
 	defer tx.Rollback(ctx)
 
-	if _, err := tx.Exec(ctx, `SELECT id FROM venues WHERE id = $1 FOR UPDATE`, venueID); err != nil {
-		return fmt.Errorf("lock venue: %w", err)
+	if err := lockVenueForOwner(ctx, tx, venueID, ownerID); err != nil {
+		return err
 	}
 
 	var kept []uuid.UUID
 	for i, it := range items {
 		name := strings.TrimSpace(it.Name)
 		if name == "" {
-			return fmt.Errorf("hall name is required")
+			return ErrHallNameRequired
 		}
 		amenities := it.Amenities
 		if amenities == nil {
@@ -1134,13 +1066,13 @@ func (r *venueRepo) ReplaceVenueHalls(ctx context.Context, venueID uuid.UUID, it
 			var vid uuid.UUID
 			err := tx.QueryRow(ctx, `SELECT venue_id FROM venue_halls WHERE id = $1`, *it.ID).Scan(&vid)
 			if err != nil {
-				if err == pgx.ErrNoRows {
-					return fmt.Errorf("hall not found")
+				if errors.Is(err, pgx.ErrNoRows) {
+					return ErrHallNotFound
 				}
 				return fmt.Errorf("hall lookup: %w", err)
 			}
 			if vid != venueID {
-				return fmt.Errorf("hall does not belong to venue")
+				return ErrHallNotInVenue
 			}
 			if _, err := tx.Exec(ctx, `
 				UPDATE venue_halls SET name = $1, price_from = $2, capacity = $3, amenities = $4, sort_order = $5, updated_at = now()
@@ -1214,13 +1146,13 @@ func (r *venueRepo) AddVenueHallPhoto(ctx context.Context, venueID, hallID uuid.
 
 	var vid uuid.UUID
 	if err := tx.QueryRow(ctx, `SELECT venue_id FROM venue_halls WHERE id = $1 FOR UPDATE`, hallID).Scan(&vid); err != nil {
-		if err == pgx.ErrNoRows {
-			return nil, fmt.Errorf("hall not found")
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrHallNotFound
 		}
 		return nil, fmt.Errorf("lock hall: %w", err)
 	}
 	if vid != venueID {
-		return nil, fmt.Errorf("hall does not belong to venue")
+		return nil, ErrHallNotInVenue
 	}
 
 	var n int
@@ -1228,7 +1160,7 @@ func (r *venueRepo) AddVenueHallPhoto(ctx context.Context, venueID, hallID uuid.
 		return nil, fmt.Errorf("count hall photos: %w", err)
 	}
 	if n >= maxVenueHallPhotos {
-		return nil, fmt.Errorf("maximum number of hall photos reached")
+		return nil, ErrHallPhotosLimit
 	}
 
 	var sortOrder int32
@@ -1264,13 +1196,13 @@ func (r *venueRepo) DeleteVenueHallPhoto(ctx context.Context, venueID, hallID, p
 
 	var vid uuid.UUID
 	if err := tx.QueryRow(ctx, `SELECT venue_id FROM venue_halls WHERE id = $1`, hallID).Scan(&vid); err != nil {
-		if err == pgx.ErrNoRows {
-			return "", fmt.Errorf("hall not found")
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", ErrHallNotFound
 		}
 		return "", fmt.Errorf("hall lookup: %w", err)
 	}
 	if vid != venueID {
-		return "", fmt.Errorf("hall does not belong to venue")
+		return "", ErrHallNotInVenue
 	}
 
 	var deletedURL string
@@ -1279,8 +1211,8 @@ func (r *venueRepo) DeleteVenueHallPhoto(ctx context.Context, venueID, hallID, p
 		photoID, hallID,
 	).Scan(&deletedURL)
 	if err != nil {
-		if err == pgx.ErrNoRows {
-			return "", fmt.Errorf("photo not found")
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", ErrPhotoNotFound
 		}
 		return "", fmt.Errorf("delete venue_hall_photo: %w", err)
 	}
@@ -1311,13 +1243,13 @@ func (r *venueRepo) SetVenueHallCoverPhoto(ctx context.Context, venueID, hallID,
 
 	var vid uuid.UUID
 	if err := tx.QueryRow(ctx, `SELECT venue_id FROM venue_halls WHERE id = $1`, hallID).Scan(&vid); err != nil {
-		if err == pgx.ErrNoRows {
-			return fmt.Errorf("hall not found")
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrHallNotFound
 		}
 		return fmt.Errorf("hall lookup: %w", err)
 	}
 	if vid != venueID {
-		return fmt.Errorf("hall does not belong to venue")
+		return ErrHallNotInVenue
 	}
 
 	if _, err := tx.Exec(ctx, `UPDATE venue_hall_photos SET is_cover = false WHERE hall_id = $1`, hallID); err != nil {
@@ -1331,7 +1263,7 @@ func (r *venueRepo) SetVenueHallCoverPhoto(ctx context.Context, venueID, hallID,
 		return fmt.Errorf("set hall cover: %w", err)
 	}
 	if ct.RowsAffected() == 0 {
-		return fmt.Errorf("photo not found")
+		return ErrPhotoNotFound
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("commit: %w", err)
@@ -1394,6 +1326,78 @@ func (r *venueRepo) CheckSlot(ctx context.Context, venueID uuid.UUID, date, time
 		return false, fmt.Errorf("check slot: %w", err)
 	}
 	return count == 0, nil
+}
+
+// BatchCheckSlots checks multiple (time_from, time_to) pairs for the same
+// venue and date in a single round-trip. It uses unnest to expand the input
+// arrays server-side and LEFT JOIN to find conflicting rows in reserved_slots.
+//
+// Note: manual_slot_blocks are stored in reserved_slots with booking_id = NULL.
+// The JOIN condition does not filter on booking_id, so manual blocks are
+// included in the conflict check alongside booking-driven reservations.
+//
+// SQL sketch:
+//
+//	WITH slots(ord, tf, tt) AS (
+//	    SELECT * FROM unnest($3::int[], $4::time[], $5::time[])
+//	)
+//	SELECT s.ord, COUNT(rs.*) = 0
+//	FROM slots s
+//	LEFT JOIN reserved_slots rs
+//	  ON rs.venue_id = $1 AND rs.date = $2
+//	 AND rs.time_from < s.tt AND rs.time_to > s.tf
+//	GROUP BY s.ord
+//	ORDER BY s.ord;
+func (r *venueRepo) BatchCheckSlots(ctx context.Context, venueID uuid.UUID, date string, slots [][2]string) ([]bool, error) {
+	if len(slots) == 0 {
+		return nil, nil
+	}
+
+	// Build parallel arrays for unnest.
+	ords := make([]int, len(slots))
+	froms := make([]string, len(slots))
+	tos := make([]string, len(slots))
+	for i, s := range slots {
+		ords[i] = i
+		froms[i] = s[0]
+		tos[i] = s[1]
+	}
+
+	rows, err := r.pool.Query(ctx, `
+		WITH slots(ord, tf, tt) AS (
+		    SELECT * FROM unnest($3::int[], $4::time[], $5::time[])
+		)
+		SELECT s.ord, COUNT(rs.venue_id) = 0 AS available
+		FROM slots s
+		LEFT JOIN reserved_slots rs
+		  ON rs.venue_id = $1
+		 AND rs.date = $2
+		 AND rs.time_from < s.tt
+		 AND rs.time_to   > s.tf
+		GROUP BY s.ord
+		ORDER BY s.ord`,
+		venueID, date, ords, froms, tos,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("batch check slots: %w", err)
+	}
+	defer rows.Close()
+
+	result := make([]bool, len(slots))
+	for rows.Next() {
+		var ord int
+		var avail bool
+		if err := rows.Scan(&ord, &avail); err != nil {
+			return nil, fmt.Errorf("batch check slots scan: %w", err)
+		}
+		if ord >= 0 && ord < len(result) {
+			result[ord] = avail
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("batch check slots rows: %w", err)
+	}
+	return result, nil
 }
 
 func (r *venueRepo) ReserveSlot(ctx context.Context, venueID, bookingID uuid.UUID, date, timeFrom, timeTo string) error {

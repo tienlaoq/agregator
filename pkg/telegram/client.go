@@ -2,6 +2,7 @@ package telegram
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -33,7 +34,9 @@ func (c *Client) Enabled() bool {
 }
 
 // SendHTML отправляет текст с parse_mode=HTML. Безопасно вызывать при !Enabled() — no-op.
-func (c *Client) SendHTML(text string) error {
+// ctx используется для отмены/deadline HTTP-запроса; передавайте контекст с коротким
+// таймаутом (например 5 s) чтобы зависший Bot API не блокировал вызывающую горутину.
+func (c *Client) SendHTML(ctx context.Context, text string) error {
 	if c == nil || !c.enabled {
 		return nil
 	}
@@ -47,7 +50,7 @@ func (c *Client) SendHTML(text string) error {
 	if err != nil {
 		return fmt.Errorf("marshal telegram body: %w", err)
 	}
-	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(data))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(data))
 	if err != nil {
 		return fmt.Errorf("telegram request: %w", err)
 	}

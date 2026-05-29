@@ -30,6 +30,10 @@ errors:
     code: GATEWAY.REQUEST.EMAIL_REQUIRED
     message: "Укажите email"
 
+  - http_status: 413
+    code: GATEWAY.REQUEST.BODY_TOO_LARGE
+    message: "Тело запроса превышает допустимый размер"
+
   - http_status: 429
     code: GATEWAY.REQUEST.RATE_LIMITED
     message: "Слишком много запросов. Повторите через несколько минут."
@@ -129,6 +133,10 @@ errors:
   - http_status: 400
     code: GATEWAY.MASTER.INVALID_SERVICES
     message: "Некорректный список услуг"
+
+  - http_status: 403
+    code: GATEWAY.PAYMENT.WEBHOOK_FORBIDDEN
+    message: "Webhook отклонён: не пройдена верификация источника"
 
   # gRPC status → default HTTP + code (message replaced by handler with gRPC text)
   - http_status: 400

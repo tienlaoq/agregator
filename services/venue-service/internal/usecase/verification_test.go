@@ -27,6 +27,72 @@ func validDraftVenue() *domain.Venue {
 	}
 }
 
+func TestValidateVenueType(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		wantErr bool
+		errSub  string
+	}{
+		{name: "ok_banya", input: "banya"},
+		{name: "ok_sauna", input: "sauna"},
+		{name: "ok_hammam", input: "hammam"},
+		{name: "err_empty", input: "", wantErr: true, errSub: "banya"},
+		{name: "err_uppercase", input: "BANYA", wantErr: true, errSub: "banya"},
+		{name: "err_unknown_jacuzzi", input: "jacuzzi", wantErr: true, errSub: "banya"},
+		{name: "err_unknown_pool", input: "pool", wantErr: true, errSub: "banya"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateVenueType(tt.input)
+			if !tt.wantErr {
+				require.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			st, ok := status.FromError(err)
+			require.True(t, ok, "expected gRPC status, got %T: %v", err, err)
+			assert.Equal(t, codes.InvalidArgument, st.Code())
+			if tt.errSub != "" {
+				assert.Contains(t, strings.ToLower(st.Message()), strings.ToLower(tt.errSub))
+			}
+		})
+	}
+}
+
+func TestValidateVenueCoordinates(t *testing.T) {
+	tests := []struct {
+		name    string
+		lat     float64
+		lng     float64
+		wantErr bool
+	}{
+		{name: "ok_moscow", lat: 55.7558, lng: 37.6176, wantErr: false},
+		{name: "ok_zero_zero", lat: 0, lng: 0, wantErr: false},
+		{name: "ok_max_bounds", lat: 90, lng: 180, wantErr: false},
+		{name: "ok_min_bounds", lat: -90, lng: -180, wantErr: false},
+		{name: "err_lat_too_high", lat: 90.0001, lng: 0, wantErr: true},
+		{name: "err_lat_too_low", lat: -90.0001, lng: 0, wantErr: true},
+		{name: "err_lng_too_high", lat: 0, lng: 180.0001, wantErr: true},
+		{name: "err_lng_too_low", lat: 0, lng: -180.0001, wantErr: true},
+		{name: "err_both_out_of_range", lat: 91, lng: 200, wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateVenueCoordinates(tt.lat, tt.lng)
+			if !tt.wantErr {
+				require.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			st, ok := status.FromError(err)
+			require.True(t, ok, "expected gRPC status, got %T: %v", err, err)
+			assert.Equal(t, codes.InvalidArgument, st.Code())
+			assert.Contains(t, st.Message(), "координаты")
+		})
+	}
+}
+
 func TestValidateVenueDraftReadyForReview(t *testing.T) {
 	desc40 := strings.Repeat("б", 40)
 	desc39 := strings.Repeat("в", 39)

@@ -3,11 +3,11 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -15,33 +15,38 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/nats-io/nats.go"
 	"github.com/redis/go-redis/v9"
+	"github.com/rs/zerolog"
 	bookingv1 "github.com/tienlao/agregator/gen/go/booking/v1"
 	chatv1 "github.com/tienlao/agregator/gen/go/chat/v1"
+	crmv1 "github.com/tienlao/agregator/gen/go/crm/v1"
 	masterv1 "github.com/tienlao/agregator/gen/go/master/v1"
 	userv1 "github.com/tienlao/agregator/gen/go/user/v1"
 	venuev1 "github.com/tienlao/agregator/gen/go/venue/v1"
-	pkgerrors "github.com/tienlao/agregator/pkg/errors"
 	"github.com/tienlao/agregator/services/api-gateway/internal/apicatalog"
+	"github.com/tienlao/agregator/services/api-gateway/internal/limits"
 	"github.com/tienlao/agregator/services/api-gateway/internal/middleware"
+	"github.com/tienlao/agregator/services/api-gateway/internal/ratelimit"
 	"github.com/tienlao/agregator/services/api-gateway/internal/realtime/chatws"
 	"google.golang.org/grpc"
 )
 
 type ChatHandler struct {
-	client       chatGatewayClient
-	booking      bookingGatewayClient
-	venue        venueGatewayClient
-	master       masterGatewayClient
-	users        userGatewayClient
-	limiter      chatMessageLimiter
-	ticketRedis  *redis.Client
-	natsConn     *nats.Conn
-	upgrader     websocket.Upgrader
-	hub          *chatws.Hub
+	log         zerolog.Logger
+	client      chatGatewayClient
+	users       userGatewayClient
+	limiter     chatMessageLimiter
+	ticketRedis *redis.Client
+	natsConn    *nats.Conn
+	upgrader    websocket.Upgrader
+	hub         *chatws.Hub
+	// resolver owns the "who participates in this thread?" business logic
+	// (P1#7): isolated here so ChatHandler stays a thin routing/auth layer.
+	resolver *chatThreadResolver
 }
 
 type userGatewayClient interface {
 	GetUser(ctx context.Context, in *userv1.GetUserRequest, opts ...grpc.CallOption) (*userv1.UserResponse, error)
+	GetUsersBatch(ctx context.Context, in *userv1.GetUsersBatchRequest, opts ...grpc.CallOption) (*userv1.GetUsersBatchResponse, error)
 }
 
 type chatGatewayClient interface {
@@ -54,79 +59,101 @@ type chatGatewayClient interface {
 
 type bookingGatewayClient interface {
 	GetBooking(ctx context.Context, in *bookingv1.GetBookingRequest, opts ...grpc.CallOption) (*bookingv1.BookingResponse, error)
+	GetBookingsBatch(ctx context.Context, in *bookingv1.GetBookingsBatchRequest, opts ...grpc.CallOption) (*bookingv1.GetBookingsBatchResponse, error)
 }
 
 type venueGatewayClient interface {
 	GetVenue(ctx context.Context, in *venuev1.GetVenueRequest, opts ...grpc.CallOption) (*venuev1.VenueResponse, error)
-	GetVenueManagementAccess(ctx context.Context, in *venuev1.GetVenueManagementAccessRequest, opts ...grpc.CallOption) (*venuev1.GetVenueManagementAccessResponse, error)
-	ListVenueStaff(ctx context.Context, in *venuev1.ListVenueStaffRequest, opts ...grpc.CallOption) (*venuev1.ListVenueStaffResponse, error)
+	GetVenuesBatch(ctx context.Context, in *venuev1.GetVenuesBatchRequest, opts ...grpc.CallOption) (*venuev1.GetVenuesBatchResponse, error)
+}
+
+// crmGatewayClient narrows the CRM proto client to only the methods the chat
+// thread resolver needs. Defined at the consumer site so test fakes can
+// implement just these two without touching the rest of the CRM surface.
+type crmGatewayClient interface {
+	GetManagementAccess(ctx context.Context, in *crmv1.GetManagementAccessRequest, opts ...grpc.CallOption) (*crmv1.GetManagementAccessResponse, error)
+	ListStaff(ctx context.Context, in *crmv1.ListStaffRequest, opts ...grpc.CallOption) (*crmv1.ListStaffResponse, error)
 }
 
 type masterGatewayClient interface {
 	GetMasterBooking(ctx context.Context, in *masterv1.GetMasterBookingRequest, opts ...grpc.CallOption) (*masterv1.MasterBookingResponse, error)
+	GetMasterBookingsBatch(ctx context.Context, in *masterv1.GetMasterBookingsBatchRequest, opts ...grpc.CallOption) (*masterv1.GetMasterBookingsBatchResponse, error)
 }
 
 type chatMessageLimiter interface {
 	Allow(ctx context.Context, key string, limit int, window time.Duration) (bool, error)
 }
 
-type inMemoryChatLimiter struct{ byK sync.Map }
+// inMemoryPruneInterval controls how often the background goroutine inside the
+// in-memory fallback limiter evicts fully-stale keys (N6: prevents unbounded
+// map growth on long QA sessions).
+var inMemoryPruneInterval = limits.ChatInMemoryPruneInterval
 
-func (l *inMemoryChatLimiter) Allow(_ context.Context, key string, limit int, window time.Duration) (bool, error) {
-	now := time.Now()
-	cutoff := now.Add(-window)
-	var prev []time.Time
-	if v, ok := l.byK.Load(key); ok {
-		prev, _ = v.([]time.Time)
-	}
-	kept := prev[:0]
-	for _, ts := range prev {
-		if ts.After(cutoff) {
-			kept = append(kept, ts)
-		}
-	}
-	if len(kept) >= limit {
-		l.byK.Store(key, kept)
-		return false, nil
-	}
-	kept = append(kept, now)
-	l.byK.Store(key, kept)
-	return true, nil
+// newInMemoryChatLimiter returns a sliding-window rate limiter with a
+// background prune goroutine that stops when ctx is cancelled.
+func newInMemoryChatLimiter(ctx context.Context) *ratelimit.SlidingWindow {
+	return ratelimit.NewWithPrune(ctx, inMemoryPruneInterval)
 }
 
-const (
-	sendRateWindow = time.Minute
-	sendRateMax    = 20
+// sendRateWindow and sendRateMax are kept as package-local aliases so the
+// allowSend call site stays readable; the canonical values live in limits.
+var (
+	sendRateWindow = limits.ChatSendRateWindow
+	sendRateMax    = limits.ChatSendRateMax
+	wsTicketTTL    = limits.ChatWSTicketTTL
 )
 
-const wsTicketTTL = 90 * time.Second
-
 func NewChatHandler(
+	ctx context.Context,
+	log zerolog.Logger,
 	client chatGatewayClient,
 	booking bookingGatewayClient,
 	venue venueGatewayClient,
 	master masterGatewayClient,
 	users userGatewayClient,
+	crm crmGatewayClient,
 	limiter chatMessageLimiter,
 	ticketRedis *redis.Client,
 	natsConn *nats.Conn,
 ) *ChatHandler {
 	if limiter == nil {
-		limiter = &inMemoryChatLimiter{}
+		// N6: newInMemoryChatLimiter starts a background prune goroutine that
+		// stops when ctx is cancelled (i.e. when the gateway shuts down).
+		limiter = newInMemoryChatLimiter(ctx)
 	}
 	return &ChatHandler{
+		log:         log,
 		client:      client,
-		booking:     booking,
-		venue:       venue,
-		master:      master,
 		users:       users,
 		limiter:     limiter,
 		ticketRedis: ticketRedis,
 		natsConn:    natsConn,
+		// P1#7: participant-resolution logic lives in chatThreadResolver, not
+		// in the HTTP handler, keeping ChatHandler as a thin routing/auth layer.
+		resolver: newChatThreadResolver(log, client, booking, venue, master, users, crm),
 		upgrader: websocket.Upgrader{
+			// CheckOrigin enforces the CORS allowlist for browser clients.
+			//
+			// Empty-Origin policy (N1 — intentional):
+			//   Browsers always send an Origin header on cross-origin WebSocket
+			//   upgrades (RFC 6455 §4).  A missing Origin means the caller is
+			//   NOT a browser: native mobile apps, CLI tools, server-side test
+			//   scripts, Postman.  These callers also cannot obtain CSRF cookies,
+			//   so the CSRF risk that Origin-checking guards against does not apply.
+			//
+			//   The WS ticket mechanism (IssueWSTicket / Auth middleware) provides
+			//   the primary auth layer.  When a ticket is issued to a server-side
+			//   caller (no Origin), storedOrigin is "" and the middleware intentionally
+			//   skips the origin-match check — mirroring this policy here.
+			//
+			//   If you introduce browser-only flows that must never allow headless
+			//   access, require a non-empty Origin at ticket-issuance time instead
+			//   of here.
 			CheckOrigin: func(r *http.Request) bool {
 				origin := strings.TrimSpace(r.Header.Get("Origin"))
 				if origin == "" {
+					// Non-browser caller (mobile / CLI / server): allow.
+					// Auth is enforced by the WS ticket; see comment above.
 					return true
 				}
 				originURL, err := url.Parse(origin)
@@ -155,12 +182,14 @@ func chatThreadToJSON(t *chatv1.ChatThread) map[string]any {
 	if t == nil {
 		return nil
 	}
+	// P2#20: normalise all UUID fields to lowercase for a consistent API surface.
+	// last_read_message_id was already lowercased below; apply the same here.
 	out := map[string]any{
-		"id":                   t.GetId(),
+		"id":                   strings.ToLower(t.GetId()),
 		"kind":                 t.GetKind(),
 		"ref_id":               t.GetRefId(),
 		"participant_user_ids": t.GetParticipantUserIds(),
-		"last_message_id":      t.GetLastMessageId(),
+		"last_message_id":      strings.ToLower(t.GetLastMessageId()),
 		"unread_count":         t.GetUnreadCount(),
 	}
 	if t.GetLastMessageAt() != nil {
@@ -183,9 +212,9 @@ func chatMessageToJSON(m *chatv1.ChatMessage) map[string]any {
 		return nil
 	}
 	out := map[string]any{
-		"id":             m.GetId(),
-		"thread_id":      m.GetThreadId(),
-		"author_user_id": m.GetAuthorUserId(),
+		"id":             strings.ToLower(m.GetId()),
+		"thread_id":      strings.ToLower(m.GetThreadId()),
+		"author_user_id": strings.ToLower(m.GetAuthorUserId()),
 		"text":           m.GetText(),
 	}
 	if m.GetCreatedAt() != nil {
@@ -231,9 +260,16 @@ func (h *ChatHandler) emitToUsers(userIDs []string, payload map[string]any) {
 			UserIDs []string       `json:"user_ids"`
 			Payload map[string]any `json:"payload"`
 		}{UserIDs: userIDs, Payload: payload})
-		if err == nil {
-			_ = h.natsConn.Publish("chat.fanout", b)
-			return
+		if err != nil {
+			// P2#24: marshal errors are unexpected (payload is always a known map)
+			// but worth a warning so they don't vanish silently in production.
+			h.log.Warn().Err(err).Msg("chat: emitToUsers: failed to marshal NATS fanout payload, falling back to local hub")
+		} else {
+			if pubErr := h.natsConn.Publish("chat.fanout", b); pubErr != nil {
+				h.log.Warn().Err(pubErr).Msg("chat: emitToUsers: NATS publish failed, falling back to local hub")
+			} else {
+				return
+			}
 		}
 	}
 	h.hub.Broadcast(userIDs, payload)
@@ -264,10 +300,14 @@ func (h *ChatHandler) IssueWSTicket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := uuid.NewString()
+	// P0#3: bind the ticket to the issuing Origin so that a stolen ticket
+	// from a different origin (e.g. via Referer leak) cannot be replayed.
+	origin := strings.TrimSpace(r.Header.Get("Origin"))
 	payload, err := json.Marshal(map[string]string{
 		"user_id": userID,
 		"role":    middleware.RoleFromCtx(r.Context()),
 		"email":   middleware.EmailFromCtx(r.Context()),
+		"origin":  origin,
 	})
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "marshal"})
@@ -279,7 +319,7 @@ func (h *ChatHandler) IssueWSTicket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"ticket":          id,
+		"ticket":         id,
 		"expires_in_sec": int(wsTicketTTL.Seconds()),
 	})
 }
@@ -295,97 +335,8 @@ func parsePositiveInt(raw string, def, max int32) int32 {
 	return int32(v)
 }
 
-func (h *ChatHandler) ensureVenueBookingThread(r *http.Request, userID, refID string) (*chatv1.ChatThread, error) {
-	b, err := h.booking.GetBooking(r.Context(), &bookingv1.GetBookingRequest{Id: refID})
-	if err != nil {
-		return nil, err
-	}
-	venueID := b.GetVenueId()
-	clientID := b.GetUserId()
-	allowed := sameUserID(clientID, userID)
-	participants := []string{clientID}
-	var ownerID string
-	if venueID != "" {
-		v, vErr := h.venue.GetVenue(r.Context(), &venuev1.GetVenueRequest{Id: venueID})
-		if vErr == nil {
-			ownerID = v.GetOwnerId()
-			if sameUserID(ownerID, userID) {
-				allowed = true
-			}
-		}
-		acc, aErr := h.venue.GetVenueManagementAccess(r.Context(), &venuev1.GetVenueManagementAccessRequest{
-			VenueId: venueID,
-			UserId:  userID,
-		})
-		if aErr == nil && strings.TrimSpace(acc.GetAccess()) != "" {
-			allowed = true
-		}
-		staffResp, sErr := h.venue.ListVenueStaff(r.Context(), &venuev1.ListVenueStaffRequest{
-			VenueId: venueID,
-			ActorId: userID,
-		})
-		if sErr == nil {
-			for _, m := range staffResp.GetMembers() {
-				uid := strings.TrimSpace(m.GetUserId())
-				if uid == "" || sameUserID(uid, clientID) || sameUserID(uid, ownerID) {
-					continue
-				}
-				participants = append(participants, uid)
-			}
-		}
-	}
-	if !allowed {
-		return nil, pkgerrors.PermissionDenied("chat access denied")
-	}
-	if ownerID != "" && !sameUserID(ownerID, clientID) {
-		participants = append(participants, ownerID)
-	}
-	participants = uniqueNonEmpty(participants)
-	if len(participants) < 2 {
-		participants = append(participants, userID)
-	}
-	resp, err := h.client.EnsureThread(r.Context(), &chatv1.EnsureThreadRequest{
-		Kind:               "venue_booking",
-		RefId:              refID,
-		ParticipantUserIds: participants,
-	})
-	if err != nil {
-		return nil, err
-	}
-	return resp.GetThread(), nil
-}
-
-func (h *ChatHandler) ensureMasterBookingThread(r *http.Request, userID, refID string) (*chatv1.ChatThread, error) {
-	b, err := h.master.GetMasterBooking(r.Context(), &masterv1.GetMasterBookingRequest{
-		BookingId:   refID,
-		ActorUserId: userID,
-	})
-	if err != nil {
-		return nil, err
-	}
-	bk := b.GetBooking()
-	if bk == nil {
-		return nil, pkgerrors.PermissionDenied("chat access denied")
-	}
-	clientID := strings.TrimSpace(bk.GetClientUserId())
-	masterUserID := strings.TrimSpace(bk.GetMasterUserId())
-	if clientID == "" || masterUserID == "" {
-		return nil, pkgerrors.PermissionDenied("chat access denied")
-	}
-	participants := uniqueNonEmpty([]string{clientID, masterUserID})
-	if len(participants) < 2 {
-		return nil, pkgerrors.PermissionDenied("chat access denied")
-	}
-	resp, err := h.client.EnsureThread(r.Context(), &chatv1.EnsureThreadRequest{
-		Kind:               "master_booking",
-		RefId:              refID,
-		ParticipantUserIds: participants,
-	})
-	if err != nil {
-		return nil, err
-	}
-	return resp.GetThread(), nil
-}
+// ensureVenueBookingThread and ensureMasterBookingThread have been moved to
+// chat_thread_resolver.go (P1#7).  ChatHandler delegates to h.resolver.
 
 func (h *ChatHandler) EnsureThread(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.UserIDFromCtx(r.Context())
@@ -397,19 +348,18 @@ func (h *ChatHandler) EnsureThread(w http.ResponseWriter, r *http.Request) {
 		Kind  string `json:"kind"`
 		RefID string `json:"ref_id"`
 	}
-	if err := readJSON(r, &body); err != nil {
-		writeCatalog(w, apicatalog.GatewayRequestInvalidJson)
-		return
-	}
+	if !readJSONOrRespond(w, r, &body) { return }
 	var (
 		t   *chatv1.ChatThread
 		err error
 	)
+	// Delegate to resolver (P1#7): ChatHandler stays thin, resolver owns
+	// the "who participates?" business logic.
 	switch strings.TrimSpace(body.Kind) {
 	case "venue_booking":
-		t, err = h.ensureVenueBookingThread(r, userID, strings.TrimSpace(body.RefID))
+		t, err = h.resolver.ensureVenueBookingThread(r, userID, strings.TrimSpace(body.RefID))
 	case "master_booking":
-		t, err = h.ensureMasterBookingThread(r, userID, strings.TrimSpace(body.RefID))
+		t, err = h.resolver.ensureMasterBookingThread(r, userID, strings.TrimSpace(body.RefID))
 	default:
 		writeCatalog(w, apicatalog.GatewayRequestInvalidBody.WithMessage("unsupported thread kind"))
 		return
@@ -419,7 +369,7 @@ func (h *ChatHandler) EnsureThread(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	item := chatThreadToJSON(t)
-	attachPeerDisplayToThreadJSON(item, t.GetId(), h.peerDisplayNamesBatch(r.Context(), userID, []*chatv1.ChatThread{t}))
+	attachPeerDisplayToThreadJSON(item, t.GetId(), h.resolver.peerDisplayNamesBatch(r.Context(), userID, []*chatv1.ChatThread{t}))
 	writeJSON(w, http.StatusOK, map[string]any{"thread": item})
 }
 
@@ -441,7 +391,7 @@ func (h *ChatHandler) ListThreads(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rawThreads := resp.GetThreads()
-	peerByThread := h.peerDisplayNamesBatch(r.Context(), userID, rawThreads)
+	peerByThread := h.resolver.peerDisplayNamesBatch(r.Context(), userID, rawThreads)
 	threads := make([]map[string]any, 0, len(rawThreads))
 	for _, t := range rawThreads {
 		item := chatThreadToJSON(t)
@@ -492,10 +442,7 @@ func (h *ChatHandler) SendMessage(w http.ResponseWriter, r *http.Request) {
 		Text        string `json:"text"`
 		ClientMsgID string `json:"client_msg_id"`
 	}
-	if err := readJSON(r, &body); err != nil {
-		writeCatalog(w, apicatalog.GatewayRequestInvalidJson)
-		return
-	}
+	if !readJSONOrRespond(w, r, &body) { return }
 	resp, err := h.client.SendMessage(r.Context(), &chatv1.SendMessageRequest{
 		ThreadId:    threadID,
 		UserId:      userID,
@@ -506,9 +453,12 @@ func (h *ChatHandler) SendMessage(w http.ResponseWriter, r *http.Request) {
 		grpcErrorToHTTP(w, err)
 		return
 	}
+	// Both "type" (v1 WS clients) and "event" (v2 WS clients) are included in
+	// the fanout payload so that clients on either version receive the event
+	// they expect from a single broadcast. New clients should read "event".
 	payload := map[string]any{
-		"type":    "message_new",          // v1
-		"event":   "chat.message.created", // v2
+		"type":    "message_new",
+		"event":   "chat.message.created",
 		"thread":  chatThreadToJSON(resp.GetThread()),
 		"message": chatMessageToJSON(resp.GetMessage()),
 	}
@@ -534,13 +484,38 @@ func (h *ChatHandler) MarkRead(w http.ResponseWriter, r *http.Request) {
 		grpcErrorToHTTP(w, err)
 		return
 	}
+	// See SendMessage: both keys present for v1/v2 client compatibility.
 	payload := map[string]any{
-		"type":   "read_updated",             // v1
-		"event":  "chat.thread.read_updated", // v2
+		"type":   "read_updated",
+		"event":  "chat.thread.read_updated",
 		"thread": chatThreadToJSON(resp.GetThread()),
 	}
 	h.emitToUsers(resp.GetThread().GetParticipantUserIds(), payload)
 	writeJSON(w, http.StatusOK, map[string]any{"thread": chatThreadToJSON(resp.GetThread())})
+}
+
+var (
+	// wsReadLimit caps incoming JSON frames to guard against memory exhaustion
+	// (P1#14).  Canonical value in limits.ChatWSReadLimit.
+	wsReadLimit = limits.ChatWSReadLimit
+
+	// wsPingInterval / wsPongWait / wsWriteWait — canonical values in limits.
+	wsPingInterval = limits.ChatWSPingInterval
+	wsPongWait     = limits.ChatWSPongWait
+	wsWriteWait    = limits.ChatWSWriteWait
+)
+
+func init() {
+	// PongWait must be strictly greater than PingInterval so the server always
+	// allows at least one full round-trip before declaring the connection dead.
+	// A violation (e.g. via env override) would cause spurious disconnects for
+	// every client — catch it at startup rather than in production logs.
+	if wsPongWait <= wsPingInterval {
+		panic(fmt.Sprintf(
+			"chat WS config invariant violated: CHAT_WS_PONG_WAIT (%s) must be > CHAT_WS_PING_INTERVAL (%s)",
+			wsPongWait, wsPingInterval,
+		))
+	}
 }
 
 func (h *ChatHandler) WS(w http.ResponseWriter, r *http.Request) {
@@ -554,35 +529,87 @@ func (h *ChatHandler) WS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer rawConn.Close()
+
+	// P1#14: cap incoming frame size so a rogue client cannot OOM the server.
+	rawConn.SetReadLimit(wsReadLimit)
+
+	// P1#15: server-side ping/pong keepalive.
+	// Reset the read deadline each time a pong is received.
+	_ = rawConn.SetReadDeadline(time.Now().Add(wsPongWait))
+	rawConn.SetPongHandler(func(string) error {
+		return rawConn.SetReadDeadline(time.Now().Add(wsPongWait))
+	})
+
 	c := h.hub.Add(userID, rawConn)
 	defer h.hub.Remove(userID, c)
 
+	// N9: use a local done channel rather than r.Context().Done() to signal the
+	// ping goroutine.  r.Context() is cancelled by the HTTP server sometime after
+	// WS() returns — there is a window where the read loop has already exited but
+	// the goroutine is still alive and may attempt a WriteMessage on the closed
+	// connection.  Closing done via defer guarantees the goroutine exits at most
+	// one ticker period after the read loop, without relying on HTTP server
+	// internals.
+	done := make(chan struct{})
+	defer close(done)
+
+	ticker := time.NewTicker(wsPingInterval)
+	defer ticker.Stop()
+
+	// Run the ping loop in a separate goroutine so it doesn't block the read
+	// loop below.
+	go func() {
+		for {
+			select {
+			case <-ticker.C:
+				_ = rawConn.SetWriteDeadline(time.Now().Add(wsWriteWait))
+				if err := rawConn.WriteMessage(websocket.PingMessage, nil); err != nil {
+					return
+				}
+			case <-done:
+				return
+			}
+		}
+	}()
+
+	// best-effort: SendJSON returns non-nil only when json.Marshal fails, which
+	// cannot happen for the map[string]any literals below (all primitive types).
+	// Connection drops and full send-buffers are handled inside SendJSON itself
+	// via Client.close() — the next ReadJSON call will then return an error and
+	// exit this goroutine cleanly. No action needed on the caller side.
 	_ = c.SendJSON(map[string]any{"type": "connected", "event": "chat.connected"})
 
 	for {
 		var in struct {
-			Type     string `json:"type"`
-			ThreadID string `json:"thread_id"`
-			Text     string `json:"text"`
+			Type        string `json:"type"`
+			ThreadID    string `json:"thread_id"`
+			Text        string `json:"text"`
+			ClientMsgID string `json:"client_msg_id"` // P0#5: propagate for idempotency
 		}
 		if err := rawConn.ReadJSON(&in); err != nil {
 			return
 		}
+		// N11: normalise thread_id to lowercase once here so every case branch
+		// sends a canonical UUID to gRPC regardless of what the client sent.
+		// uuid.Parse in the usecase would handle it anyway, but being explicit
+		// here keeps the WS path consistent with the HTTP handlers.
+		in.ThreadID = strings.ToLower(strings.TrimSpace(in.ThreadID))
 		switch in.Type {
 		case "ping":
-			_ = c.SendJSON(map[string]any{"type": "pong", "event": "chat.pong"})
+			_ = c.SendJSON(map[string]any{"type": "pong", "event": "chat.pong"}) // best-effort, see above
 		case "send_message":
 			if !h.allowSend(r.Context(), userID, in.ThreadID) {
-				_ = c.SendJSON(map[string]any{"type": "error", "event": "chat.error", "error": "rate_limit"})
+				_ = c.SendJSON(map[string]any{"type": "error", "event": "chat.error", "error": "rate_limit"}) // best-effort, see above
 				continue
 			}
 			resp, err := h.client.SendMessage(r.Context(), &chatv1.SendMessageRequest{
-				ThreadId: in.ThreadID,
-				UserId:   userID,
-				Text:     in.Text,
+				ThreadId:    in.ThreadID,
+				UserId:      userID,
+				Text:        in.Text,
+				ClientMsgId: strings.TrimSpace(in.ClientMsgID), // P0#5: dedup on retry
 			})
 			if err != nil {
-				_ = c.SendJSON(map[string]any{"type": "error", "event": "chat.error", "error": "send_failed"})
+				_ = c.SendJSON(map[string]any{"type": "error", "event": "chat.error", "error": "send_failed"}) // best-effort, see above
 				continue
 			}
 			h.emitToUsers(resp.GetThread().GetParticipantUserIds(), map[string]any{
@@ -597,7 +624,7 @@ func (h *ChatHandler) WS(w http.ResponseWriter, r *http.Request) {
 				UserId:   userID,
 			})
 			if err != nil {
-				_ = c.SendJSON(map[string]any{"type": "error", "event": "chat.error", "error": "mark_read_failed"})
+				_ = c.SendJSON(map[string]any{"type": "error", "event": "chat.error", "error": "mark_read_failed"}) // best-effort, see above
 				continue
 			}
 			h.emitToUsers(resp.GetThread().GetParticipantUserIds(), map[string]any{
@@ -606,7 +633,7 @@ func (h *ChatHandler) WS(w http.ResponseWriter, r *http.Request) {
 				"thread": chatThreadToJSON(resp.GetThread()),
 			})
 		default:
-			_ = c.SendJSON(map[string]any{"type": "error", "event": "chat.error", "error": "unknown_command"})
+			_ = c.SendJSON(map[string]any{"type": "error", "event": "chat.error", "error": "unknown_command"}) // best-effort, see above
 		}
 	}
 }

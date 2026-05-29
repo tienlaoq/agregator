@@ -1,6 +1,7 @@
 package events
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 
@@ -17,12 +18,12 @@ func NewPublisher(js nats.JetStreamContext) *Publisher {
 	return &Publisher{js: js}
 }
 
-func (p *Publisher) VenueCreated(venue *domain.Venue) error {
-	return p.publish("venue.created", venue)
+func (p *Publisher) VenueCreated(ctx context.Context, venue *domain.Venue) error {
+	return p.publish(ctx, "venue.created", venue)
 }
 
-func (p *Publisher) VenueUpdated(venue *domain.Venue) error {
-	return p.publish("venue.updated", venue)
+func (p *Publisher) VenueUpdated(ctx context.Context, venue *domain.Venue) error {
+	return p.publish(ctx, "venue.updated", venue)
 }
 
 // VenueManagementAlert — событие для интеграций (почта, пуши): приостановка и т.п.
@@ -35,17 +36,16 @@ type VenueManagementAlert struct {
 	ModerationComment string   `json:"moderation_comment"`
 }
 
-func (p *Publisher) VenueManagementAlert(alert VenueManagementAlert) error {
-	return p.publish("venue.management.alert", alert)
+func (p *Publisher) PublishVenueManagementAlert(ctx context.Context, alert VenueManagementAlert) error {
+	return p.publish(ctx, "venue.management.alert", alert)
 }
 
-func (p *Publisher) publish(subject string, payload any) error {
+func (p *Publisher) publish(ctx context.Context, subject string, payload any) error {
 	data, err := json.Marshal(payload)
 	if err != nil {
 		return fmt.Errorf("marshal event: %w", err)
 	}
-	_, err = p.js.Publish(subject, data)
-	if err != nil {
+	if _, err = p.js.PublishMsg(&nats.Msg{Subject: subject, Data: data}, nats.Context(ctx)); err != nil {
 		return fmt.Errorf("publish %s: %w", subject, err)
 	}
 	return nil

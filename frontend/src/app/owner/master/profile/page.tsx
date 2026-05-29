@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -290,6 +290,7 @@ export default function MasterProfilePage() {
   const [specText, setSpecText] = useState("");
   const [availabilityNote, setAvailabilityNote] = useState("");
   const [services, setServices] = useState<ServiceLine[]>([newServiceLine()]);
+  const hydratedProfileIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (hydrated && (!token || user?.role !== "master")) {
@@ -302,6 +303,8 @@ export default function MasterProfilePage() {
     queryFn: getMyMasterProfile,
     enabled: !!token && user?.role === "master",
     retry: false,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
   });
 
   const profile =
@@ -377,6 +380,9 @@ export default function MasterProfilePage() {
 
   useEffect(() => {
     if (!profile) return;
+    if (hydratedProfileIdRef.current === profile.id) return;
+    hydratedProfileIdRef.current = profile.id;
+
     setDisplayName(profile.display_name);
     setBio(profile.bio);
     const masterPhone = profile.phone?.trim() ?? "";

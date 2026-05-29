@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -32,7 +33,6 @@ type mockVenueClient struct {
 	OnGetVenueBySlug        func(ctx context.Context, in *venuev1.GetVenueBySlugRequest, opts ...grpc.CallOption) (*venuev1.VenueResponse, error)
 	OnListVenues            func(ctx context.Context, in *venuev1.ListVenuesRequest, opts ...grpc.CallOption) (*venuev1.ListVenuesResponse, error)
 	OnSearchVenues          func(ctx context.Context, in *venuev1.SearchVenuesRequest, opts ...grpc.CallOption) (*venuev1.ListVenuesResponse, error)
-	OnListOwnerVenues       func(ctx context.Context, in *venuev1.ListOwnerVenuesRequest, opts ...grpc.CallOption) (*venuev1.ListVenuesResponse, error)
 	OnCheckSlotAvailability func(ctx context.Context, in *venuev1.CheckSlotRequest, opts ...grpc.CallOption) (*venuev1.CheckSlotResponse, error)
 	OnReserveSlot           func(ctx context.Context, in *venuev1.ReserveSlotRequest, opts ...grpc.CallOption) (*venuev1.ReserveSlotResponse, error)
 	OnReleaseSlot           func(ctx context.Context, in *venuev1.ReleaseSlotRequest, opts ...grpc.CallOption) (*venuev1.ReleaseSlotResponse, error)
@@ -90,12 +90,8 @@ func (m *mockVenueClient) SearchVenues(ctx context.Context, in *venuev1.SearchVe
 	return nil, nil
 }
 
-func (m *mockVenueClient) ListOwnerVenues(ctx context.Context, in *venuev1.ListOwnerVenuesRequest, opts ...grpc.CallOption) (*venuev1.ListVenuesResponse, error) {
-	if m.OnListOwnerVenues != nil {
-		return m.OnListOwnerVenues(ctx, in, opts...)
-	}
-	return nil, nil
-}
+// ListOwnerVenues was removed from venue.proto (gateway now composes the
+// list from crm.ListManagedVenues + venue.GetVenuesBatch).
 
 func (m *mockVenueClient) CheckSlotAvailability(ctx context.Context, in *venuev1.CheckSlotRequest, opts ...grpc.CallOption) (*venuev1.CheckSlotResponse, error) {
 	if m.OnCheckSlotAvailability != nil {
@@ -175,33 +171,26 @@ func (m *mockVenueClient) SetVenueHallCoverPhoto(ctx context.Context, in *venuev
 	return nil, status.Error(codes.Unimplemented, "SetVenueHallCoverPhoto")
 }
 
-func (m *mockVenueClient) GetVenueManagementAccess(ctx context.Context, in *venuev1.GetVenueManagementAccessRequest, opts ...grpc.CallOption) (*venuev1.GetVenueManagementAccessResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "GetVenueManagementAccess")
+// CRM RPCs (GetVenueManagementAccess, ListVenueStaff, AddVenueStaff,
+// RemoveVenueStaff, ListVenueCRMTasks, CreateVenueCRMTask,
+// CompleteVenueCRMTask) were removed from venue.proto and live in crm-service.
+
+func (m *mockVenueClient) GetVenuesBatch(ctx context.Context, in *venuev1.GetVenuesBatchRequest, opts ...grpc.CallOption) (*venuev1.GetVenuesBatchResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "GetVenuesBatch")
 }
 
-func (m *mockVenueClient) ListVenueStaff(ctx context.Context, in *venuev1.ListVenueStaffRequest, opts ...grpc.CallOption) (*venuev1.ListVenueStaffResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "ListVenueStaff")
+func (m *mockVenueClient) BatchCheckSlotAvailability(ctx context.Context, in *venuev1.BatchCheckSlotRequest, opts ...grpc.CallOption) (*venuev1.BatchCheckSlotResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "BatchCheckSlotAvailability")
 }
 
-func (m *mockVenueClient) AddVenueStaff(ctx context.Context, in *venuev1.AddVenueStaffRequest, opts ...grpc.CallOption) (*venuev1.AddVenueStaffResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "AddVenueStaff")
+// noopUploader satisfies storage.Uploader without touching the filesystem.
+type noopVenueUploader struct{}
+
+func (noopVenueUploader) Put(_ context.Context, _, _ string, _ int64, _ io.Reader) (string, error) {
+	return "https://example.com/photo.jpg", nil
 }
 
-func (m *mockVenueClient) RemoveVenueStaff(ctx context.Context, in *venuev1.RemoveVenueStaffRequest, opts ...grpc.CallOption) (*venuev1.RemoveVenueStaffResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "RemoveVenueStaff")
-}
-
-func (m *mockVenueClient) ListVenueCRMTasks(ctx context.Context, in *venuev1.ListVenueCRMTasksRequest, opts ...grpc.CallOption) (*venuev1.ListVenueCRMTasksResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "ListVenueCRMTasks")
-}
-
-func (m *mockVenueClient) CreateVenueCRMTask(ctx context.Context, in *venuev1.CreateVenueCRMTaskRequest, opts ...grpc.CallOption) (*venuev1.CreateVenueCRMTaskResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "CreateVenueCRMTask")
-}
-
-func (m *mockVenueClient) CompleteVenueCRMTask(ctx context.Context, in *venuev1.CompleteVenueCRMTaskRequest, opts ...grpc.CallOption) (*venuev1.CompleteVenueCRMTaskResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "CompleteVenueCRMTask")
-}
+func (noopVenueUploader) Delete(_ context.Context, _ string) error { return nil }
 
 func sampleVenueResponse() *venuev1.VenueResponse {
 	return &venuev1.VenueResponse{
@@ -235,7 +224,7 @@ func TestList_Success(t *testing.T) {
 			}, nil
 		},
 	}
-	h := NewVenueHandler(mock, nil, t.TempDir())
+	h := NewVenueHandler(mock, nil, nil, noopVenueUploader{})
 
 	req := httptest.NewRequest(http.MethodGet, "/venues?page=1&page_size=10", nil)
 	rr := httptest.NewRecorder()
@@ -261,7 +250,7 @@ func TestSearch_CityOnlyDuplicatesIntoQuery(t *testing.T) {
 			return &venuev1.ListVenuesResponse{Total: 0, Page: 1, PageSize: 12}, nil
 		},
 	}
-	h := NewVenueHandler(mock, nil, t.TempDir())
+	h := NewVenueHandler(mock, nil, nil, noopVenueUploader{})
 
 	req := httptest.NewRequest(http.MethodGet, "/venues/search?city=Пенза&page=1&page_size=12", nil)
 	rr := httptest.NewRecorder()
@@ -278,7 +267,7 @@ func TestSearch_MultipleCitiesJoinsGRPCCity(t *testing.T) {
 			return &venuev1.ListVenuesResponse{Total: 0, Page: 1, PageSize: 12}, nil
 		},
 	}
-	h := NewVenueHandler(mock, nil, t.TempDir())
+	h := NewVenueHandler(mock, nil, nil, noopVenueUploader{})
 
 	// Рекомендуемый формат в query: `|` между городами.
 	q := url.Values{}
@@ -303,7 +292,7 @@ func TestSearch_MultipleCitiesLegacyUnitSeparatorInQuery(t *testing.T) {
 			return &venuev1.ListVenuesResponse{Total: 0, Page: 1, PageSize: 12}, nil
 		},
 	}
-	h := NewVenueHandler(mock, nil, t.TempDir())
+	h := NewVenueHandler(mock, nil, nil, noopVenueUploader{})
 
 	// Как в адресной строке браузера: Москва \x1e Пенза
 	raw := "/venues/search?cities=%D0%9C%D0%BE%D1%81%D0%BA%D0%B2%D0%B0%1E%D0%9F%D0%B5%D0%BD%D0%B7%D0%B0&page=1&page_size=12"
@@ -325,7 +314,7 @@ func TestSearch_QAndCityKeepsSeparate(t *testing.T) {
 			return &venuev1.ListVenuesResponse{Total: 0, Page: 1, PageSize: 12}, nil
 		},
 	}
-	h := NewVenueHandler(mock, nil, t.TempDir())
+	h := NewVenueHandler(mock, nil, nil, noopVenueUploader{})
 
 	req := httptest.NewRequest(http.MethodGet, "/venues/search?q=сауна&city=Пенза&page=1&page_size=12", nil)
 	rr := httptest.NewRecorder()
@@ -344,7 +333,7 @@ func TestGetBySlug_Success(t *testing.T) {
 			return v, nil
 		},
 	}
-	h := NewVenueHandler(mock, nil, t.TempDir())
+	h := NewVenueHandler(mock, nil, nil, noopVenueUploader{})
 
 	req := httptest.NewRequest(http.MethodGet, "/venues/cozy-banya", nil)
 	ctx := withRouteParams(req.Context(), "slug", "cozy-banya")
@@ -370,7 +359,7 @@ func TestGetBySlug_NotFound(t *testing.T) {
 			return nil, status.Error(codes.NotFound, "venue not found")
 		},
 	}
-	h := NewVenueHandler(mock, nil, t.TempDir())
+	h := NewVenueHandler(mock, nil, nil, noopVenueUploader{})
 
 	req := httptest.NewRequest(http.MethodGet, "/venues/missing", nil)
 	ctx := withRouteParams(req.Context(), "slug", "missing")
@@ -394,7 +383,7 @@ func TestGetBySlug_DraftHiddenForAnonymous(t *testing.T) {
 			return v, nil
 		},
 	}
-	h := NewVenueHandler(mock, nil, t.TempDir())
+	h := NewVenueHandler(mock, nil, nil, noopVenueUploader{})
 
 	req := httptest.NewRequest(http.MethodGet, "/venues/cozy-banya", nil)
 	ctx := withRouteParams(req.Context(), "slug", "cozy-banya")
@@ -414,12 +403,12 @@ func TestGetBySlug_DraftVisibleForAdmin(t *testing.T) {
 			return v, nil
 		},
 	}
-	h := NewVenueHandler(mock, nil, t.TempDir())
+	h := NewVenueHandler(mock, nil, nil, noopVenueUploader{})
 
 	req := httptest.NewRequest(http.MethodGet, "/venues/cozy-banya", nil)
 	ctx := withRouteParams(req.Context(), "slug", "cozy-banya")
-	ctx = context.WithValue(ctx, middleware.CtxUserID, "admin-user")
-	ctx = context.WithValue(ctx, middleware.CtxRole, "admin")
+	ctx = middleware.WithUserID(ctx, "admin-user")
+	ctx = middleware.WithRole(ctx, "admin")
 	req = req.WithContext(ctx)
 
 	rr := httptest.NewRecorder()
@@ -442,12 +431,12 @@ func TestCreate_Success(t *testing.T) {
 			return sampleVenueResponse(), nil
 		},
 	}
-	h := NewVenueHandler(mock, nil, t.TempDir())
+	h := NewVenueHandler(mock, nil, nil, noopVenueUploader{})
 
 	payload := `{"name":"New Spa","type":"banya","description":"d","address":"Main st","city":"X","latitude":1,"longitude":2,"price_from":100,"capacity":10,"amenities":["pool"],"working_hours":"9-5","phone":"1","services":[],"legal_entity_name":"ИП Тестов Тест Тестович","inn":"7707083893","ogrn":"1027700132195","public_listing_url":"https://yandex.ru/maps/org/x"}`
 	req := httptest.NewRequest(http.MethodPost, "/venues", strings.NewReader(payload))
 	req.Header.Set("Content-Type", "application/json")
-	ctx := context.WithValue(req.Context(), middleware.CtxUserID, "user-123")
+	ctx := middleware.WithUserID(req.Context(), "user-123")
 	req = req.WithContext(ctx)
 
 	rr := httptest.NewRecorder()
@@ -460,7 +449,7 @@ func TestCreate_Success(t *testing.T) {
 }
 
 func TestCreate_Unauthorized(t *testing.T) {
-	h := NewVenueHandler(&mockVenueClient{}, nil, t.TempDir())
+	h := NewVenueHandler(&mockVenueClient{}, nil, nil, noopVenueUploader{})
 
 	payload := `{"name":"X","type":"banya"}`
 	req := httptest.NewRequest(http.MethodPost, "/venues", strings.NewReader(payload))
@@ -489,13 +478,13 @@ func TestModerate_Success(t *testing.T) {
 			return v, nil
 		},
 	}
-	h := NewVenueHandler(mock, nil, t.TempDir())
+	h := NewVenueHandler(mock, nil, nil, noopVenueUploader{})
 
 	payload := `{"action":"approve","comment":"looks good"}`
 	req := httptest.NewRequest(http.MethodPost, "/admin/venues/venue-id/moderate", strings.NewReader(payload))
 	req.Header.Set("Content-Type", "application/json")
-	ctx := context.WithValue(req.Context(), middleware.CtxUserID, "admin-1")
-	ctx = context.WithValue(ctx, middleware.CtxRole, "admin")
+	ctx := middleware.WithUserID(req.Context(), "admin-1")
+	ctx = middleware.WithRole(ctx, "admin")
 	ctx = withRouteParams(ctx, "id", "venue-id")
 	req = req.WithContext(ctx)
 
@@ -510,7 +499,7 @@ func TestModerate_Success(t *testing.T) {
 }
 
 func TestModerate_Unauthorized(t *testing.T) {
-	h := NewVenueHandler(&mockVenueClient{}, nil, t.TempDir())
+	h := NewVenueHandler(&mockVenueClient{}, nil, nil, noopVenueUploader{})
 
 	payload := `{"action":"approve","comment":"x"}`
 	req := httptest.NewRequest(http.MethodPost, "/admin/venues/v1/moderate", strings.NewReader(payload))
@@ -542,7 +531,7 @@ func TestListPending_Success(t *testing.T) {
 			}, nil
 		},
 	}
-	h := NewVenueHandler(mock, nil, t.TempDir())
+	h := NewVenueHandler(mock, nil, nil, noopVenueUploader{})
 
 	req := httptest.NewRequest(http.MethodGet, "/admin/venues/pending?page=2&page_size=5&status=pending_review", nil)
 	rr := httptest.NewRecorder()
