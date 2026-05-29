@@ -12,8 +12,9 @@ import (
 type mockVenueRepo struct {
 	CreateFn                  func(ctx context.Context, venue *domain.Venue) error
 	UpdateFn                  func(ctx context.Context, venue *domain.Venue) error
-	ReplaceVenueServicesFn    func(ctx context.Context, venueID uuid.UUID, services []domain.VenueService) error
+	ReplaceVenueServicesFn    func(ctx context.Context, venueID, ownerID uuid.UUID, services []domain.VenueService) error
 	GetByIDFn                 func(ctx context.Context, id uuid.UUID) (*domain.Venue, error)
+	GetByIDsFn                func(ctx context.Context, ids []uuid.UUID) ([]domain.Venue, error)
 	GetBySlugFn               func(ctx context.Context, slug string) (*domain.Venue, error)
 	ListFn                    func(ctx context.Context, page, pageSize int32, venueType, sortBy string) (*domain.ListResult, error)
 	SearchFn                  func(ctx context.Context, params domain.SearchParams) (*domain.ListResult, error)
@@ -31,22 +32,17 @@ type mockVenueRepo struct {
 	CreateManualSlotBlockFn   func(ctx context.Context, venueID uuid.UUID, date, timeFrom, timeTo, note string) (uuid.UUID, error)
 	DeleteManualSlotBlockFn   func(ctx context.Context, venueID, blockID uuid.UUID) (bool, error)
 	ListManualSlotBlocksFn    func(ctx context.Context, venueID uuid.UUID, dateFrom, dateTo string) ([]domain.ManualSlotBlock, error)
-	AddVenuePhotoFn           func(ctx context.Context, venueID uuid.UUID, url string) (*domain.VenuePhoto, error)
-	DeleteVenuePhotoFn        func(ctx context.Context, venueID, photoID uuid.UUID) (string, error)
-	SetVenueCoverPhotoFn      func(ctx context.Context, venueID, photoID uuid.UUID) error
-	ReplaceVenueHallsFn       func(ctx context.Context, venueID uuid.UUID, items []domain.VenueHallUpsert) error
+	AddVenuePhotoFn           func(ctx context.Context, venueID, ownerID uuid.UUID, url string) (*domain.VenuePhoto, error)
+	DeleteVenuePhotoFn        func(ctx context.Context, venueID, ownerID, photoID uuid.UUID) (string, error)
+	SetVenueCoverPhotoFn      func(ctx context.Context, venueID, ownerID, photoID uuid.UUID) error
+	ReplaceVenueHallsFn       func(ctx context.Context, venueID, ownerID uuid.UUID, items []domain.VenueHallUpsert) error
 	AddVenueHallPhotoFn       func(ctx context.Context, venueID, hallID uuid.UUID, url string) (*domain.VenueHallPhoto, error)
 	DeleteVenueHallPhotoFn    func(ctx context.Context, venueID, hallID, photoID uuid.UUID) (string, error)
 	SetVenueHallCoverPhotoFn  func(ctx context.Context, venueID, hallID, photoID uuid.UUID) error
 
-	ListForManagingUserFn        func(ctx context.Context, userID uuid.UUID) ([]domain.Venue, error)
-	GetVenueManagementAccessFn   func(ctx context.Context, venueID, userID uuid.UUID) (string, error)
-	AddVenueStaffFn              func(ctx context.Context, venueID, userID uuid.UUID, role string, invitedBy uuid.UUID) error
-	RemoveVenueStaffFn           func(ctx context.Context, venueID, userID uuid.UUID) error
-	ListVenueStaffFn             func(ctx context.Context, venueID uuid.UUID) ([]domain.VenueStaff, error)
-	CreateVenueCRMTaskFn         func(ctx context.Context, t *domain.VenueCRMTask) error
-	ListVenueCRMTasksFn          func(ctx context.Context, venueID uuid.UUID, status string) ([]domain.VenueCRMTask, error)
-	CompleteVenueCRMTaskFn       func(ctx context.Context, venueID, taskID uuid.UUID) (bool, error)
+	// CRM was extracted: only the legacy phase-B bridges remain.
+	IsVenueMemberFn        func(ctx context.Context, venueID, userID uuid.UUID) (bool, error)
+	StaffUserIDsForVenueFn func(ctx context.Context, venueID uuid.UUID) ([]uuid.UUID, error)
 }
 
 func (m *mockVenueRepo) Create(ctx context.Context, venue *domain.Venue) error {
@@ -63,9 +59,9 @@ func (m *mockVenueRepo) Update(ctx context.Context, venue *domain.Venue) error {
 	return nil
 }
 
-func (m *mockVenueRepo) ReplaceVenueServices(ctx context.Context, venueID uuid.UUID, services []domain.VenueService) error {
+func (m *mockVenueRepo) ReplaceVenueServices(ctx context.Context, venueID, ownerID uuid.UUID, services []domain.VenueService) error {
 	if m.ReplaceVenueServicesFn != nil {
-		return m.ReplaceVenueServicesFn(ctx, venueID, services)
+		return m.ReplaceVenueServicesFn(ctx, venueID, ownerID, services)
 	}
 	return nil
 }
@@ -73,6 +69,13 @@ func (m *mockVenueRepo) ReplaceVenueServices(ctx context.Context, venueID uuid.U
 func (m *mockVenueRepo) GetByID(ctx context.Context, id uuid.UUID) (*domain.Venue, error) {
 	if m.GetByIDFn != nil {
 		return m.GetByIDFn(ctx, id)
+	}
+	return nil, nil
+}
+
+func (m *mockVenueRepo) GetByIDs(ctx context.Context, ids []uuid.UUID) ([]domain.Venue, error) {
+	if m.GetByIDsFn != nil {
+		return m.GetByIDsFn(ctx, ids)
 	}
 	return nil, nil
 }
@@ -161,6 +164,10 @@ func (m *mockVenueRepo) CheckSlot(ctx context.Context, venueID uuid.UUID, date, 
 	return false, nil
 }
 
+func (m *mockVenueRepo) BatchCheckSlots(ctx context.Context, venueID uuid.UUID, date string, slots [][2]string) ([]bool, error) {
+	return make([]bool, len(slots)), nil
+}
+
 func (m *mockVenueRepo) ReserveSlot(ctx context.Context, venueID, bookingID uuid.UUID, date, timeFrom, timeTo string) error {
 	if m.ReserveSlotFn != nil {
 		return m.ReserveSlotFn(ctx, venueID, bookingID, date, timeFrom, timeTo)
@@ -196,30 +203,30 @@ func (m *mockVenueRepo) ListManualSlotBlocks(ctx context.Context, venueID uuid.U
 	return nil, nil
 }
 
-func (m *mockVenueRepo) AddVenuePhoto(ctx context.Context, venueID uuid.UUID, url string) (*domain.VenuePhoto, error) {
+func (m *mockVenueRepo) AddVenuePhoto(ctx context.Context, venueID, ownerID uuid.UUID, url string) (*domain.VenuePhoto, error) {
 	if m.AddVenuePhotoFn != nil {
-		return m.AddVenuePhotoFn(ctx, venueID, url)
+		return m.AddVenuePhotoFn(ctx, venueID, ownerID, url)
 	}
 	return &domain.VenuePhoto{VenueID: venueID, URL: url}, nil
 }
 
-func (m *mockVenueRepo) DeleteVenuePhoto(ctx context.Context, venueID, photoID uuid.UUID) (string, error) {
+func (m *mockVenueRepo) DeleteVenuePhoto(ctx context.Context, venueID, ownerID, photoID uuid.UUID) (string, error) {
 	if m.DeleteVenuePhotoFn != nil {
-		return m.DeleteVenuePhotoFn(ctx, venueID, photoID)
+		return m.DeleteVenuePhotoFn(ctx, venueID, ownerID, photoID)
 	}
 	return "", nil
 }
 
-func (m *mockVenueRepo) SetVenueCoverPhoto(ctx context.Context, venueID, photoID uuid.UUID) error {
+func (m *mockVenueRepo) SetVenueCoverPhoto(ctx context.Context, venueID, ownerID, photoID uuid.UUID) error {
 	if m.SetVenueCoverPhotoFn != nil {
-		return m.SetVenueCoverPhotoFn(ctx, venueID, photoID)
+		return m.SetVenueCoverPhotoFn(ctx, venueID, ownerID, photoID)
 	}
 	return nil
 }
 
-func (m *mockVenueRepo) ReplaceVenueHalls(ctx context.Context, venueID uuid.UUID, items []domain.VenueHallUpsert) error {
+func (m *mockVenueRepo) ReplaceVenueHalls(ctx context.Context, venueID, ownerID uuid.UUID, items []domain.VenueHallUpsert) error {
 	if m.ReplaceVenueHallsFn != nil {
-		return m.ReplaceVenueHallsFn(ctx, venueID, items)
+		return m.ReplaceVenueHallsFn(ctx, venueID, ownerID, items)
 	}
 	return nil
 }
@@ -245,78 +252,29 @@ func (m *mockVenueRepo) SetVenueHallCoverPhoto(ctx context.Context, venueID, hal
 	return nil
 }
 
-func (m *mockVenueRepo) ListForManagingUser(ctx context.Context, userID uuid.UUID) ([]domain.Venue, error) {
-	if m.ListForManagingUserFn != nil {
-		return m.ListForManagingUserFn(ctx, userID)
-	}
-	if m.ListByOwnerFn != nil {
-		vs, err := m.ListByOwnerFn(ctx, userID)
-		if err != nil {
-			return nil, err
-		}
-		for i := range vs {
-			vs[i].ManagementAccess = domain.ManagementAccessOwner
-		}
-		return vs, nil
-	}
-	return nil, nil
-}
-
-func (m *mockVenueRepo) GetVenueManagementAccess(ctx context.Context, venueID, userID uuid.UUID) (string, error) {
-	if m.GetVenueManagementAccessFn != nil {
-		return m.GetVenueManagementAccessFn(ctx, venueID, userID)
+// IsVenueMember is the phase-B legacy bridge that replaced GetVenueManagementAccess.
+// Default behaviour mirrors the old mock: the owner (resolved via GetByIDFn)
+// is a member; everyone else is not. Tests that need staff membership wire
+// IsVenueMemberFn explicitly.
+func (m *mockVenueRepo) IsVenueMember(ctx context.Context, venueID, userID uuid.UUID) (bool, error) {
+	if m.IsVenueMemberFn != nil {
+		return m.IsVenueMemberFn(ctx, venueID, userID)
 	}
 	if m.GetByIDFn == nil {
-		return "", nil
+		return false, nil
 	}
 	v, err := m.GetByIDFn(ctx, venueID)
 	if err != nil || v == nil {
-		return "", err
+		return false, err
 	}
-	if v.OwnerID == userID {
-		return domain.ManagementAccessOwner, nil
-	}
-	return "", nil
+	return v.OwnerID == userID, nil
 }
 
-func (m *mockVenueRepo) AddVenueStaff(ctx context.Context, venueID, userID uuid.UUID, role string, invitedBy uuid.UUID) error {
-	if m.AddVenueStaffFn != nil {
-		return m.AddVenueStaffFn(ctx, venueID, userID, role, invitedBy)
-	}
-	return nil
-}
-
-func (m *mockVenueRepo) RemoveVenueStaff(ctx context.Context, venueID, userID uuid.UUID) error {
-	if m.RemoveVenueStaffFn != nil {
-		return m.RemoveVenueStaffFn(ctx, venueID, userID)
-	}
-	return nil
-}
-
-func (m *mockVenueRepo) ListVenueStaff(ctx context.Context, venueID uuid.UUID) ([]domain.VenueStaff, error) {
-	if m.ListVenueStaffFn != nil {
-		return m.ListVenueStaffFn(ctx, venueID)
+// StaffUserIDsForVenue is the phase-B legacy bridge used by
+// RecipientUserIDsForVenue. Default returns no staff (owner only).
+func (m *mockVenueRepo) StaffUserIDsForVenue(ctx context.Context, venueID uuid.UUID) ([]uuid.UUID, error) {
+	if m.StaffUserIDsForVenueFn != nil {
+		return m.StaffUserIDsForVenueFn(ctx, venueID)
 	}
 	return nil, nil
-}
-
-func (m *mockVenueRepo) CreateVenueCRMTask(ctx context.Context, t *domain.VenueCRMTask) error {
-	if m.CreateVenueCRMTaskFn != nil {
-		return m.CreateVenueCRMTaskFn(ctx, t)
-	}
-	return nil
-}
-
-func (m *mockVenueRepo) ListVenueCRMTasks(ctx context.Context, venueID uuid.UUID, status string) ([]domain.VenueCRMTask, error) {
-	if m.ListVenueCRMTasksFn != nil {
-		return m.ListVenueCRMTasksFn(ctx, venueID, status)
-	}
-	return nil, nil
-}
-
-func (m *mockVenueRepo) CompleteVenueCRMTask(ctx context.Context, venueID, taskID uuid.UUID) (bool, error) {
-	if m.CompleteVenueCRMTaskFn != nil {
-		return m.CompleteVenueCRMTaskFn(ctx, venueID, taskID)
-	}
-	return false, nil
 }

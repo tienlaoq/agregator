@@ -2,24 +2,107 @@ package domain
 
 import "time"
 
-type Payment struct {
-	ID                      string
-	BookingID               string
-	Amount                  int64
-	Status                  string
-	ProviderID              string
-	PaymentURL              string
-	IdempotencyKey          string
-	PlatformFeeKopecks      int64
-	CounterpartyNetKopecks  int64
-	CounterpartyType        string
-	CounterpartyID          string
-	YooKassaSellerAccountID string
-	CreatedAt               time.Time
-	UpdatedAt               time.Time
+// PaymentStatus is the set of lifecycle states a payment can be in.
+// Using a named string type (rather than int iota) keeps DB values and JSON
+// representations human-readable without a separate stringer, while still
+// giving the compiler visibility into invalid assignments.
+type PaymentStatus string
+
+const (
+	// StatusPending is the initial state: the payment row exists but the
+	// provider has not yet confirmed any outcome.
+	StatusPending PaymentStatus = "pending"
+
+	// StatusSucceeded means the provider confirmed a successful charge.
+	// Terminal — no further transitions are expected.
+	StatusSucceeded PaymentStatus = "succeeded"
+
+	// StatusCancelled means the provider or the platform cancelled the payment
+	// before funds were captured.  Terminal.
+	StatusCancelled PaymentStatus = "cancelled"
+
+	// StatusRefunded means a full refund was issued via the provider after the
+	// payment had already succeeded.  Terminal.
+	//
+	// NOTE: this value was missing from the original CHECK constraint in
+	// 001_init.up.sql — migration 004_status_refunded.up.sql adds it.
+	StatusRefunded PaymentStatus = "refunded"
+)
+
+// IsTerminal reports whether the status is a terminal state from which no
+// further transitions should occur.  Used by the repository UPDATE guard and
+// webhook idempotency logic.
+func (s PaymentStatus) IsTerminal() bool {
+	return s == StatusSucceeded || s == StatusCancelled || s == StatusRefunded
 }
 
-// UsesYooKassaSplitCapture is true when the payment was created with ЮKassa transfers and capture=false (needs POST /capture after authorization).
-func (p *Payment) UsesYooKassaSplitCapture() bool {
-	return p.YooKassaSellerAccountID != ""
+// String returns the raw DB/wire value.  Satisfies fmt.Stringer.
+func (s PaymentStatus) String() string { return string(s) }
+
+type Payment struct {
+	ID                       string
+	BookingID                string
+	Amount                   int64
+	Status                   PaymentStatus
+	ProviderID               string
+	PaymentURL               string
+	IdempotencyKey           string
+	PlatformFeeKopecks       int64
+	CounterpartyNetKopecks   int64
+	CounterpartyType         string
+	CounterpartyID           string
+	ProviderSellerAccountID  string // formerly YooKassaSellerAccountID; provider-agnostic
+	ProviderName             string // e.g. "yookassa", "tbank"
+	CreatedAt                time.Time
+	UpdatedAt                time.Time
+}
+
+// UsesSplitCapture reports whether this payment requires an explicit capture
+// call after authorisation (i.e. it was created as a marketplace split payment
+// with capture=false).  Provider-agnostic: any provider that sets a seller
+// account uses deferred capture.
+func (p *Payment) UsesSplitCapture() bool {
+	return p.ProviderSellerAccountID != ""
+}
+
+// WebhookEvent is the provider-agnostic result of parsing and validating an
+// inbound webhook notification.  It is produced by the payment provider and
+// consumed by PaymentUseCase.HandleWebhook.
+//
+// The usecase never interprets provider-specific wire formats, status strings,
+// or two-phase capture mechanics — all of that is encapsulated here.
+type WebhookEvent struct {
+	// ProviderPaymentID is the provider's opaque payment identifier, used to
+	// look up the local Payment record.
+	ProviderPaymentID string
+
+	// Status is the authoritative domain status after the provider has been
+	// pull-confirmed.  StatusPending means the payment has not yet reached a
+	// terminal state and no action is required (the usecase should no-op).
+	Status PaymentStatus
+
+	// RequiresCapture is true when the provider is waiting for an explicit
+	// capture call before funds are moved.  When true the usecase must call
+	// provider.Capture(ctx, ProviderPaymentID, CaptureKey) before returning.
+	//
+	// Example: ЮKassa split payments use capture=false; the webhook sends
+	// "waiting_for_capture" which the provider translates into this flag.
+	// A future Tinkoff provider would set this flag after its Init step.
+	RequiresCapture bool
+
+	// CaptureKey is the idempotency key the usecase must pass to Capture.
+	// It is populated by the provider when RequiresCapture is true; the
+	// usecase treats it as an opaque string.
+	CaptureKey string
+
+	// RawEvent is the provider-specific event type string extracted from the
+	// webhook payload (e.g. "payment.succeeded").  Populated by the provider
+	// for structured logging at the delivery layer; never used for routing.
+	RawEvent string
+
+	// RawProviderStatus is the status string extracted from the webhook payload
+	// before pull-confirm (e.g. "succeeded", "canceled", "waiting_for_capture").
+	// This is the payload hint, not the pull-confirmed authoritative status.
+	// Populated by the provider for logging; never used for business logic.
+	RawProviderStatus string
 }

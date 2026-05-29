@@ -12,7 +12,9 @@ import (
 	"github.com/go-chi/chi/v5"
 	masterv1 "github.com/tienlao/agregator/gen/go/master/v1"
 	pkgcities "github.com/tienlao/agregator/pkg/cities"
+	"github.com/tienlao/agregator/pkg/storage"
 	"github.com/tienlao/agregator/services/api-gateway/internal/apicatalog"
+	"github.com/tienlao/agregator/services/api-gateway/internal/limits"
 	"github.com/tienlao/agregator/services/api-gateway/internal/middleware"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -20,12 +22,12 @@ import (
 )
 
 type MasterHandler struct {
-	client     masterv1.MasterServiceClient
-	uploadRoot string
+	client  masterv1.MasterServiceClient
+	storage storage.Uploader
 }
 
-func NewMasterHandler(c masterv1.MasterServiceClient, uploadRoot string) *MasterHandler {
-	return &MasterHandler{client: c, uploadRoot: uploadRoot}
+func NewMasterHandler(c masterv1.MasterServiceClient, up storage.Uploader) *MasterHandler {
+	return &MasterHandler{client: c, storage: up}
 }
 
 func masterProtoToJSON(m *masterv1.Master) map[string]any {
@@ -137,10 +139,22 @@ func masterProtoToJSONPublic(m *masterv1.Master) map[string]any {
 // ListPublic GET /api/v1/masters
 func (h *MasterHandler) ListPublic(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	page, _ := strconv.Atoi(q.Get("page"))
-	pageSize, _ := strconv.Atoi(q.Get("page_size"))
-	limit, _ := strconv.Atoi(q.Get("limit"))
-	off, _ := strconv.Atoi(q.Get("offset"))
+	page, ok := queryInt(w, r, "page", 0, 0, 10000)
+	if !ok {
+		return
+	}
+	pageSize, ok := queryInt(w, r, "page_size", 0, 0, 200)
+	if !ok {
+		return
+	}
+	limit, ok := queryInt(w, r, "limit", 0, 0, 500)
+	if !ok {
+		return
+	}
+	off, ok := queryInt(w, r, "offset", 0, 0, 1000000)
+	if !ok {
+		return
+	}
 	limit32 := int32(limit)
 	off32 := int32(off)
 	if pageSize > 0 {
@@ -232,10 +246,7 @@ func (h *MasterHandler) CreateMyProfile(w http.ResponseWriter, r *http.Request) 
 	var body struct {
 		DisplayName string `json:"display_name"`
 	}
-	if err := readJSON(r, &body); err != nil {
-		writeCatalog(w, apicatalog.GatewayRequestInvalidJson)
-		return
-	}
+	if !readJSONOrRespond(w, r, &body) { return }
 	resp, err := h.client.CreateMyProfile(r.Context(), &masterv1.CreateMyProfileRequest{
 		UserId:      uid,
 		DisplayName: strings.TrimSpace(body.DisplayName),
@@ -406,7 +417,7 @@ func (h *MasterHandler) updateReqFromRaw(uid string, raw map[string]json.RawMess
 					Description: it.Description,
 					DurationMin: it.DurationMin,
 					Price:       it.Price,
-					SortOrder:   it.SortOrder,
+					SortOrder:   proto.Int32(it.SortOrder),
 				}
 				if it.ID != "" {
 					inp.Id = proto.String(it.ID)
@@ -426,10 +437,7 @@ func (h *MasterHandler) PatchMyProfile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var raw map[string]json.RawMessage
-	if err := readJSON(r, &raw); err != nil {
-		writeCatalog(w, apicatalog.GatewayRequestInvalidJson)
-		return
-	}
+	if !readJSONOrRespond(w, r, &raw) { return }
 	req, err := h.updateReqFromRaw(uid, raw)
 	if err != nil {
 		writeCatalog(w, apicatalog.GatewayMasterInvalidServices)
@@ -452,7 +460,7 @@ func (h *MasterHandler) SubmitForReview(w http.ResponseWriter, r *http.Request) 
 		writeCatalog(w, apicatalog.GatewayAuthUnauthorized)
 		return
 	}
-	bodyBytes, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<20))
+	bodyBytes, err := io.ReadAll(http.MaxBytesReader(w, r.Body, limits.MasterImportMaxBodyBytes))
 	if err != nil {
 		writeCatalog(w, apicatalog.GatewayRequestInvalidBody)
 		return
@@ -571,10 +579,7 @@ func (h *MasterHandler) CreateBooking(w http.ResponseWriter, r *http.Request) {
 		TimeTo          string `json:"time_to"`
 		Comment         string `json:"comment"`
 	}
-	if err := readJSON(r, &body); err != nil {
-		writeCatalog(w, apicatalog.GatewayRequestInvalidJson)
-		return
-	}
+	if !readJSONOrRespond(w, r, &body) { return }
 	grpcReq := &masterv1.CreateMasterBookingRequest{
 		ClientUserId: uid,
 		MasterSlug:   slug,
@@ -612,8 +617,14 @@ func (h *MasterHandler) CreateBooking(w http.ResponseWriter, r *http.Request) {
 // ListForModeration GET /api/v1/admin/masters
 func (h *MasterHandler) ListForModeration(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	limit, _ := strconv.Atoi(q.Get("limit"))
-	off, _ := strconv.Atoi(q.Get("offset"))
+	limit, ok := queryInt(w, r, "limit", 0, 0, 500)
+	if !ok {
+		return
+	}
+	off, ok := queryInt(w, r, "offset", 0, 0, 1000000)
+	if !ok {
+		return
+	}
 	resp, err := h.client.ListForModeration(r.Context(), &masterv1.ListForModerationRequest{
 		StatusFilter: q.Get("status"),
 		Limit:        int32(limit),
@@ -642,10 +653,7 @@ func (h *MasterHandler) Moderate(w http.ResponseWriter, r *http.Request) {
 		Action  string `json:"action"`
 		Comment string `json:"comment"`
 	}
-	if err := readJSON(r, &body); err != nil {
-		writeCatalog(w, apicatalog.GatewayRequestInvalidJson)
-		return
-	}
+	if !readJSONOrRespond(w, r, &body) { return }
 	resp, err := h.client.ModerateMaster(r.Context(), &masterv1.ModerateMasterRequest{
 		MasterId:    id,
 		ModeratorId: modID,
@@ -662,7 +670,10 @@ func (h *MasterHandler) Moderate(w http.ResponseWriter, r *http.Request) {
 // ModerationHistory GET /api/v1/admin/masters/{id}/moderation-history
 func (h *MasterHandler) ModerationHistory(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
-	lim, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	lim, ok := queryInt(w, r, "limit", 0, 0, 500)
+	if !ok {
+		return
+	}
 	resp, err := h.client.ListModerationHistory(r.Context(), &masterv1.ListModerationHistoryRequest{
 		MasterId: id,
 		Limit:    int32(lim),

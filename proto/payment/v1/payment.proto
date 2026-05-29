@@ -19,23 +19,32 @@ message CreatePaymentRequest {
   string description = 3;
   string return_url = 4;
   string idempotency_key = 5;
-  // Counterparty for split (ЮKassa transfers): venue | master
+  // Counterparty for marketplace split: venue | master
   string counterparty_type = 6;
   string counterparty_id = 7;
-  // ЮKassa marketplace: connected seller shop account_id (string digits)
-  string yookassa_seller_account_id = 8;
+  // Deprecated: use provider_seller_account_id instead.
+  // Kept for backward compatibility; will be removed in a future release.
+  string yookassa_seller_account_id = 8 [deprecated = true];
+  // provider_seller_account_id is the marketplace seller account at the payment
+  // provider (provider-agnostic replacement for yookassa_seller_account_id).
+  // When non-empty the provider creates a split payment with deferred capture.
+  string provider_seller_account_id = 9;
+  // provider_name identifies the payment gateway to use (default: "yookassa").
+  // Reserved for future use when multiple providers are supported in parallel.
+  string provider_name = 10;
 }
 
 message PaymentResponse {
   string id = 1;
   string booking_id = 2;
   int64 amount = 3;
-  string status = 4; // pending, succeeded, cancelled
+  string status = 4; // pending, succeeded, cancelled, refunded
   string payment_url = 5;
   string provider_id = 6;
   google.protobuf.Timestamp created_at = 7;
   int64 platform_fee_kopecks = 8;
   int64 counterparty_net_kopecks = 9;
+  string provider_name = 10;
 }
 
 message GetPaymentRequest {

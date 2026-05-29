@@ -7,11 +7,12 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/tienlao/agregator/services/api-gateway/internal/limits"
 )
 
-const (
-	defaultQueueSize = 64
-	writeTimeout     = 5 * time.Second
+var (
+	defaultQueueSize = limits.ChatHubQueueSize
+	writeTimeout     = limits.ChatHubWriteTimeout
 )
 
 type wsConn interface {

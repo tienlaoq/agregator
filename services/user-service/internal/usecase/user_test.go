@@ -51,6 +51,53 @@ func TestCreate_DefaultRole(t *testing.T) {
 	assert.Equal(t, "user", captured.Role)
 }
 
+func TestCreate_NormalizesEmail(t *testing.T) {
+	cases := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{"already_canonical", "alice@example.com", "alice@example.com"},
+		{"uppercase", "ALICE@EXAMPLE.COM", "alice@example.com"},
+		{"mixed_case", "Alice@Example.Com", "alice@example.com"},
+		{"surrounding_whitespace", "  alice@example.com\t", "alice@example.com"},
+		{"mixed_case_and_whitespace", "  Alice@EXAMPLE.com ", "alice@example.com"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var captured *domain.User
+			repo := &mockUserRepo{
+				CreateFunc: func(ctx context.Context, user *domain.User) error {
+					captured = user
+					return nil
+				},
+			}
+			uc := NewUserUseCase(repo)
+			u := &domain.User{ID: "id-1", Email: tc.input, Name: "Alice"}
+			require.NoError(t, uc.Create(context.Background(), u))
+			require.NotNil(t, captured)
+			assert.Equal(t, tc.want, captured.Email)
+			// Caller's struct is also mutated — the canonical form is what
+			// gets persisted and what subsequent code should observe.
+			assert.Equal(t, tc.want, u.Email)
+		})
+	}
+}
+
+func TestGetByEmail_NormalizesLookup(t *testing.T) {
+	var queriedWith string
+	repo := &mockUserRepo{
+		GetByEmailFunc: func(ctx context.Context, email string) (*domain.User, error) {
+			queriedWith = email
+			return &domain.User{ID: "u1", Email: email}, nil
+		},
+	}
+	uc := NewUserUseCase(repo)
+	_, err := uc.GetByEmail(context.Background(), "  Alice@EXAMPLE.com ")
+	require.NoError(t, err)
+	assert.Equal(t, "alice@example.com", queriedWith)
+}
+
 func TestCreate_CustomRole(t *testing.T) {
 	var captured *domain.User
 	repo := &mockUserRepo{
@@ -60,10 +107,43 @@ func TestCreate_CustomRole(t *testing.T) {
 		},
 	}
 	uc := NewUserUseCase(repo)
-	u := &domain.User{Email: "o@p.com", Role: "partner"}
+	u := &domain.User{Email: "o@p.com", Role: "venue_owner"}
 	require.NoError(t, uc.Create(context.Background(), u))
 	require.NotNil(t, captured)
-	assert.Equal(t, "partner", captured.Role)
+	assert.Equal(t, "venue_owner", captured.Role)
+}
+
+func TestCreate_RejectsInvalidRole(t *testing.T) {
+	cases := []string{"partner", "root", "USER", "  user  ", "anonymous"}
+	for _, role := range cases {
+		t.Run(role, func(t *testing.T) {
+			var repoCalls int
+			repo := &mockUserRepo{
+				CreateFunc: func(ctx context.Context, user *domain.User) error {
+					repoCalls++
+					return nil
+				},
+			}
+			uc := NewUserUseCase(repo)
+			u := &domain.User{Email: "x@y.com", Role: role}
+			err := uc.Create(context.Background(), u)
+			require.ErrorIs(t, err, domain.ErrInvalidRole)
+			assert.Equal(t, 0, repoCalls, "repo.Create must not be called when role is invalid")
+		})
+	}
+}
+
+func TestCreate_AcceptsAllAllowedRoles(t *testing.T) {
+	for role := range domain.AllowedRoles {
+		t.Run(role, func(t *testing.T) {
+			repo := &mockUserRepo{
+				CreateFunc: func(ctx context.Context, user *domain.User) error { return nil },
+			}
+			uc := NewUserUseCase(repo)
+			u := &domain.User{Email: "x@y.com", Role: role}
+			require.NoError(t, uc.Create(context.Background(), u))
+		})
+	}
 }
 
 func TestGetByID_Found(t *testing.T) {
@@ -83,12 +163,24 @@ func TestGetByID_Found(t *testing.T) {
 func TestGetByID_NotFound(t *testing.T) {
 	repo := &mockUserRepo{
 		GetByIDFunc: func(ctx context.Context, id string) (*domain.User, error) {
-			return nil, nil
+			return nil, domain.ErrNotFound
 		},
 	}
 	uc := NewUserUseCase(repo)
 	got, err := uc.GetByID(context.Background(), "missing")
-	require.NoError(t, err)
+	require.ErrorIs(t, err, domain.ErrNotFound)
+	assert.Nil(t, got)
+}
+
+func TestGetByEmail_NotFound(t *testing.T) {
+	repo := &mockUserRepo{
+		GetByEmailFunc: func(ctx context.Context, email string) (*domain.User, error) {
+			return nil, domain.ErrNotFound
+		},
+	}
+	uc := NewUserUseCase(repo)
+	got, err := uc.GetByEmail(context.Background(), "missing@example.com")
+	require.ErrorIs(t, err, domain.ErrNotFound)
 	assert.Nil(t, got)
 }
 
@@ -156,11 +248,31 @@ func TestUpdate_PartialUpdate(t *testing.T) {
 	assert.True(t, updated.UpdatedAt.After(prevUpdated))
 }
 
+// TestUpdate_DeletedBetweenGetAndUpdate simulates the TOCTOU window where the
+// row exists at GetByID time but is deleted before the UPDATE executes. The
+// repository returns ErrNotFound from Update; the usecase must propagate it
+// so the delivery layer returns NotFound instead of silent 200 OK.
+func TestUpdate_DeletedBetweenGetAndUpdate(t *testing.T) {
+	stored := &domain.User{ID: "u1", Email: "e@e.com", Name: "Old"}
+	repo := &mockUserRepo{
+		GetByIDFunc: func(ctx context.Context, id string) (*domain.User, error) {
+			return stored, nil // row exists at read time
+		},
+		UpdateFunc: func(ctx context.Context, user *domain.User) error {
+			return domain.ErrNotFound // deleted in the TOCTOU window
+		},
+	}
+	uc := NewUserUseCase(repo)
+	got, err := uc.Update(context.Background(), "u1", stringPtr("New"), nil, nil, nil)
+	require.ErrorIs(t, err, domain.ErrNotFound)
+	assert.Nil(t, got)
+}
+
 func TestUpdate_UserNotFound(t *testing.T) {
 	var updateCalls int
 	repo := &mockUserRepo{
 		GetByIDFunc: func(ctx context.Context, id string) (*domain.User, error) {
-			return nil, nil
+			return nil, domain.ErrNotFound
 		},
 		UpdateFunc: func(ctx context.Context, user *domain.User) error {
 			updateCalls++
@@ -169,7 +281,7 @@ func TestUpdate_UserNotFound(t *testing.T) {
 	}
 	uc := NewUserUseCase(repo)
 	got, err := uc.Update(context.Background(), "nope", stringPtr("x"), nil, nil, nil)
-	require.NoError(t, err)
+	require.ErrorIs(t, err, domain.ErrNotFound)
 	assert.Nil(t, got)
-	assert.Equal(t, 0, updateCalls)
+	assert.Equal(t, 0, updateCalls, "repo.Update must not be called when GetByID returns ErrNotFound")
 }

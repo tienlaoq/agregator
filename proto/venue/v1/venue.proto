@@ -11,11 +11,16 @@ service VenueService {
   rpc SubmitVenueForReview(SubmitVenueForReviewRequest) returns (VenueResponse);
   rpc UpdateVenue(UpdateVenueRequest) returns (VenueResponse);
   rpc GetVenue(GetVenueRequest) returns (VenueResponse);
+  rpc GetVenuesBatch(GetVenuesBatchRequest) returns (GetVenuesBatchResponse);
   rpc GetVenueBySlug(GetVenueBySlugRequest) returns (VenueResponse);
   rpc ListVenues(ListVenuesRequest) returns (ListVenuesResponse);
   rpc SearchVenues(SearchVenuesRequest) returns (ListVenuesResponse);
-  rpc ListOwnerVenues(ListOwnerVenuesRequest) returns (ListVenuesResponse);
+  // ListOwnerVenues was extracted to api-gateway composition: gateway calls
+  // crm.ListManagedVenues + venue.GetVenuesBatch and merges the result.
+  // Do NOT add an RPC with this name back without renaming — old clients
+  // may still cache the descriptor.
   rpc CheckSlotAvailability(CheckSlotRequest) returns (CheckSlotResponse);
+  rpc BatchCheckSlotAvailability(BatchCheckSlotRequest) returns (BatchCheckSlotResponse);
   rpc ReserveSlot(ReserveSlotRequest) returns (ReserveSlotResponse);
   rpc ReleaseSlot(ReleaseSlotRequest) returns (ReleaseSlotResponse);
   rpc CreateManualSlotBlock(CreateManualSlotBlockRequest) returns (CreateManualSlotBlockResponse);
@@ -30,13 +35,10 @@ service VenueService {
   rpc AddVenueHallPhoto(AddVenueHallPhotoRequest) returns (VenueResponse);
   rpc DeleteVenueHallPhoto(DeleteVenueHallPhotoRequest) returns (DeleteVenueHallPhotoResponse);
   rpc SetVenueHallCoverPhoto(SetVenueHallCoverPhotoRequest) returns (VenueResponse);
-  rpc GetVenueManagementAccess(GetVenueManagementAccessRequest) returns (GetVenueManagementAccessResponse);
-  rpc ListVenueStaff(ListVenueStaffRequest) returns (ListVenueStaffResponse);
-  rpc AddVenueStaff(AddVenueStaffRequest) returns (AddVenueStaffResponse);
-  rpc RemoveVenueStaff(RemoveVenueStaffRequest) returns (RemoveVenueStaffResponse);
-  rpc ListVenueCRMTasks(ListVenueCRMTasksRequest) returns (ListVenueCRMTasksResponse);
-  rpc CreateVenueCRMTask(CreateVenueCRMTaskRequest) returns (CreateVenueCRMTaskResponse);
-  rpc CompleteVenueCRMTask(CompleteVenueCRMTaskRequest) returns (CompleteVenueCRMTaskResponse);
+  // CRM RPCs (GetVenueManagementAccess, ListVenueStaff, AddVenueStaff,
+  // RemoveVenueStaff, ListVenueCRMTasks, CreateVenueCRMTask,
+  // CompleteVenueCRMTask) were extracted to crm-service
+  // (proto/crm/v1/crm.proto). Do not re-introduce them here.
 }
 
 message CreateVenueRequest {
@@ -114,6 +116,18 @@ message GetVenueRequest {
   string id = 1;
 }
 
+// GetVenuesBatch fetches multiple venues by id in a single round-trip.
+// Only name and id are guaranteed; full card fields are included.
+// Unknown ids are silently omitted from the response map.
+message GetVenuesBatchRequest {
+  repeated string ids = 1;
+}
+
+message GetVenuesBatchResponse {
+  // venues is keyed by venue id.
+  map<string, VenueResponse> venues = 1;
+}
+
 message GetVenueBySlugRequest {
   string slug = 1;
 }
@@ -141,9 +155,8 @@ message SearchVenuesRequest {
   string city = 12;
 }
 
-message ListOwnerVenuesRequest {
-  string owner_id = 1;
-}
+// ListOwnerVenuesRequest removed — api-gateway composes the owner list via
+// crm.ListManagedVenues + venue.GetVenuesBatch.
 
 message VenueResponse {
   string id = 1;
@@ -180,8 +193,11 @@ message VenueResponse {
   repeated VenueHall halls = 32;
   string payout_legal_form = 33;
   string yookassa_seller_account_id = 34;
-  // When listing venues for a managing user: owner | manager | staff; otherwise empty.
-  string management_access = 35;
+  // Tag 35 (management_access) was removed: it now lives in crm-service and
+  // is composed into the HTTP response by api-gateway. Reserve to prevent
+  // accidental reuse of the tag number or field name.
+  reserved 35;
+  reserved "management_access";
 }
 
 message ListVenuesResponse {
@@ -246,6 +262,27 @@ message CheckSlotRequest {
 
 message CheckSlotResponse {
   bool available = 1;
+}
+
+// SlotInterval is a (time_from, time_to) pair within a single date.
+message SlotInterval {
+  string time_from = 1; // HH:MM
+  string time_to   = 2; // HH:MM
+}
+
+// BatchCheckSlotRequest checks multiple intervals for the same venue and date
+// in a single round-trip.
+message BatchCheckSlotRequest {
+  string venue_id          = 1;
+  string date              = 2; // YYYY-MM-DD
+  repeated SlotInterval slots = 3;
+}
+
+// BatchCheckSlotResponse returns one availability flag per requested slot,
+// in the same order as BatchCheckSlotRequest.slots.
+message BatchCheckSlotResponse {
+  // available[i] corresponds to slots[i] in the request.
+  repeated bool available = 1;
 }
 
 message ReserveSlotRequest {
@@ -382,89 +419,6 @@ message SetVenueHallCoverPhotoRequest {
   string photo_id = 4;
 }
 
-message GetVenueManagementAccessRequest {
-  string venue_id = 1;
-  string user_id = 2;
-}
-
-message GetVenueManagementAccessResponse {
-  // owner | manager | staff | empty string if no access
-  string access = 1;
-}
-
-message VenueStaffMember {
-  string user_id = 1;
-  string role = 2;
-  string invited_by = 3;
-  google.protobuf.Timestamp created_at = 4;
-}
-
-message ListVenueStaffRequest {
-  string venue_id = 1;
-  string actor_id = 2;
-}
-
-message ListVenueStaffResponse {
-  repeated VenueStaffMember members = 1;
-}
-
-message AddVenueStaffRequest {
-  string venue_id = 1;
-  string actor_id = 2;
-  string user_id = 3;
-  string role = 4;
-}
-
-message AddVenueStaffResponse {}
-
-message RemoveVenueStaffRequest {
-  string venue_id = 1;
-  string actor_id = 2;
-  string user_id = 3;
-}
-
-message RemoveVenueStaffResponse {}
-
-message VenueCRMTask {
-  string id = 1;
-  string venue_id = 2;
-  optional string booking_id = 3;
-  string title = 4;
-  string body = 5;
-  string status = 6;
-  optional string assignee_user_id = 7;
-  string created_by = 8;
-  google.protobuf.Timestamp created_at = 9;
-  google.protobuf.Timestamp updated_at = 10;
-}
-
-message ListVenueCRMTasksRequest {
-  string venue_id = 1;
-  string actor_id = 2;
-  string status = 3;
-}
-
-message ListVenueCRMTasksResponse {
-  repeated VenueCRMTask tasks = 1;
-}
-
-message CreateVenueCRMTaskRequest {
-  string venue_id = 1;
-  string actor_id = 2;
-  string title = 3;
-  string body = 4;
-  optional string booking_id = 5;
-  optional string assignee_user_id = 6;
-}
-
-message CreateVenueCRMTaskResponse {
-  VenueCRMTask task = 1;
-}
-
-message CompleteVenueCRMTaskRequest {
-  string venue_id = 1;
-  string actor_id = 2;
-  string task_id = 3;
-}
-
-message CompleteVenueCRMTaskResponse {}
+// All CRM message types (Get/List/Add/Remove staff, CRM tasks) were extracted
+// to proto/crm/v1/crm.proto. See the reserved field declarations on the
+// VenueService and Venue message above.

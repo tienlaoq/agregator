@@ -24,26 +24,82 @@ export function StarRating({
   interactive = false,
   onChange,
 }: StarRatingProps) {
+  const rounded = Math.round(rating);
+
+  if (interactive) {
+    // Интерактивный режим: radiogroup, стрелки ← → меняют оценку.
+    return (
+      <div className="flex items-center gap-1">
+        <div
+          role="radiogroup"
+          aria-label={`Оценка: выберите от 1 до ${max}`}
+          className="flex gap-0.5"
+        >
+          {Array.from({ length: max }, (_, i) => {
+            const value = i + 1;
+            const checked = value === rounded;
+            return (
+              <button
+                key={i}
+                type="button"
+                role="radio"
+                aria-checked={checked}
+                aria-label={`${value} из ${max}`}
+                className={cn(
+                  "cursor-pointer rounded-sm transition-colors",
+                  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-1",
+                )}
+                onClick={() => onChange?.(value)}
+                onKeyDown={(e) => {
+                  if (e.key === "ArrowRight" && value < max) onChange?.(value + 1);
+                  if (e.key === "ArrowLeft" && value > 1) onChange?.(value - 1);
+                }}
+              >
+                <Star
+                  aria-hidden="true"
+                  className={cn(
+                    sizeMap[size],
+                    "transition-colors",
+                    i < rounded
+                      ? "fill-amber-500 text-amber-500"
+                      : "fill-muted text-muted hover:text-amber-400",
+                  )}
+                />
+              </button>
+            );
+          })}
+        </div>
+        {showValue && (
+          <span className="ml-1 text-sm font-medium text-muted-foreground" aria-hidden="true">
+            {rating.toFixed(1)}
+          </span>
+        )}
+      </div>
+    );
+  }
+
+  // Режим отображения — один семантический контейнер, без лишних tab-stops.
   return (
     <div className="flex items-center gap-1">
-      <div className="flex gap-0.5">
+      <div
+        role="img"
+        aria-label={`Рейтинг ${rating.toFixed(1)} из ${max}`}
+        className="flex gap-0.5"
+      >
         {Array.from({ length: max }, (_, i) => (
           <Star
             key={i}
+            aria-hidden="true"
             className={cn(
               sizeMap[size],
               "transition-colors",
-              i < Math.round(rating)
-                ? "fill-amber-500 text-amber-500"
-                : "fill-muted text-muted",
-              interactive && "cursor-pointer hover:text-amber-400",
+              i < rounded ? "fill-amber-500 text-amber-500" : "fill-muted text-muted",
             )}
-            onClick={interactive ? () => onChange?.(i + 1) : undefined}
           />
         ))}
       </div>
       {showValue && (
-        <span className="ml-1 text-sm font-medium text-muted-foreground">
+        <span className="ml-1 text-sm font-medium text-muted-foreground" aria-hidden="true">
           {rating.toFixed(1)}
         </span>
       )}

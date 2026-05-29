@@ -34,7 +34,9 @@ func testAuthUCWithReset(
 	return NewAuthUseCase(
 		creds, tokens,
 		reset, mail, time.Hour,
-		users, testJWTSecret, time.Hour, 24*time.Hour, nil, "http://localhost:3000", zerolog.Nop(),
+		users, testPrivKey, time.Hour, 24*time.Hour,
+		nil, // partnerNotify: nil is safe — Enqueue is guarded by nil-check
+		zerolog.Nop(),
 	)
 }
 

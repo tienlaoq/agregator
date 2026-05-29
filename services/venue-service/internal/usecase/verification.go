@@ -113,6 +113,24 @@ func ValidateVenueVerificationForUpdate(v *domain.Venue) error {
 	return validateVenueVerificationCore(v)
 }
 
+// validateVenueCoordinates returns an error if lat/lng are outside valid WGS-84 ranges.
+func validateVenueCoordinates(lat, lng float64) error {
+	if lat < -90 || lat > 90 || lng < -180 || lng > 180 {
+		return pkgerr.InvalidArgument("некорректные координаты: широта -90..90, долгота -180..180")
+	}
+	return nil
+}
+
+// validateVenueType returns an error if t is not one of the known venue types.
+func validateVenueType(t string) error {
+	switch t {
+	case domain.VenueTypeBanya, domain.VenueTypeSauna, domain.VenueTypeHammam:
+		return nil
+	default:
+		return pkgerr.InvalidArgument("тип заведения: banya, sauna или hammam")
+	}
+}
+
 // NormalizeVenuePayoutProfile trims ЮKassa seller id and validates payout_legal_form (empty allowed).
 func NormalizeVenuePayoutProfile(v *domain.Venue) error {
 	v.YooKassaSellerAccountID = strings.TrimSpace(v.YooKassaSellerAccountID)
@@ -126,6 +144,6 @@ func NormalizeVenuePayoutProfile(v *domain.Venue) error {
 		v.PayoutLegalForm = plf
 		return nil
 	default:
-		return pkgerr.InvalidArgument("payout_legal_form must be one of: ip, ooo, self_employed, gph")
+		return pkgerr.InvalidArgument("payout_legal_form: ip, ooo, self_employed или gph")
 	}
 }

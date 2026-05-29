@@ -83,6 +83,15 @@ export function useChatThread(kind: ChatKind, refId: string, enabled: boolean) {
     return subscribeChatEvents((evt) => onEventRef.current(evt));
   }, [enabled, refId]);
 
+  // N12: отправка идёт через HTTP (sendChatMessageV2), а не через WS.
+  // Это сделано намеренно: HTTP даёт явный ответ (ack) с финальным message.id,
+  // тогда как WS-send требует сопоставления client_msg_id → server message.id
+  // через входящие события, что усложняет optimistic-update логику.
+  //
+  // Если в будущем понадобится переключиться на WS-send (меньше latency,
+  // меньше HTTP-соединений), используйте sendWsChatMessage из global-chat-socket.ts.
+  // Он уже принимает client_msg_id — без него повторная отправка при реконнекте
+  // создаст дубликат (бэкенд дедублицирует только по client_msg_id).
   const send = useCallback(
     async (text: string) => {
       if (!thread?.id || !text.trim()) return;

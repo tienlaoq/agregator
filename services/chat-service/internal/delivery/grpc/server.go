@@ -60,7 +60,7 @@ func toMessagePB(m *domain.Message) *chatv1.ChatMessage {
 }
 
 func (s *Server) EnsureThread(ctx context.Context, req *chatv1.EnsureThreadRequest) (*chatv1.ThreadResponse, error) {
-	t, err := s.uc.EnsureThread(ctx, req.GetKind(), req.GetRefId(), req.GetParticipantUserIds())
+	t, err := s.uc.EnsureThread(ctx, req.GetKind(), req.GetRefId(), req.GetActorUserId(), req.GetParticipantUserIds())
 	if err != nil {
 		return nil, err
 	}
@@ -102,6 +102,10 @@ func (s *Server) SendMessage(ctx context.Context, req *chatv1.SendMessageRequest
 	}, nil
 }
 
+// MarkRead delegates to the usecase.  The optional last_seen_message_id (proto
+// field 3, N4) is not yet wired because no client sends it; when they do,
+// pass req.GetLastSeenMessageId() through usecase.MarkRead → repo.MarkRead
+// and use LEAST(client_watermark, t.last_message_id) in the SQL.
 func (s *Server) MarkRead(ctx context.Context, req *chatv1.MarkReadRequest) (*chatv1.ThreadResponse, error) {
 	t, err := s.uc.MarkRead(ctx, req.GetThreadId(), req.GetUserId())
 	if err != nil {

@@ -2,7 +2,6 @@ package handler
 
 import (
 	"net/http"
-	"strconv"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -37,10 +36,7 @@ func (h *ReviewHandler) Create(w http.ResponseWriter, r *http.Request) {
 		Text        string `json:"text"`
 		IsAnonymous bool   `json:"is_anonymous"`
 	}
-	if err := readJSON(r, &req); err != nil {
-		writeCatalog(w, apicatalog.GatewayRequestInvalidBody)
-		return
-	}
+	if !readJSONOrRespond(w, r, &req) { return }
 
 	userName := h.resolveUserName(r, userID)
 	resp, err := h.client.CreateReview(r.Context(), &reviewv1.CreateReviewRequest{
@@ -81,10 +77,7 @@ func (h *ReviewHandler) CreateForVenue(w http.ResponseWriter, r *http.Request) {
 		Text        string `json:"text"`
 		IsAnonymous bool   `json:"is_anonymous"`
 	}
-	if err := readJSON(r, &req); err != nil {
-		writeCatalog(w, apicatalog.GatewayRequestInvalidBody)
-		return
-	}
+	if !readJSONOrRespond(w, r, &req) { return }
 
 	userName := h.resolveUserName(r, userID)
 	resp, err := h.client.CreateReview(r.Context(), &reviewv1.CreateReviewRequest{
@@ -109,9 +102,14 @@ func (h *ReviewHandler) CreateForVenue(w http.ResponseWriter, r *http.Request) {
 func (h *ReviewHandler) ListByVenue(w http.ResponseWriter, r *http.Request) {
 	venueID := chi.URLParam(r, "venueId")
 
-	q := r.URL.Query()
-	page, _ := strconv.Atoi(q.Get("page"))
-	pageSize, _ := strconv.Atoi(q.Get("page_size"))
+	page, ok := queryInt(w, r, "page", 0, 0, 10000)
+	if !ok {
+		return
+	}
+	pageSize, ok := queryInt(w, r, "page_size", 0, 0, 200)
+	if !ok {
+		return
+	}
 
 	resp, err := h.client.ListVenueReviews(r.Context(), &reviewv1.ListVenueReviewsRequest{
 		VenueId:  venueID,
@@ -160,10 +158,7 @@ func (h *ReviewHandler) CreateForMaster(w http.ResponseWriter, r *http.Request) 
 		Text        string `json:"text"`
 		IsAnonymous bool   `json:"is_anonymous"`
 	}
-	if err := readJSON(r, &req); err != nil {
-		writeCatalog(w, apicatalog.GatewayRequestInvalidBody)
-		return
-	}
+	if !readJSONOrRespond(w, r, &req) { return }
 
 	userName := h.resolveUserName(r, userID)
 	resp, err := h.client.CreateReview(r.Context(), &reviewv1.CreateReviewRequest{
@@ -183,9 +178,14 @@ func (h *ReviewHandler) CreateForMaster(w http.ResponseWriter, r *http.Request) 
 
 func (h *ReviewHandler) ListByMaster(w http.ResponseWriter, r *http.Request) {
 	masterID := chi.URLParam(r, "masterId")
-	q := r.URL.Query()
-	page, _ := strconv.Atoi(q.Get("page"))
-	pageSize, _ := strconv.Atoi(q.Get("page_size"))
+	page, ok := queryInt(w, r, "page", 0, 0, 10000)
+	if !ok {
+		return
+	}
+	pageSize, ok := queryInt(w, r, "page_size", 0, 0, 200)
+	if !ok {
+		return
+	}
 
 	resp, err := h.client.ListMasterReviews(r.Context(), &reviewv1.ListMasterReviewsRequest{
 		MasterId: masterID,

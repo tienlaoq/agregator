@@ -9,8 +9,23 @@ import "google/protobuf/timestamp.proto";
 service UserService {
   rpc CreateUser(CreateUserRequest) returns (UserResponse);
   rpc GetUser(GetUserRequest) returns (UserResponse);
+  rpc GetUsersBatch(GetUsersBatchRequest) returns (GetUsersBatchResponse);
   rpc UpdateUser(UpdateUserRequest) returns (UserResponse);
+  // GetUserByEmail is internal-only (service-to-service).
+  // MUST NOT be proxied as a public HTTP endpoint without caller
+  // authentication and rate-limiting — unprotected access enables
+  // unrestricted email enumeration.
   rpc GetUserByEmail(GetUserByEmailRequest) returns (UserResponse);
+}
+
+message GetUsersBatchRequest {
+  // ids must be de-duplicated by the caller; up to 200 entries.
+  repeated string ids = 1;
+}
+
+message GetUsersBatchResponse {
+  // Keyed by user id. Missing ids are simply absent from the map (not found / error).
+  map<string, UserResponse> users = 1;
 }
 
 message CreateUserRequest {
@@ -46,4 +61,5 @@ message UserResponse {
   string avatar_url = 6;
   string bio = 7;
   google.protobuf.Timestamp created_at = 8;
+  google.protobuf.Timestamp updated_at = 9;
 }

@@ -1,0 +1,4 @@
+-- Down migration is intentionally a no-op: the data back-fill cannot be
+-- reversed (original casing is not stored). Rolling back only restores the
+-- old query behaviour (LOWER(TRIM(m.city)) filter) by reverting application
+-- code; existing data remains lowercase.

@@ -70,6 +70,18 @@ func (s *Server) GetVenueRating(ctx context.Context, req *reviewv1.GetVenueRatin
 	}, nil
 }
 
+func (s *Server) GetMasterRating(ctx context.Context, req *reviewv1.GetMasterRatingRequest) (*reviewv1.MasterRatingResponse, error) {
+	mr, err := s.uc.GetMasterRating(ctx, req.GetMasterId())
+	if err != nil {
+		return nil, err
+	}
+	return &reviewv1.MasterRatingResponse{
+		MasterId:    mr.MasterID,
+		AvgRating:   mr.AvgRating,
+		ReviewCount: mr.ReviewCount,
+	}, nil
+}
+
 func (s *Server) ListMasterReviews(ctx context.Context, req *reviewv1.ListMasterReviewsRequest) (*reviewv1.ListReviewsResponse, error) {
 	reviews, total, err := s.uc.ListMasterReviews(ctx, req.GetMasterId(), req.GetPage(), req.GetPageSize())
 	if err != nil {

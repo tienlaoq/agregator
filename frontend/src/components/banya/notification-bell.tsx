@@ -24,7 +24,7 @@ function notificationSubtitle(userRole: string | undefined): string {
       return "Очередь модерации заведений и мастеров, обращения и служебные сообщения.";
     case "user":
     default:
-      return "Брони и напоминания о визитах; если вас пригласили в команду — события по заведению.";
+      return "";
   }
 }
 

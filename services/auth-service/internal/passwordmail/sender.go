@@ -15,12 +15,11 @@ type Sender struct {
 	prefix string // trimmed frontend base URL
 }
 
+// New creates a Sender. frontendURL must already be normalised (trimmed,
+// no trailing slash, non-empty) — config.normaliseFrontendURL does this once
+// at startup so callers do not need to repeat the sanitisation.
 func New(smtp *pkgmail.Sender, frontendURL string) *Sender {
-	base := strings.TrimSuffix(strings.TrimSpace(frontendURL), "/")
-	if base == "" {
-		base = "http://localhost:3000"
-	}
-	return &Sender{smtp: smtp, prefix: base}
+	return &Sender{smtp: smtp, prefix: frontendURL}
 }
 
 func (s *Sender) Enabled() bool {

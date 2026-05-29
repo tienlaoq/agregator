@@ -7,6 +7,7 @@ import (
 	"github.com/google/uuid"
 	masterv1 "github.com/tienlao/agregator/gen/go/master/v1"
 	pkgerrors "github.com/tienlao/agregator/pkg/errors"
+	"github.com/tienlao/agregator/pkg/grpcutil"
 	"github.com/tienlao/agregator/services/master-service/internal/domain"
 	"github.com/tienlao/agregator/services/master-service/internal/usecase"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -21,16 +22,38 @@ func NewServer(uc *usecase.MasterUseCase) *Server {
 	return &Server{uc: uc}
 }
 
+// parseUUID parses a UUID string received from a proto field. On failure it
+// returns an InvalidArgument status with a structured BadRequest detail naming
+// the offending field. The human-readable message is deliberately generic
+// ("malformed identifier") so that internal proto field names are not leaked
+// into user-facing strings by API gateways that forward gRPC error messages
+// verbatim (e.g. grpc-gateway's default error mapper).
 func parseUUID(s string, field string) (uuid.UUID, error) {
 	id, err := uuid.Parse(s)
 	if err != nil {
-		return uuid.Nil, pkgerrors.InvalidArgument("invalid " + field)
+		return uuid.Nil, pkgerrors.InvalidArgumentField(field, "must be a valid UUID")
+	}
+	return id, nil
+}
+
+// callerUUID extracts the authenticated caller's user_id from gRPC metadata
+// (injected by api-gateway via CallerIDClientInterceptor) and parses it as UUID.
+// Returns Unauthenticated if the header is absent (unauthenticated call) and
+// InvalidArgument if the value is not a valid UUID (should never happen in practice).
+func callerUUID(ctx context.Context) (uuid.UUID, error) {
+	raw := grpcutil.CallerIDFromCtx(ctx)
+	if raw == "" {
+		return uuid.Nil, pkgerrors.Unauthenticated("missing caller identity")
+	}
+	id, err := uuid.Parse(raw)
+	if err != nil {
+		return uuid.Nil, pkgerrors.InvalidArgument("invalid caller user_id")
 	}
 	return id, nil
 }
 
 func (s *Server) CreateMyProfile(ctx context.Context, req *masterv1.CreateMyProfileRequest) (*masterv1.MasterResponse, error) {
-	uid, err := parseUUID(req.GetUserId(), "user_id")
+	uid, err := callerUUID(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -42,7 +65,7 @@ func (s *Server) CreateMyProfile(ctx context.Context, req *masterv1.CreateMyProf
 }
 
 func (s *Server) GetMyProfile(ctx context.Context, req *masterv1.GetMyProfileRequest) (*masterv1.MasterResponse, error) {
-	uid, err := parseUUID(req.GetUserId(), "user_id")
+	uid, err := callerUUID(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -54,7 +77,7 @@ func (s *Server) GetMyProfile(ctx context.Context, req *masterv1.GetMyProfileReq
 }
 
 func (s *Server) UpdateMyProfile(ctx context.Context, req *masterv1.UpdateMyProfileRequest) (*masterv1.MasterResponse, error) {
-	uid, err := parseUUID(req.GetUserId(), "user_id")
+	uid, err := callerUUID(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -171,11 +194,12 @@ func (s *Server) UpdateMyProfile(ctx context.Context, req *masterv1.UpdateMyProf
 		in.ApplyServicesReplace = true
 		for _, it := range req.GetServicesReplace() {
 			u := domain.MasterServiceUpsert{
-				Name:        it.GetName(),
-				Description: it.GetDescription(),
-				DurationMin: it.GetDurationMin(),
-				Price:       it.GetPrice(),
-				SortOrder:   it.GetSortOrder(),
+				Name:         it.GetName(),
+				Description:  it.GetDescription(),
+				DurationMin:  it.GetDurationMin(),
+				Price:        it.GetPrice(),
+				SortOrder:    it.GetSortOrder(),
+				SortOrderSet: it.HasSortOrder(),
 			}
 			if it.GetId() != "" {
 				id, err := uuid.Parse(it.GetId())
@@ -195,7 +219,7 @@ func (s *Server) UpdateMyProfile(ctx context.Context, req *masterv1.UpdateMyProf
 }
 
 func (s *Server) SubmitForReview(ctx context.Context, req *masterv1.SubmitMasterForReviewRequest) (*masterv1.MasterResponse, error) {
-	uid, err := parseUUID(req.GetUserId(), "user_id")
+	uid, err := callerUUID(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -248,7 +272,7 @@ func (s *Server) ListForModeration(ctx context.Context, req *masterv1.ListForMod
 	}
 	out := make([]*masterv1.Master, 0, len(list))
 	for i := range list {
-		out = append(out, masterToProto(&list[i]))
+		out = append(out, masterToProtoModerator(&list[i]))
 	}
 	return &masterv1.ListMastersResponse{Masters: out, Total: total}, nil
 }
@@ -258,7 +282,10 @@ func (s *Server) ModerateMaster(ctx context.Context, req *masterv1.ModerateMaste
 	if err != nil {
 		return nil, err
 	}
-	modID, err := parseUUID(req.GetModeratorId(), "moderator_id")
+	// moderator identity comes from the gateway-verified x-caller-id metadata,
+	// not from the proto field (which the caller controls and could spoof).
+	// req.ModeratorId is intentionally ignored to prevent privilege escalation.
+	modID, err := callerUUID(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -266,7 +293,7 @@ func (s *Server) ModerateMaster(ctx context.Context, req *masterv1.ModerateMaste
 	if err != nil {
 		return nil, err
 	}
-	return &masterv1.MasterResponse{Master: masterToProto(m)}, nil
+	return &masterv1.MasterResponse{Master: masterToProtoModerator(m)}, nil
 }
 
 func (s *Server) ListModerationHistory(ctx context.Context, req *masterv1.ListModerationHistoryRequest) (*masterv1.ListModerationHistoryResponse, error) {
@@ -295,7 +322,10 @@ func (s *Server) ListModerationHistory(ctx context.Context, req *masterv1.ListMo
 }
 
 func (s *Server) CreateMasterBooking(ctx context.Context, req *masterv1.CreateMasterBookingRequest) (*masterv1.MasterBookingResponse, error) {
-	cid, err := parseUUID(req.GetClientUserId(), "client_user_id")
+	// client identity comes from the gateway-verified x-caller-id metadata,
+	// not from the proto field (which the caller controls and could spoof).
+	// req.ClientUserId is intentionally ignored to prevent booking on behalf of another user.
+	cid, err := callerUUID(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -315,7 +345,7 @@ func (s *Server) CreateMasterBooking(ctx context.Context, req *masterv1.CreateMa
 }
 
 func (s *Server) ListMyMasterBookings(ctx context.Context, req *masterv1.ListMyMasterBookingsRequest) (*masterv1.ListMasterBookingsResponse, error) {
-	uid, err := parseUUID(req.GetUserId(), "user_id")
+	uid, err := callerUUID(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -325,13 +355,18 @@ func (s *Server) ListMyMasterBookings(ctx context.Context, req *masterv1.ListMyM
 	}
 	out := make([]*masterv1.MasterBooking, 0, len(list))
 	for i := range list {
-		out = append(out, bookingToProto(&list[i]))
+		pb := bookingToProto(&list[i])
+		// The caller is the master owner, not the client who created the booking.
+		// Strip the YooKassa payment URL so master owners cannot intercept or
+		// replay client payment links.
+		pb.PaymentUrl = ""
+		out = append(out, pb)
 	}
 	return &masterv1.ListMasterBookingsResponse{Bookings: out}, nil
 }
 
 func (s *Server) ListClientMasterBookings(ctx context.Context, req *masterv1.ListClientMasterBookingsRequest) (*masterv1.ListMasterBookingsResponse, error) {
-	uid, err := parseUUID(req.GetUserId(), "user_id")
+	uid, err := callerUUID(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -351,7 +386,9 @@ func (s *Server) GetMasterBooking(ctx context.Context, req *masterv1.GetMasterBo
 	if err != nil {
 		return nil, err
 	}
-	aid, err := parseUUID(req.GetActorUserId(), "actor_user_id")
+	// actor identity comes from the gateway-verified x-caller-id metadata,
+	// not from the proto field (which the caller controls and could spoof).
+	aid, err := callerUUID(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -364,7 +401,74 @@ func (s *Server) GetMasterBooking(ctx context.Context, req *masterv1.GetMasterBo
 		s := ownerID.String()
 		pb.MasterUserId = &s
 	}
+	// Strip the YooKassa payment URL when the actor is the master owner rather
+	// than the client who created the booking.  Master owners must not receive
+	// client payment links (replay / interception risk).
+	if aid != b.ClientUserID {
+		pb.PaymentUrl = ""
+	}
 	return &masterv1.MasterBookingResponse{Booking: pb}, nil
+}
+
+func (s *Server) GetMasterBookingsBatch(ctx context.Context, req *masterv1.GetMasterBookingsBatchRequest) (*masterv1.GetMasterBookingsBatchResponse, error) {
+	// actor identity comes from the gateway-verified x-caller-id metadata,
+	// not from the proto field (which the caller controls and could spoof).
+	actorID, err := callerUUID(ctx)
+	if err != nil {
+		return nil, err
+	}
+	rawIDs := req.GetBookingIds()
+	if len(rawIDs) == 0 {
+		return &masterv1.GetMasterBookingsBatchResponse{Bookings: map[string]*masterv1.MasterBooking{}}, nil
+	}
+	ids := make([]uuid.UUID, 0, len(rawIDs))
+	for _, raw := range rawIDs {
+		id, err := parseUUID(raw, "booking_id")
+		if err != nil {
+			continue // silently skip malformed ids
+		}
+		ids = append(ids, id)
+	}
+
+	bookings, err := s.uc.GetBookingsForActorBatch(ctx, ids, actorID)
+	if err != nil {
+		return nil, err
+	}
+
+	// Resolve master_user_id for all distinct master profiles in one query.
+	masterIDs := make([]uuid.UUID, 0, len(bookings))
+	seen := make(map[uuid.UUID]struct{}, len(bookings))
+	for i := range bookings {
+		mid := bookings[i].MasterID
+		if _, ok := seen[mid]; !ok {
+			seen[mid] = struct{}{}
+			masterIDs = append(masterIDs, mid)
+		}
+	}
+	ownerByMaster, err := s.uc.GetMasterUserIDsBatch(ctx, masterIDs)
+	if err != nil {
+		ownerByMaster = map[uuid.UUID]uuid.UUID{} // non-fatal — omit master_user_id
+	}
+
+	resp := &masterv1.GetMasterBookingsBatchResponse{
+		Bookings: make(map[string]*masterv1.MasterBooking, len(bookings)),
+	}
+	for i := range bookings {
+		b := &bookings[i]
+		pb := bookingToProto(b)
+		if ownerID, ok := ownerByMaster[b.MasterID]; ok {
+			s := ownerID.String()
+			pb.MasterUserId = &s
+		}
+		// Strip the YooKassa payment URL when the actor is the master owner rather
+		// than the client who created the booking.  Master owners must not receive
+		// client payment links (replay / interception risk).
+		if actorID != b.ClientUserID {
+			pb.PaymentUrl = ""
+		}
+		resp.Bookings[b.ID.String()] = pb
+	}
+	return resp, nil
 }
 
 func (s *Server) HasCompletedMasterBooking(ctx context.Context, req *masterv1.HasCompletedMasterBookingRequest) (*masterv1.HasCompletedMasterBookingResponse, error) {
@@ -376,6 +480,29 @@ func (s *Server) HasCompletedMasterBooking(ctx context.Context, req *masterv1.Ha
 	if err != nil {
 		return nil, err
 	}
+
+	// Identity check: prevent end-users from querying the gate on behalf of
+	// others (which would let them bypass the review eligibility check).
+	//
+	// Internal services (e.g. review-service) send a non-UUID caller ID such
+	// as "review-service" via CallerIDClientInterceptor. They are trusted to
+	// supply the correct client_user_id from their own verified context.
+	//
+	// End-users arrive through api-gateway with a UUID caller ID. They may
+	// only query their own booking history, so caller must equal client_user_id.
+	raw := grpcutil.CallerIDFromCtx(ctx)
+	if !grpcutil.IsServiceCallerID(raw) {
+		// Caller is an end-user — enforce self-query only.
+		callerID, err := callerUUID(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if callerID != clientID {
+			return nil, pkgerrors.PermissionDenied("cannot query booking history for another user")
+		}
+	}
+	// Service caller: trust req.client_user_id as set by the calling service.
+
 	ok, err := s.uc.HasCompletedBookingByClientMaster(ctx, clientID, masterID)
 	if err != nil {
 		return nil, err
@@ -384,7 +511,7 @@ func (s *Server) HasCompletedMasterBooking(ctx context.Context, req *masterv1.Ha
 }
 
 func (s *Server) AddMasterPhoto(ctx context.Context, req *masterv1.AddMasterPhotoRequest) (*masterv1.MasterResponse, error) {
-	uid, err := parseUUID(req.GetUserId(), "user_id")
+	uid, err := callerUUID(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -396,7 +523,7 @@ func (s *Server) AddMasterPhoto(ctx context.Context, req *masterv1.AddMasterPhot
 }
 
 func (s *Server) DeleteMasterPhoto(ctx context.Context, req *masterv1.DeleteMasterPhotoRequest) (*masterv1.DeleteMasterPhotoResponse, error) {
-	uid, err := parseUUID(req.GetUserId(), "user_id")
+	uid, err := callerUUID(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -412,7 +539,7 @@ func (s *Server) DeleteMasterPhoto(ctx context.Context, req *masterv1.DeleteMast
 }
 
 func (s *Server) SetMasterCoverPhoto(ctx context.Context, req *masterv1.SetMasterCoverPhotoRequest) (*masterv1.MasterResponse, error) {
-	uid, err := parseUUID(req.GetUserId(), "user_id")
+	uid, err := callerUUID(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -479,7 +606,7 @@ func masterToProto(m *domain.Master) *masterv1.Master {
 		PayoutSettlementAccount:    m.PayoutSettlementAccount,
 		PayoutCorrespondentAccount: m.PayoutCorrespondentAccount,
 		PayoutVerificationStatus:   m.PayoutVerificationStatus,
-		PayoutReady:                payoutProfileReady(m),
+		PayoutReady:                m.PayoutProfileReady(),
 		Status:                     m.Status,
 		ModerationComment:          m.ModerationComment,
 		Services:                   svcs,
@@ -535,6 +662,34 @@ func masterToProtoPublic(m *domain.Master) *masterv1.Master {
 	return p
 }
 
+// masterToProtoModerator returns a master proto safe for admin/moderation endpoints.
+// It preserves payout_legal_form and payout_verification_status so moderators
+// can see *what kind* of legal entity the master has and whether reqs are verified,
+// but strips all raw payment credentials (INN, BIK, account numbers, OGRN, etc.)
+// that are personal data under 152-FZ and not needed for the moderation decision.
+// Phone is also stripped — it is visible to the master's own profile endpoint.
+func masterToProtoModerator(m *domain.Master) *masterv1.Master {
+	p := masterToProto(m)
+	if p != nil {
+		// Keep: payout_legal_form, payout_verification_status, payout_ready
+		// (needed to understand payment setup completeness for moderation).
+		// Strip: all raw credentials — personal/payment data, not needed for approve/reject.
+		p.YookassaSellerAccountId = ""
+		p.PayoutLegalName = ""
+		p.PayoutInn = ""
+		p.PayoutKpp = ""
+		p.PayoutOgrn = ""
+		p.PayoutOgrnip = ""
+		p.PayoutBankName = ""
+		p.PayoutBik = ""
+		p.PayoutSettlementAccount = ""
+		p.PayoutCorrespondentAccount = ""
+		// Phone is personal data; moderator sees display_name, bio, city, status.
+		p.Phone = ""
+	}
+	return p
+}
+
 func bookingToProto(b *domain.MasterBooking) *masterv1.MasterBooking {
 	if b == nil {
 		return nil
@@ -555,20 +710,8 @@ func bookingToProto(b *domain.MasterBooking) *masterv1.MasterBooking {
 	}
 	if b.MasterServiceID != nil {
 		s := b.MasterServiceID.String()
-		pb.MasterServiceId = s
+		pb.MasterServiceId = &s
 	}
 	return pb
 }
 
-func payoutProfileReady(m *domain.Master) bool {
-	if m == nil {
-		return false
-	}
-	return strings.TrimSpace(m.YookassaSellerAccountID) != "" &&
-		strings.TrimSpace(m.PayoutLegalName) != "" &&
-		strings.TrimSpace(m.PayoutINN) != "" &&
-		strings.TrimSpace(m.PayoutBankName) != "" &&
-		strings.TrimSpace(m.PayoutBIK) != "" &&
-		strings.TrimSpace(m.PayoutSettlementAccount) != "" &&
-		strings.TrimSpace(m.PayoutCorrespondentAccount) != ""
-}

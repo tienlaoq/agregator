@@ -142,7 +142,7 @@ func TestIntegration_ListByStatus(t *testing.T) {
 		City:    "Москва",
 	}
 	require.NoError(t, repo.Create(ctx, withPhoto))
-	_, err := repo.AddVenuePhoto(ctx, withPhoto.ID, "https://example.com/moderation-list-by-status.jpg")
+	_, err := repo.AddVenuePhoto(ctx, withPhoto.ID, withPhoto.OwnerID, "https://example.com/moderation-list-by-status.jpg")
 	require.NoError(t, err)
 
 	result, err := repo.ListByStatus(ctx, domain.StatusPendingReview, 1, 100, "")

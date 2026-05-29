@@ -1,7 +1,8 @@
 "use client"
 
-import { useState, useEffect, useLayoutEffect, useCallback, useRef } from "react"
+import { useState, useEffect, useLayoutEffect } from "react"
 import { usePathname, useRouter, useSearchParams } from "next/navigation"
+import { useQuery, keepPreviousData } from "@tanstack/react-query"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
@@ -13,12 +14,11 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { Card, CardContent } from "@/components/ui/card"
-import { searchVenues, getVenues, venueCardImageSrc } from "@/lib/api"
+import { searchVenues, getVenues } from "@/lib/api"
 import { packCitiesForQuery, parseCitiesFromSearchParams, parseCitiesFromStableKey } from "@/lib/cities-http"
 import type { Venue } from "@/lib/types"
-import { VENUE_TYPE_LABELS } from "@/lib/types"
-import { Search, MapPin, X, Star, Building2, ImageIcon } from "lucide-react"
-import Link from "next/link"
+import { Search, MapPin, X, Building2, AlertCircle } from "lucide-react"
+import { VenueCard } from "@/components/banya/venue-card"
 
 const types = ["all", "banya", "sauna", "hammam"]
 const typeLabels: Record<string, string> = { all: "Все типы", banya: "Баня", sauna: "Сауна", hammam: "Хаммам" }
@@ -36,12 +36,6 @@ const ratingOptions = [
 ]
 
 const PAGE_SIZE = 12
-
-function isAbortError(e: unknown): boolean {
-  if (e instanceof DOMException && e.name === "AbortError") return true
-  if (e instanceof Error && e.name === "AbortError") return true
-  return false
-}
 
 // Ключи, которые Next.js подмешивает в query (_rsc и т.д.): если включить их в deps синхронизации,
 // строка URL «меняется» без смены q/city — эффект затирает город из поля справа пустым searchParams.get("city").
@@ -78,7 +72,27 @@ function sameCityLists(a: string[], b: string[]): boolean {
   return sa.every((v, i) => v === sb[i])
 }
 
-export function CatalogSection() {
+export type CatalogSectionProps = {
+  /** SEO-хаб: город подставляется в фильтр, если в URL ещё нет city/cities */
+  hubCity?: string
+  /** Тип заведения по умолчанию для хаба (и сброс фильтров) */
+  hubDefaultVenueType?: "all" | "banya" | "sauna" | "hammam"
+  /** Заголовок блока каталога (например на городской посадочной) */
+  catalogTitle?: string
+  /**
+   * SSR-данные с сервера (page.tsx / layout делает fetch до рендера).
+   * Позволяют поисковому боту получить заполненный HTML без JS.
+   * Клиент перетирает их при первом интерактивном запросе.
+   */
+  initialData?: { venues: Venue[]; total: number }
+}
+
+export function CatalogSection({
+  hubCity,
+  hubDefaultVenueType = "all",
+  catalogTitle,
+  initialData,
+}: CatalogSectionProps = {}) {
   const searchParams = useSearchParams()
   const pathname = usePathname()
   const router = useRouter()
@@ -87,16 +101,14 @@ export function CatalogSection() {
 
   const [query, setQuery] = useState(initialQ)
   const [debouncedQuery, setDebouncedQuery] = useState(initialQ)
-  const [selectedCities, setSelectedCities] = useState<string[]>(initialCities)
+  const [selectedCities, setSelectedCities] = useState<string[]>(() =>
+    initialCities.length > 0 ? initialCities : hubCity ? [hubCity] : [],
+  )
   const [cityDraft, setCityDraft] = useState("")
-  const [selectedType, setSelectedType] = useState("all")
+  const [selectedType, setSelectedType] = useState(hubDefaultVenueType)
   const [selectedPriceIdx, setSelectedPriceIdx] = useState("0")
   const [selectedRatingIdx, setSelectedRatingIdx] = useState("0")
   const [page, setPage] = useState(1)
-  const [venues, setVenues] = useState<Venue[]>([])
-  const [total, setTotal] = useState(0)
-  const [loading, setLoading] = useState(true)
-  const fetchGen = useRef(0)
 
   useEffect(() => {
     const t = setTimeout(() => setDebouncedQuery(query), 400)
@@ -114,10 +126,11 @@ export function CatalogSection() {
     const cities = parseCitiesFromSearchParams(searchParams)
     setQuery(q)
     setDebouncedQuery(q)
-    setSelectedCities(cities)
+    const effCities = cities.length > 0 ? cities : hubCity ? [hubCity] : []
+    setSelectedCities(effCities)
     setCityDraft("")
     // eslint-disable-next-line react-hooks/exhaustive-deps -- searchParams по смыслу совпадает со stable key; сам ref меняется каждый кадр
-  }, [catalogStableKey])
+  }, [catalogStableKey, hubCity])
 
   // Синхронизация полей → URL: иначе в адресе остаётся старый ?city= и не совпадает с вводом.
   useEffect(() => {
@@ -139,80 +152,60 @@ export function CatalogSection() {
     router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false })
   }, [debouncedQuery, selectedCities, catalogStableKey, pathname, router])
 
-  // Текст поиска — debounced; города — сразу из selectedCities (см. выше). URL синхронизируется в отдельном эффекте.
-  const fetchData = useCallback(async (signal?: AbortSignal) => {
-    const gen = ++fetchGen.current
-    setLoading(true)
-    try {
-      const priceRange = priceRanges[Number(selectedPriceIdx)]
-      const ratingMin = ratingOptions[Number(selectedRatingIdx)].value
-      const venueType = selectedType === "all" ? "" : selectedType
-
-      const qEff = debouncedQuery.trim()
-      const citiesEff = selectedCities
-
-      const hasSearch =
-        qEff ||
-        citiesEff.length > 0 ||
-        venueType ||
-        priceRange.min ||
-        priceRange.max ||
-        ratingMin
-
-      const fetchInit = signal ? { signal } : undefined
-
-      if (hasSearch) {
-        const data = await searchVenues(
-          {
-            q: qEff || undefined,
-            city: citiesEff.length > 0 ? citiesEff : undefined,
-            type: venueType || undefined,
-            price_min: priceRange.min || undefined,
-            price_max: priceRange.max || undefined,
-            rating_min: ratingMin || undefined,
-            page,
-            page_size: PAGE_SIZE,
-          },
-          fetchInit,
-        )
-        if (gen !== fetchGen.current) return
-        setVenues(data.venues ?? [])
-        setTotal(data.total)
-      } else {
-        const data = await getVenues(
-          { page, page_size: PAGE_SIZE, sort_by: "rating" },
-          fetchInit,
-        )
-        if (gen !== fetchGen.current) return
-        setVenues(data.venues ?? [])
-        setTotal(data.total)
-      }
-    } catch (e: unknown) {
-      if (gen !== fetchGen.current) return
-      if (isAbortError(e)) return
-      setVenues([])
-      setTotal(0)
-    } finally {
-      if (gen === fetchGen.current) setLoading(false)
-    }
-  }, [
-    debouncedQuery,
-    selectedCities,
-    selectedType,
-    selectedPriceIdx,
-    selectedRatingIdx,
-    page,
-  ])
-
+  // Сбрасываем пагинацию при смене фильтров
   useEffect(() => {
     setPage(1)
   }, [debouncedQuery, selectedCities, selectedType, selectedPriceIdx, selectedRatingIdx])
 
-  useEffect(() => {
-    const ac = new AbortController()
-    void fetchData(ac.signal)
-    return () => ac.abort()
-  }, [fetchData])
+  // Параметры запроса — мемоизированы в query key для TanStack Query
+  const priceRange = priceRanges[Number(selectedPriceIdx)]
+  const ratingMin = ratingOptions[Number(selectedRatingIdx)].value
+  const venueType = selectedType === "all" ? "" : selectedType
+  const qEff = debouncedQuery.trim()
+  const hasSearch = Boolean(qEff || selectedCities.length > 0 || venueType || priceRange.min || priceRange.max || ratingMin)
+
+  const queryKey = [
+    "catalog",
+    hasSearch ? "search" : "list",
+    qEff,
+    selectedCities,
+    venueType,
+    priceRange.min,
+    priceRange.max,
+    ratingMin,
+    page,
+  ] as const
+
+  const { data, isFetching, isError } = useQuery({
+    queryKey,
+    queryFn: ({ signal }) =>
+      hasSearch
+        ? searchVenues(
+            {
+              q: qEff || undefined,
+              city: selectedCities.length > 0 ? selectedCities : undefined,
+              type: venueType || undefined,
+              price_min: priceRange.min || undefined,
+              price_max: priceRange.max || undefined,
+              rating_min: ratingMin || undefined,
+              page,
+              page_size: PAGE_SIZE,
+            },
+            { signal },
+          )
+        : getVenues({ page, page_size: PAGE_SIZE, sort_by: "rating" }, { signal }),
+    placeholderData: keepPreviousData,
+    // SSR-данные — начальные; не ждём первого рендера с пустым экраном
+    initialData: !hasSearch && page === 1 && initialData
+      ? { venues: initialData.venues, total: initialData.total, page: 1, page_size: PAGE_SIZE }
+      : undefined,
+    staleTime: 30_000,
+    retry: 2,
+  })
+
+  const venues: Venue[] = data?.venues ?? []
+  const total: number = data?.total ?? 0
+  const loading = isFetching && venues.length === 0
 
   const activeFilters: { key: string; label: string; onRemove?: () => void }[] = [
     ...selectedCities.map((c) => ({
@@ -235,9 +228,9 @@ export function CatalogSection() {
   const clearAllFilters = () => {
     setQuery("")
     setDebouncedQuery("")
-    setSelectedCities([])
+    setSelectedCities(hubCity ? [hubCity] : [])
     setCityDraft("")
-    setSelectedType("all")
+    setSelectedType(hubDefaultVenueType)
     setSelectedPriceIdx("0")
     setSelectedRatingIdx("0")
   }
@@ -257,7 +250,9 @@ export function CatalogSection() {
   return (
     <section id="catalog" className="bg-background py-16 md:py-24">
       <div className="container mx-auto px-4">
-        <h2 className="mb-8 text-3xl font-bold text-foreground md:text-4xl">Каталог заведений</h2>
+        <h2 className="mb-8 text-3xl font-bold text-foreground md:text-4xl">
+          {catalogTitle ?? "Каталог заведений"}
+        </h2>
 
         {/* Search and Filters */}
         <div className="mb-6 space-y-4">
@@ -289,7 +284,10 @@ export function CatalogSection() {
               />
             </div>
             <div className="flex flex-wrap gap-3">
-              <Select value={selectedType} onValueChange={setSelectedType}>
+              <Select
+                value={selectedType}
+                onValueChange={(v) => setSelectedType(v as "all" | "banya" | "sauna" | "hammam")}
+              >
                 <SelectTrigger className="h-11 w-[140px]">
                   <SelectValue />
                 </SelectTrigger>
@@ -353,11 +351,27 @@ export function CatalogSection() {
 
         {/* Results Count */}
         <p className="mb-6 text-muted-foreground">
-          {loading ? "Поиск..." : `Найдено ${total} заведений`}
+          {loading
+            ? "Поиск..."
+            : isFetching
+              ? `Найдено ${total} заведений (обновление…)`
+              : `Найдено ${total} заведений`}
         </p>
 
+        {/* Ошибка сети / сервера — показываем явно вместо молчаливого пустого списка */}
+        {isError && (
+          <Card className="mb-6 border-destructive/30 bg-destructive/5">
+            <CardContent className="flex items-center gap-3 py-4">
+              <AlertCircle className="h-5 w-5 shrink-0 text-destructive" />
+              <p className="text-sm text-destructive">
+                Не удалось загрузить список заведений. Проверьте соединение и попробуйте снова.
+              </p>
+            </CardContent>
+          </Card>
+        )}
+
         {/* Venues Grid */}
-        {!loading && venues.length === 0 ? (
+        {!loading && !isError && venues.length === 0 ? (
           <Card>
             <CardContent className="flex flex-col items-center py-16 text-center">
               <Building2 className="mb-4 h-12 w-12 text-muted-foreground/50" />
@@ -374,58 +388,9 @@ export function CatalogSection() {
               ? Array.from({ length: 6 }).map((_, i) => (
                   <div key={i} className="h-80 animate-pulse rounded-xl bg-muted" />
                 ))
-              : venues.map((venue) => {
-                  const cardImg = venueCardImageSrc(venue)
-                  return (
-                  <Link key={venue.id} href={`/venues/${venue.slug}`}>
-                    <Card className="group cursor-pointer overflow-hidden border-border bg-card transition-all hover:shadow-xl h-full">
-                      <div className="relative aspect-[4/3] overflow-hidden bg-muted flex items-center justify-center">
-                        {cardImg ? (
-                          <img src={cardImg} alt={venue.name} className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105" />
-                        ) : (
-                          <div className="flex flex-col items-center gap-1 text-muted-foreground/40">
-                            <ImageIcon className="h-8 w-8" />
-                            <span className="text-xs">Нет фото</span>
-                          </div>
-                        )}
-                        <Badge className="absolute left-3 top-3 border bg-primary/10 text-primary border-primary/20">
-                          {VENUE_TYPE_LABELS[venue.type] ?? venue.type}
-                        </Badge>
-                      </div>
-                      <CardContent className="p-5">
-                        <div className="mb-2 flex items-center justify-between">
-                          <h3 className="text-lg font-semibold text-card-foreground line-clamp-1">{venue.name}</h3>
-                          <div className="flex items-center gap-1">
-                            <Star className="h-4 w-4 fill-amber-400 text-amber-400" />
-                            <span className="text-sm font-medium">{venue.rating?.toFixed(1) || "—"}</span>
-                            {venue.review_count > 0 && (
-                              <span className="text-sm text-muted-foreground">({venue.review_count})</span>
-                            )}
-                          </div>
-                        </div>
-                        <div className="mb-2 flex items-center gap-1 text-sm text-muted-foreground">
-                          <MapPin className="h-4 w-4 shrink-0" />
-                          <span className="line-clamp-1">{venue.city}{venue.address ? `, ${venue.address}` : ""}</span>
-                        </div>
-                        {venue.description && (
-                          <p className="mb-3 text-sm text-muted-foreground line-clamp-2">{venue.description}</p>
-                        )}
-                        {venue.amenities && venue.amenities.length > 0 && (
-                          <div className="mb-3 flex flex-wrap gap-1.5">
-                            {venue.amenities.slice(0, 3).map((a) => (
-                              <Badge key={a} variant="secondary" className="text-xs">{a}</Badge>
-                            ))}
-                          </div>
-                        )}
-                        <div className="flex items-center justify-between">
-                          <span className="text-lg font-bold text-primary">
-                            {venue.price_from > 0 ? `от ${venue.price_from.toLocaleString("ru-RU")} ₽/час` : "Цена по запросу"}
-                          </span>
-                        </div>
-                      </CardContent>
-                    </Card>
-                  </Link>
-                )})}
+              : venues.map((venue) => (
+                  <VenueCard key={venue.id} venue={venue} />
+                ))}
           </div>
         )}
 

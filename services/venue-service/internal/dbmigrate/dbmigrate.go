@@ -94,9 +94,16 @@ func Up(ctx context.Context, dsn, dir string, log zerolog.Logger) error {
 	return nil
 }
 
-// firstCRMStaffMigration: migrations with a lower numeric prefix are only recorded (not executed)
-// when the DB already has `venues` but `schema_migrations` was empty (legacy DBs).
-const firstCRMStaffMigration = 12
+// firstPostLegacyMigration is the cutoff for the "legacy DB bootstrap" hack:
+// when the database already has `venues` but `schema_migrations` was empty,
+// every migration with a numeric prefix < this value is recorded as
+// already-applied without being executed.
+//
+// Historically this was named firstCRMStaffMigration (= 12, the first staff
+// schema). After the CRM extraction (migrations 012/013 moved to crm-service),
+// 11 is still the highest legacy-applied prefix in venue-service, so the
+// cutoff stays at 12 — only the name was generalised.
+const firstPostLegacyMigration = 12
 
 func bootstrapExistingDB(ctx context.Context, conn *pgx.Conn, dir string, log zerolog.Logger) error {
 	var n int64
@@ -127,7 +134,7 @@ func bootstrapExistingDB(ctx context.Context, conn *pgx.Conn, dir string, log ze
 			continue
 		}
 		name := e.Name()
-		if strings.HasSuffix(name, ".up.sql") && migrationSeq(name) < firstCRMStaffMigration {
+		if strings.HasSuffix(name, ".up.sql") && migrationSeq(name) < firstPostLegacyMigration {
 			files = append(files, name)
 		}
 	}

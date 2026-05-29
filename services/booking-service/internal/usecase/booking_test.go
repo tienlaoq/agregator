@@ -5,7 +5,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -30,27 +32,21 @@ func TestCreateBooking_Success(t *testing.T) {
 	testDate := visitDateNotInPast(t)
 	const bookingID = "b1"
 	const paymentID = "pay-1"
+	const paymentURL = "https://pay.example/p"
 
-	var reserveCalled bool
-	repo := &mockBookingRepo{
-		CreateFunc: func(_ context.Context, b *domain.Booking) error {
+	repo := NewMockBookingRepository(t)
+	repo.EXPECT().Create(mock.Anything, mock.Anything).
+		Run(func(_ context.Context, b *domain.Booking) {
 			b.ID = bookingID
 			b.CreatedAt = time.Now()
 			b.UpdatedAt = time.Now()
-			return nil
-		},
-		SetPaymentIDFunc: func(_ context.Context, bid, pid string) error {
-			require.Equal(t, bookingID, bid)
-			require.Equal(t, paymentID, pid)
-			return nil
-		},
-		UpdateStatusFunc: func(_ context.Context, id, st string) error {
-			require.Equal(t, bookingID, id)
-			require.Equal(t, "payment_pending", st)
-			return nil
-		},
-	}
+		}).Return(nil)
+	repo.EXPECT().SetPaymentAndStatus(mock.Anything, bookingID, paymentID, paymentURL, string(domain.StatusPaymentPending)).
+		Return(nil)
+	repo.EXPECT().DeleteOrphanPending(mock.Anything, mock.Anything).
+		Return(int64(0), nil).Maybe()
 
+	var reserveCalled bool
 	venue := &mockVenueClient{
 		GetVenueFunc: func(_ context.Context, in *venuev1.GetVenueRequest, _ ...grpc.CallOption) (*venuev1.VenueResponse, error) {
 			require.Equal(t, "venue-1", in.Id)
@@ -85,19 +81,19 @@ func TestCreateBooking_Success(t *testing.T) {
 			require.Equal(t, int64(10000), in.Amount)
 			require.Contains(t, in.Description, bookingID)
 			require.Equal(t, bookingID, in.IdempotencyKey)
-			return &paymentv1.PaymentResponse{Id: paymentID, PaymentUrl: "https://pay.example/p"}, nil
+			return &paymentv1.PaymentResponse{Id: paymentID, PaymentUrl: paymentURL}, nil
 		},
 	}
 
 	pub := &mockEventPublisher{
 		PublishBookingCreatedFunc: func(_ context.Context, b *domain.Booking) error {
 			require.Equal(t, bookingID, b.ID)
-			require.Equal(t, "payment_pending", b.Status)
+			require.Equal(t, domain.StatusPaymentPending, b.Status)
 			return nil
 		},
 	}
 
-	uc := NewBookingUseCase(repo, venue, payment, pub, "Europe/Moscow")
+	uc := NewBookingUseCase(repo, venue, &mockCRMClient{}, payment, pub, zerolog.Nop(), "Europe/Moscow", 0)
 
 	out, err := uc.CreateBooking(ctx, CreateBookingInput{
 		UserID:    "user-1",
@@ -114,20 +110,23 @@ func TestCreateBooking_Success(t *testing.T) {
 	require.NotNil(t, out)
 	assert.True(t, reserveCalled)
 	assert.Equal(t, bookingID, out.ID)
-	assert.Equal(t, "payment_pending", out.Status)
+	assert.Equal(t, domain.StatusPaymentPending, out.Status)
 	assert.Equal(t, paymentID, out.PaymentID)
-	assert.Equal(t, "https://pay.example/p", out.PaymentURL)
+	assert.Equal(t, paymentURL, out.PaymentURL)
 }
 
 func TestCreateBooking_SlotNotAvailable(t *testing.T) {
 	ctx := context.Background()
 	testDate := visitDateNotInPast(t)
+
+	repo := NewMockBookingRepository(t)
+
 	venue := &mockVenueClient{
 		CheckSlotAvailabilityFunc: func(_ context.Context, _ *venuev1.CheckSlotRequest, _ ...grpc.CallOption) (*venuev1.CheckSlotResponse, error) {
 			return &venuev1.CheckSlotResponse{Available: false}, nil
 		},
 	}
-	uc := NewBookingUseCase(&mockBookingRepo{}, venue, &mockPaymentClient{}, &mockEventPublisher{}, "Europe/Moscow")
+	uc := NewBookingUseCase(repo, venue, &mockCRMClient{}, &mockPaymentClient{}, &mockEventPublisher{}, zerolog.Nop(), "Europe/Moscow", 0)
 
 	_, err := uc.CreateBooking(ctx, CreateBookingInput{
 		UserID:   "user-1",
@@ -147,21 +146,15 @@ func TestCreateBooking_ReserveConflictDeletesBooking(t *testing.T) {
 	ctx := context.Background()
 	testDate := visitDateNotInPast(t)
 	const bookingID = "b-conflict"
-	var deleted bool
 
-	repo := &mockBookingRepo{
-		CreateFunc: func(_ context.Context, b *domain.Booking) error {
+	repo := NewMockBookingRepository(t)
+	repo.EXPECT().Create(mock.Anything, mock.Anything).
+		Run(func(_ context.Context, b *domain.Booking) {
 			b.ID = bookingID
 			b.CreatedAt = time.Now()
 			b.UpdatedAt = time.Now()
-			return nil
-		},
-		DeleteFunc: func(_ context.Context, id string) error {
-			deleted = true
-			assert.Equal(t, bookingID, id)
-			return nil
-		},
-	}
+		}).Return(nil)
+	repo.EXPECT().Delete(mock.Anything, bookingID).Return(nil)
 
 	venue := &mockVenueClient{
 		CheckSlotAvailabilityFunc: func(_ context.Context, _ *venuev1.CheckSlotRequest, _ ...grpc.CallOption) (*venuev1.CheckSlotResponse, error) {
@@ -172,7 +165,7 @@ func TestCreateBooking_ReserveConflictDeletesBooking(t *testing.T) {
 		},
 	}
 
-	uc := NewBookingUseCase(repo, venue, &mockPaymentClient{}, &mockEventPublisher{}, "Europe/Moscow")
+	uc := NewBookingUseCase(repo, venue, &mockCRMClient{}, &mockPaymentClient{}, &mockEventPublisher{}, zerolog.Nop(), "Europe/Moscow", 0)
 
 	_, err := uc.CreateBooking(ctx, CreateBookingInput{
 		UserID:   "user-1",
@@ -186,7 +179,6 @@ func TestCreateBooking_ReserveConflictDeletesBooking(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, codes.InvalidArgument, st.Code())
 	assert.Contains(t, st.Message(), "занято")
-	assert.True(t, deleted)
 }
 
 func TestCancelBooking_Success(t *testing.T) {
@@ -195,29 +187,19 @@ func TestCancelBooking_Success(t *testing.T) {
 	const userID = "user-1"
 
 	b := &domain.Booking{
-		ID:       bookingID,
-		UserID:   userID,
-		VenueID:  "venue-1",
-		Status:   "pending",
-		TimeFrom: "10:00",
-		TimeTo:   "12:00",
+		ID:      bookingID,
+		UserID:  userID,
+		VenueID: "venue-1",
+		Status:  domain.StatusPending,
 	}
+	cancelled := *b
+	cancelled.Status = domain.StatusCancelled
+
+	repo := NewMockBookingRepository(t)
+	repo.EXPECT().GetByID(mock.Anything, bookingID).Return(b, nil)
+	repo.EXPECT().UpdateStatus(mock.Anything, bookingID, string(domain.StatusCancelled)).Return(nil)
 
 	var released bool
-	var published bool
-	repo := &mockBookingRepo{
-		GetByIDFunc: func(_ context.Context, id string) (*domain.Booking, error) {
-			require.Equal(t, bookingID, id)
-			cp := *b
-			return &cp, nil
-		},
-		UpdateStatusFunc: func(_ context.Context, id, st string) error {
-			require.Equal(t, bookingID, id)
-			require.Equal(t, "cancelled", st)
-			return nil
-		},
-	}
-
 	venue := &mockVenueClient{
 		ReleaseSlotFunc: func(_ context.Context, in *venuev1.ReleaseSlotRequest, _ ...grpc.CallOption) (*venuev1.ReleaseSlotResponse, error) {
 			released = true
@@ -227,31 +209,31 @@ func TestCancelBooking_Success(t *testing.T) {
 		},
 	}
 
+	var published bool
 	pub := &mockEventPublisher{
 		PublishBookingCancelledFunc: func(_ context.Context, got *domain.Booking) error {
 			published = true
-			assert.Equal(t, "cancelled", got.Status)
+			assert.Equal(t, domain.StatusCancelled, got.Status)
 			return nil
 		},
 	}
 
-	uc := NewBookingUseCase(repo, venue, &mockPaymentClient{}, pub, "Europe/Moscow")
+	uc := NewBookingUseCase(repo, venue, &mockCRMClient{}, &mockPaymentClient{}, pub, zerolog.Nop(), "Europe/Moscow", 0)
 	out, err := uc.CancelBooking(ctx, bookingID, userID)
 	require.NoError(t, err)
 	require.NotNil(t, out)
-	assert.Equal(t, "cancelled", out.Status)
+	assert.Equal(t, domain.StatusCancelled, out.Status)
 	assert.True(t, released)
 	assert.True(t, published)
 }
 
 func TestCancelBooking_NotOwner(t *testing.T) {
 	ctx := context.Background()
-	repo := &mockBookingRepo{
-		GetByIDFunc: func(_ context.Context, id string) (*domain.Booking, error) {
-			return &domain.Booking{ID: id, UserID: "owner"}, nil
-		},
-	}
-	uc := NewBookingUseCase(repo, &mockVenueClient{}, &mockPaymentClient{}, &mockEventPublisher{}, "Europe/Moscow")
+
+	repo := NewMockBookingRepository(t)
+	repo.EXPECT().GetByID(mock.Anything, "b1").Return(&domain.Booking{ID: "b1", UserID: "owner"}, nil)
+
+	uc := NewBookingUseCase(repo, &mockVenueClient{}, &mockCRMClient{}, &mockPaymentClient{}, &mockEventPublisher{}, zerolog.Nop(), "Europe/Moscow", 0)
 
 	_, err := uc.CancelBooking(ctx, "b1", "other")
 	require.Error(t, err)
@@ -262,12 +244,11 @@ func TestCancelBooking_NotOwner(t *testing.T) {
 
 func TestCancelBooking_AlreadyCancelled(t *testing.T) {
 	ctx := context.Background()
-	repo := &mockBookingRepo{
-		GetByIDFunc: func(_ context.Context, _ string) (*domain.Booking, error) {
-			return &domain.Booking{ID: "b1", UserID: "u1", Status: "cancelled"}, nil
-		},
-	}
-	uc := NewBookingUseCase(repo, &mockVenueClient{}, &mockPaymentClient{}, &mockEventPublisher{}, "Europe/Moscow")
+
+	repo := NewMockBookingRepository(t)
+	repo.EXPECT().GetByID(mock.Anything, "b1").Return(&domain.Booking{ID: "b1", UserID: "u1", Status: domain.StatusCancelled}, nil)
+
+	uc := NewBookingUseCase(repo, &mockVenueClient{}, &mockCRMClient{}, &mockPaymentClient{}, &mockEventPublisher{}, zerolog.Nop(), "Europe/Moscow", 0)
 
 	_, err := uc.CancelBooking(ctx, "b1", "u1")
 	require.Error(t, err)
@@ -281,140 +262,70 @@ func TestConfirmBooking_Success(t *testing.T) {
 	const bookingID = "b1"
 	const paymentID = "pay-xyz"
 
-	var setPaymentCalls int
-	var statusCalls int
+	confirmed := &domain.Booking{ID: bookingID, Status: domain.StatusConfirmed, PaymentID: paymentID}
+
+	repo := NewMockBookingRepository(t)
+	repo.EXPECT().ConfirmPayment(mock.Anything, bookingID, paymentID).Return(confirmed, true, nil)
+
 	var published bool
-	var getCalls int
-
-	repo := &mockBookingRepo{
-		SetPaymentIDFunc: func(_ context.Context, bid, pid string) error {
-			setPaymentCalls++
-			require.Equal(t, bookingID, bid)
-			require.Equal(t, paymentID, pid)
-			return nil
-		},
-		UpdateStatusFunc: func(_ context.Context, id, st string) error {
-			statusCalls++
-			require.Equal(t, bookingID, id)
-			require.Equal(t, "confirmed", st)
-			return nil
-		},
-		GetByIDFunc: func(_ context.Context, id string) (*domain.Booking, error) {
-			require.Equal(t, bookingID, id)
-			getCalls++
-			if getCalls == 1 {
-				return &domain.Booking{ID: bookingID, Status: "payment_pending", PaymentID: paymentID}, nil
-			}
-			return &domain.Booking{ID: bookingID, Status: "confirmed", PaymentID: paymentID}, nil
-		},
-	}
-
 	pub := &mockEventPublisher{
 		PublishBookingConfirmedFunc: func(_ context.Context, b *domain.Booking) error {
 			published = true
-			assert.Equal(t, "confirmed", b.Status)
+			assert.Equal(t, domain.StatusConfirmed, b.Status)
 			return nil
 		},
 	}
+	repo.EXPECT().MarkCompletedEventSent(mock.Anything, mock.Anything).Return(nil).Maybe()
 
-	uc := NewBookingUseCase(repo, &mockVenueClient{}, &mockPaymentClient{}, pub, "Europe/Moscow")
+	uc := NewBookingUseCase(repo, &mockVenueClient{}, &mockCRMClient{}, &mockPaymentClient{}, pub, zerolog.Nop(), "Europe/Moscow", 0)
 	err := uc.ConfirmBooking(ctx, bookingID, paymentID)
 	require.NoError(t, err)
-	assert.Equal(t, 0, setPaymentCalls)
-	assert.Equal(t, 1, statusCalls)
-	assert.Equal(t, 2, getCalls)
 	assert.True(t, published)
 }
 
 func TestConfirmBooking_IdempotentWhenConfirmed(t *testing.T) {
 	ctx := context.Background()
-	var statusCalls int
-	repo := &mockBookingRepo{
-		GetByIDFunc: func(_ context.Context, _ string) (*domain.Booking, error) {
-			return &domain.Booking{ID: "b1", Status: "confirmed", PaymentID: "p1"}, nil
-		},
-		UpdateStatusFunc: func(_ context.Context, _, _ string) error {
-			statusCalls++
-			return nil
-		},
-	}
-	uc := NewBookingUseCase(repo, &mockVenueClient{}, &mockPaymentClient{}, &mockEventPublisher{}, "Europe/Moscow")
-	require.NoError(t, uc.ConfirmBooking(ctx, "b1", "p1"))
-	assert.Equal(t, 0, statusCalls)
-}
 
-func TestConfirmBooking_SetsPaymentIDWhenMissing(t *testing.T) {
-	ctx := context.Background()
-	const bookingID = "b1"
-	const paymentID = "pay-new"
-	var setPaymentCalls int
-	var getCalls int
-	repo := &mockBookingRepo{
-		SetPaymentIDFunc: func(_ context.Context, bid, pid string) error {
-			setPaymentCalls++
-			assert.Equal(t, bookingID, bid)
-			assert.Equal(t, paymentID, pid)
-			return nil
-		},
-		UpdateStatusFunc: func(_ context.Context, _, st string) error {
-			assert.Equal(t, "confirmed", st)
-			return nil
-		},
-		GetByIDFunc: func(_ context.Context, _ string) (*domain.Booking, error) {
-			getCalls++
-			if getCalls == 1 {
-				return &domain.Booking{ID: bookingID, Status: "payment_pending", PaymentID: ""}, nil
-			}
-			return &domain.Booking{ID: bookingID, Status: "confirmed", PaymentID: paymentID}, nil
-		},
-	}
-	pub := &mockEventPublisher{
-		PublishBookingConfirmedFunc: func(_ context.Context, b *domain.Booking) error {
-			assert.Equal(t, "confirmed", b.Status)
-			return nil
-		},
-	}
-	uc := NewBookingUseCase(repo, &mockVenueClient{}, &mockPaymentClient{}, pub, "Europe/Moscow")
-	require.NoError(t, uc.ConfirmBooking(ctx, bookingID, paymentID))
-	assert.Equal(t, 1, setPaymentCalls)
+	already := &domain.Booking{ID: "b1", Status: domain.StatusConfirmed, PaymentID: "p1"}
+
+	repo := NewMockBookingRepository(t)
+	repo.EXPECT().ConfirmPayment(mock.Anything, "b1", "p1").Return(already, false, nil)
+
+	uc := NewBookingUseCase(repo, &mockVenueClient{}, &mockCRMClient{}, &mockPaymentClient{}, &mockEventPublisher{}, zerolog.Nop(), "Europe/Moscow", 0)
+	require.NoError(t, uc.ConfirmBooking(ctx, "b1", "p1"))
 }
 
 func TestCancelBookingByPayment_OnlyWhenPaymentPending(t *testing.T) {
 	ctx := context.Background()
-	var statusCalls int
-	repo := &mockBookingRepo{
-		GetByIDFunc: func(_ context.Context, _ string) (*domain.Booking, error) {
-			return &domain.Booking{ID: "b1", UserID: "u1", VenueID: "v1", Status: "confirmed"}, nil
-		},
-		UpdateStatusFunc: func(_ context.Context, _, _ string) error {
-			statusCalls++
-			return nil
-		},
-	}
-	uc := NewBookingUseCase(repo, &mockVenueClient{}, &mockPaymentClient{}, &mockEventPublisher{}, "Europe/Moscow")
+
+	repo := NewMockBookingRepository(t)
+	repo.EXPECT().GetByID(mock.Anything, "b1").Return(&domain.Booking{ID: "b1", UserID: "u1", VenueID: "v1", Status: domain.StatusConfirmed}, nil)
+
+	uc := NewBookingUseCase(repo, &mockVenueClient{}, &mockCRMClient{}, &mockPaymentClient{}, &mockEventPublisher{}, zerolog.Nop(), "Europe/Moscow", 0)
 	require.NoError(t, uc.CancelBookingByPayment(ctx, "b1"))
-	assert.Equal(t, 0, statusCalls)
 }
 
 func TestAutoCompletePastVisits_PublishesCompleted(t *testing.T) {
 	ctx := context.Background()
 	refs := []domain.BookingCompletedRef{{ID: "b1", UserID: "u1", VenueID: "v1"}}
+
+	repo := NewMockBookingRepository(t)
+	repo.EXPECT().AutoCompleteVisitEnded(mock.Anything, "Europe/Moscow").Return(refs, nil)
+	repo.EXPECT().MarkCompletedEventSent(mock.Anything, "b1").Return(nil)
+	repo.EXPECT().FindUnpublishedCompleted(mock.Anything, mock.Anything).Return(nil, nil)
+	repo.EXPECT().DeleteOrphanPending(mock.Anything, mock.Anything).Return(int64(0), nil)
+
 	var published bool
-	repo := &mockBookingRepo{
-		AutoCompleteVisitEndedFunc: func(_ context.Context, tz string) ([]domain.BookingCompletedRef, error) {
-			assert.Equal(t, "Europe/Moscow", tz)
-			return refs, nil
-		},
-	}
 	pub := &mockEventPublisher{
 		PublishBookingCompletedFunc: func(_ context.Context, b *domain.Booking) error {
 			published = true
-			assert.Equal(t, "completed", b.Status)
+			assert.Equal(t, domain.StatusCompleted, b.Status)
 			assert.Equal(t, "b1", b.ID)
 			return nil
 		},
 	}
-	uc := NewBookingUseCase(repo, &mockVenueClient{}, &mockPaymentClient{}, pub, "Europe/Moscow")
+
+	uc := NewBookingUseCase(repo, &mockVenueClient{}, &mockCRMClient{}, &mockPaymentClient{}, pub, zerolog.Nop(), "Europe/Moscow", 0)
 	n, err := uc.AutoCompletePastVisits(ctx)
 	require.NoError(t, err)
 	assert.Equal(t, 1, n)
@@ -423,16 +334,47 @@ func TestAutoCompletePastVisits_PublishesCompleted(t *testing.T) {
 
 func TestHasCompletedBooking(t *testing.T) {
 	ctx := context.Background()
-	repo := &mockBookingRepo{
-		HasCompletedFunc: func(_ context.Context, userID, venueID string) (bool, error) {
-			require.Equal(t, "u1", userID)
-			require.Equal(t, "v1", venueID)
-			return true, nil
-		},
-	}
-	uc := NewBookingUseCase(repo, &mockVenueClient{}, &mockPaymentClient{}, &mockEventPublisher{}, "Europe/Moscow")
+
+	repo := NewMockBookingRepository(t)
+	repo.EXPECT().HasCompleted(mock.Anything, "u1", "v1").Return(true, nil)
+
+	uc := NewBookingUseCase(repo, &mockVenueClient{}, &mockCRMClient{}, &mockPaymentClient{}, &mockEventPublisher{}, zerolog.Nop(), "Europe/Moscow", 0)
 
 	ok, err := uc.HasCompletedBooking(ctx, "u1", "v1")
 	require.NoError(t, err)
 	assert.True(t, ok)
+}
+
+func TestBookingIdempotencyKey(t *testing.T) {
+	t.Parallel()
+
+	t.Run("deterministic — same inputs produce same key", func(t *testing.T) {
+		k1 := bookingIdempotencyKey("booking-uuid-123", "user-uuid-456")
+		k2 := bookingIdempotencyKey("booking-uuid-123", "user-uuid-456")
+		assert.Equal(t, k1, k2)
+	})
+
+	t.Run("different booking IDs produce different keys", func(t *testing.T) {
+		k1 := bookingIdempotencyKey("booking-aaa", "user-111")
+		k2 := bookingIdempotencyKey("booking-bbb", "user-111")
+		assert.NotEqual(t, k1, k2)
+	})
+
+	t.Run("different user IDs produce different keys", func(t *testing.T) {
+		k1 := bookingIdempotencyKey("booking-aaa", "user-111")
+		k2 := bookingIdempotencyKey("booking-aaa", "user-222")
+		assert.NotEqual(t, k1, k2)
+	})
+
+	t.Run("key is 64 hex chars (sha256)", func(t *testing.T) {
+		k := bookingIdempotencyKey("any-booking", "any-user")
+		assert.Len(t, k, 64)
+	})
+
+	t.Run("no key collision between swapped IDs", func(t *testing.T) {
+		// sha256("a:b") != sha256("b:a") — separator ensures ordering matters
+		k1 := bookingIdempotencyKey("aaaaa", "bbbbb")
+		k2 := bookingIdempotencyKey("bbbbb", "aaaaa")
+		assert.NotEqual(t, k1, k2)
+	})
 }

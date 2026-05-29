@@ -12,7 +12,6 @@ import (
 	bookingv1 "github.com/tienlao/agregator/gen/go/booking/v1"
 	masterv1 "github.com/tienlao/agregator/gen/go/master/v1"
 	reviewv1 "github.com/tienlao/agregator/gen/go/review/v1"
-	venuev1 "github.com/tienlao/agregator/gen/go/venue/v1"
 	"github.com/tienlao/agregator/pkg/grpcutil"
 	"github.com/tienlao/agregator/pkg/logger"
 	"github.com/tienlao/agregator/pkg/natsutil"
@@ -21,12 +20,18 @@ import (
 	"github.com/tienlao/agregator/services/review-service/config"
 	delivery "github.com/tienlao/agregator/services/review-service/internal/delivery/grpc"
 	"github.com/tienlao/agregator/services/review-service/internal/events"
+	"github.com/tienlao/agregator/services/review-service/internal/outbox"
 	"github.com/tienlao/agregator/services/review-service/internal/repository"
 	"github.com/tienlao/agregator/services/review-service/internal/usecase"
 )
 
+// serviceName is the stable identity string injected into every outbound gRPC
+// call via CallerIDClientInterceptor. Downstream services use it to distinguish
+// service-to-service traffic from direct client calls.
+const serviceName = "review-service"
+
 func main() {
-	log := logger.New("review-service")
+	log := logger.New(serviceName)
 
 	cfg := config.Load()
 	if err := cfg.Postgres.Validate(); err != nil {
@@ -54,7 +59,22 @@ func main() {
 		log.Fatal().Err(err).Msg("failed to ensure REVIEWS stream")
 	}
 
-	bookingConn, err := grpc.NewClient(cfg.BookingServiceAddr, grpcutil.InsecureDialOptions()...)
+	dialOpts, err := grpcutil.DialOptions()
+	if err != nil {
+		log.Fatal().Err(err).Msg("gRPC transport config error")
+	}
+
+	// withCallerID appends the CallerIDClientInterceptor to dialOpts so that every
+	// outbound gRPC call carries the "x-caller-id: <serviceName>" header.
+	// Downstream services use this header to distinguish service-to-service traffic
+	// from direct client calls (e.g. to gate interservice-only RPCs).
+	withCallerID := append(dialOpts,
+		grpc.WithUnaryInterceptor(grpcutil.CallerIDClientInterceptor(func(_ context.Context) string {
+			return serviceName
+		})),
+	)
+
+	bookingConn, err := grpc.NewClient(cfg.BookingServiceAddr, withCallerID...)
 	if err != nil {
 		log.Fatal().Err(err).Msg("failed to dial booking-service")
 	}
@@ -62,15 +82,10 @@ func main() {
 	bookingClient := bookingv1.NewBookingServiceClient(bookingConn)
 	log.Info().Str("addr", cfg.BookingServiceAddr).Msg("booking-service client ready")
 
-	venueConn, err := grpc.NewClient(cfg.VenueServiceAddr, grpcutil.InsecureDialOptions()...)
-	if err != nil {
-		log.Fatal().Err(err).Msg("failed to dial venue-service")
-	}
-	defer venueConn.Close()
-	venueClient := venuev1.NewVenueServiceClient(venueConn)
-	log.Info().Str("addr", cfg.VenueServiceAddr).Msg("venue-service client ready")
+	// venue-service connection removed: rating updates are now event-driven
+	// (venue-service subscribes to review.created via NATS).
 
-	masterConn, err := grpc.NewClient(cfg.MasterServiceAddr, grpcutil.InsecureDialOptions()...)
+	masterConn, err := grpc.NewClient(cfg.MasterServiceAddr, withCallerID...)
 	if err != nil {
 		log.Fatal().Err(err).Msg("failed to dial master-service")
 	}
@@ -79,11 +94,22 @@ func main() {
 	log.Info().Str("addr", cfg.MasterServiceAddr).Msg("master-service client ready")
 
 	reviewRepo := repository.NewReviewRepo(pgPool)
+	outboxRepo := repository.NewOutboxRepo(pgPool)
 	publisher := events.NewPublisher(js)
 
-	uc := usecase.NewReviewUseCase(reviewRepo, bookingClient, venueClient, masterClient, publisher)
+	uc := usecase.NewReviewUseCaseWithOutbox(reviewRepo, outboxRepo, bookingClient, masterClient)
 
-	grpcServer := grpc.NewServer(grpcutil.ServerOptions()...)
+	outboxWorker := outbox.NewWorker(outboxRepo, publisher, cfg.OutboxBatchSize, cfg.OutboxInterval)
+	go outboxWorker.Run(ctx)
+
+	srvOpts, err := grpcutil.ServerOptionsFromEnv()
+	if err != nil {
+		log.Fatal().Err(err).Msg("gRPC server transport config error")
+	}
+	srvOpts = append(srvOpts, grpc.ChainUnaryInterceptor(
+		grpcutil.PgErrorUnaryInterceptor(),
+	))
+	grpcServer := grpc.NewServer(srvOpts...)
 	reviewv1.RegisterReviewServiceServer(grpcServer, delivery.NewServer(uc))
 
 	lis, err := net.Listen("tcp", ":"+cfg.GRPCPort)
@@ -103,7 +129,11 @@ func main() {
 	sig := <-quit
 	log.Info().Str("signal", sig.String()).Msg("shutting down")
 
-	grpcServer.GracefulStop()
+	// Cancel the root context first so that in-flight upstream gRPC calls
+	// (booking-service, master-service) and the outbox worker unblock promptly.
+	// GracefulStop then drains any remaining handlers that are already past
+	// their upstream calls and just need to flush their responses.
 	cancel()
-	log.Info().Msg("review-service stopped")
+	grpcServer.GracefulStop()
+	log.Info().Msg(serviceName + " stopped")
 }

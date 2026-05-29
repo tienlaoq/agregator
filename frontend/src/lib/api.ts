@@ -75,25 +75,27 @@ function parseGatewayError(text: string): { code?: string; detail?: string } {
 
 let refreshPromise: Promise<boolean> | null = null;
 
+/**
+ * Обменивает refresh_token (из httpOnly cookie через Next.js API route) на новый access_token.
+ * Refresh_token не доступен клиентскому JS — XSS не может его украсть.
+ */
 async function tryRefreshToken(): Promise<boolean> {
-  const refreshToken =
-    typeof window !== "undefined" ? localStorage.getItem("refresh_token") : null;
-  if (!refreshToken) return false;
+  if (typeof window === "undefined") return false;
 
   try {
-    const res = await fetch(`${apiUrlForFetch()}/api/v1/auth/refresh`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ refresh_token: refreshToken }),
-    });
-    if (!res.ok) return false;
+    // /api/auth/refresh читает httpOnly cookie banya_refresh и проксирует к gateway.
+    const res = await fetch("/api/auth/refresh", { method: "POST" });
+    if (!res.ok) {
+      // После неудачного refresh — разлогиниваем, чтобы не зациклиться.
+      const { useAuthStore } = await import("@/store/auth");
+      await useAuthStore.getState().logout();
+      return false;
+    }
 
-    const data = await res.json();
-    localStorage.setItem("token", data.access_token);
-    localStorage.setItem("refresh_token", data.refresh_token);
-
+    const data = await res.json() as { access_token: string };
     const { useAuthStore } = await import("@/store/auth");
-    useAuthStore.getState().setTokens(data.access_token, data.refresh_token);
+    // setTokens обновляет token в Zustand; refresh cookie обновляется внутри /api/auth/refresh.
+    await useAuthStore.getState().setTokens(data.access_token, "");
     return true;
   } catch {
     return false;
@@ -101,8 +103,13 @@ async function tryRefreshToken(): Promise<boolean> {
 }
 
 async function fetchAPI<T>(path: string, options?: RequestInit): Promise<T> {
-  const token =
-    typeof window !== "undefined" ? localStorage.getItem("token") : null;
+  // Access token живёт только в памяти Zustand — не в localStorage.
+  // На сервере (SSR) токена нет — публичные запросы уходят без Authorization.
+  let token: string | null = null;
+  if (typeof window !== "undefined") {
+    const { useAuthStore } = await import("@/store/auth");
+    token = useAuthStore.getState().token;
+  }
 
   const isFormData =
     typeof FormData !== "undefined" && options?.body instanceof FormData;
@@ -134,7 +141,8 @@ async function fetchAPI<T>(path: string, options?: RequestInit): Promise<T> {
     }
     const refreshed = await refreshPromise;
     if (refreshed) {
-      const newToken = localStorage.getItem("token");
+      const { useAuthStore } = await import("@/store/auth");
+      const newToken = useAuthStore.getState().token;
       const retryHeaders: Record<string, string> = {
         ...(options?.headers as Record<string, string>),
         ...(newToken ? { Authorization: `Bearer ${newToken}` } : {}),
@@ -148,6 +156,15 @@ async function fetchAPI<T>(path: string, options?: RequestInit): Promise<T> {
         headers: retryHeaders,
       });
 
+      // Retry вернул 401 — токен невалиден даже после обновления (сервер отозвал сессию).
+      // Выбрасываем ошибку немедленно, не запускаем второй цикл рефреша.
+      if (retryRes.status === 401) {
+        const { useAuthStore: store } = await import("@/store/auth");
+        await store.getState().logout();
+        window.location.href = "/auth/login";
+        throw new ApiError(401, "session_expired", "session_expired", "Session expired");
+      }
+
       if (!retryRes.ok) {
         const text = await retryRes.text().catch(() => "");
         const g = parseGatewayError(text);
@@ -158,11 +175,12 @@ async function fetchAPI<T>(path: string, options?: RequestInit): Promise<T> {
       return retryRes.json();
     }
 
+    // Refresh не удался — сессия истекла или refresh_token отозван.
     const { useAuthStore } = await import("@/store/auth");
-    useAuthStore.getState().logout();
-    if (typeof window !== "undefined") {
-      window.location.href = "/auth/login";
-    }
+    await useAuthStore.getState().logout();
+    window.location.href = "/auth/login";
+    // Явно бросаем, чтобы вызывающий код получил ошибку, а не undefined.
+    throw new ApiError(401, "session_expired", "session_expired", "Session expired");
   }
 
   if (!res.ok) {

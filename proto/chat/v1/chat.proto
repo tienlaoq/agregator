@@ -43,6 +43,9 @@ message EnsureThreadRequest {
   string kind = 1;
   string ref_id = 2;
   repeated string participant_user_ids = 3;
+  // actor_user_id is the authenticated user initiating the request.
+  // The chat-service validates that actor is a member of participant_user_ids.
+  string actor_user_id = 4;
 }
 
 message ThreadResponse {
@@ -84,7 +87,25 @@ message MessageResponse {
   ChatThread thread = 2;
 }
 
+// MarkReadRequest marks a thread as read for the given user.
+//
+// N4 — known watermark race (accepted trade-off):
+//   The server resolves last_read_message_id as chat_threads.last_message_id
+//   at the moment the INSERT/UPDATE on chat_reads executes.  If another sender
+//   inserts a message between the client's read gesture and the server write,
+//   the watermark advances past a message the client has not yet rendered.
+//   This is harmless for UX (the message arrives via WS-fanout anyway) but
+//   means unread_count can momentarily show 0 while the new message is in
+//   flight.  Acceptable for current latencies.
+//
+//   To eliminate the race, add an optional last_read_message_id field (field 3)
+//   and have the client pass the ID of the last message it actually displayed.
+//   The server would then use MIN(client_watermark, thread.last_message_id)
+//   so the watermark never advances past what the user has seen.
+//   When field 3 is absent the server falls back to the current behaviour.
 message MarkReadRequest {
   string thread_id = 1;
-  string user_id = 2;
+  string user_id   = 2;
+  // optional: see N4 comment above. Not yet sent by any client.
+  // string last_seen_message_id = 3;
 }

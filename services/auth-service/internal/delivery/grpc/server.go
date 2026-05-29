@@ -3,17 +3,20 @@ package grpc
 import (
 	"context"
 
+	"github.com/rs/zerolog"
+
 	authv1 "github.com/tienlao/agregator/gen/go/auth/v1"
 	"github.com/tienlao/agregator/services/auth-service/internal/usecase"
 )
 
 type Server struct {
 	authv1.UnimplementedAuthServiceServer
-	uc *usecase.AuthUseCase
+	uc  *usecase.AuthUseCase
+	log zerolog.Logger
 }
 
-func NewServer(uc *usecase.AuthUseCase) *Server {
-	return &Server{uc: uc}
+func NewServer(uc *usecase.AuthUseCase, log zerolog.Logger) *Server {
+	return &Server{uc: uc, log: log}
 }
 
 func (s *Server) Register(ctx context.Context, req *authv1.RegisterRequest) (*authv1.RegisterResponse, error) {
@@ -37,11 +40,12 @@ func (s *Server) Register(ctx context.Context, req *authv1.RegisterRequest) (*au
 
 func (s *Server) OAuthLogin(ctx context.Context, req *authv1.OAuthLoginRequest) (*authv1.OAuthLoginResponse, error) {
 	result, err := s.uc.OAuthLogin(ctx, usecase.OAuthInput{
-		Provider:   req.Provider,
-		ProviderID: req.ProviderId,
-		Email:      req.Email,
-		Name:       req.Name,
-		AvatarURL:  req.AvatarUrl,
+		Provider:      req.Provider,
+		ProviderID:    req.ProviderId,
+		Email:         req.Email,
+		Name:          req.Name,
+		AvatarURL:     req.AvatarUrl,
+		EmailVerified: req.EmailVerified,
 	})
 	if err != nil {
 		return nil, err
@@ -83,6 +87,12 @@ func (s *Server) RefreshToken(ctx context.Context, req *authv1.RefreshTokenReque
 func (s *Server) ValidateToken(ctx context.Context, req *authv1.ValidateTokenRequest) (*authv1.ValidateTokenResponse, error) {
 	claims, err := s.uc.ValidateToken(ctx, req.AccessToken)
 	if err != nil {
+		// ValidateToken is a hot path called on every authenticated request.
+		// We intentionally return Valid:false rather than a gRPC error so the
+		// gateway can distinguish "bad token" from "auth-service unavailable".
+		// Debug level keeps noise low in production; raise to Info if you need
+		// to audit rejection rates (pair with sampling to avoid log flooding).
+		s.log.Debug().Err(err).Msg("token validation failed")
 		return &authv1.ValidateTokenResponse{Valid: false}, nil
 	}
 

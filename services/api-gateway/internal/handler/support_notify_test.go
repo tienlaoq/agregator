@@ -98,9 +98,9 @@ func TestSupportContactInboxOnlySetsNotifyOK(t *testing.T) {
 
 	body := []byte(`{"topic":"T","message":"M"}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/support/contact", bytes.NewReader(body))
-	ctx := context.WithValue(req.Context(), middleware.CtxUserID, "u-1")
-	ctx = context.WithValue(ctx, middleware.CtxRole, "user")
-	ctx = context.WithValue(ctx, middleware.CtxEmail, "x@y.z")
+	ctx := middleware.WithUserID(req.Context(), "u-1")
+	ctx = middleware.WithRole(ctx, "user")
+	ctx = middleware.WithEmail(ctx, "x@y.z")
 	req = req.WithContext(ctx)
 	rec := httptest.NewRecorder()
 	h.Contact(rec, req)

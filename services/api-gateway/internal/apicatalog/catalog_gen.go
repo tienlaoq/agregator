@@ -48,6 +48,8 @@ var (
 	GatewayRequestMissingDateRange = Entry{HTTP: 400, Code: "GATEWAY.REQUEST.MISSING_DATE_RANGE", Message: "Укажите date_from и date_to в формате YYYY-MM-DD"}
 	// GatewayRequestEmailRequired — GATEWAY.REQUEST.EMAIL_REQUIRED
 	GatewayRequestEmailRequired = Entry{HTTP: 400, Code: "GATEWAY.REQUEST.EMAIL_REQUIRED", Message: "Укажите email"}
+	// GatewayRequestBodyTooLarge — GATEWAY.REQUEST.BODY_TOO_LARGE
+	GatewayRequestBodyTooLarge = Entry{HTTP: 413, Code: "GATEWAY.REQUEST.BODY_TOO_LARGE", Message: "Тело запроса превышает допустимый размер"}
 	// GatewayRequestRateLimited — GATEWAY.REQUEST.RATE_LIMITED
 	GatewayRequestRateLimited = Entry{HTTP: 429, Code: "GATEWAY.REQUEST.RATE_LIMITED", Message: "Слишком много запросов. Повторите через несколько минут."}
 	// GatewayVenueNotFound — GATEWAY.VENUE.NOT_FOUND
@@ -98,6 +100,8 @@ var (
 	GatewayCrmStaffEmailNotRegistered = Entry{HTTP: 422, Code: "GATEWAY.CRM.STAFF_EMAIL_NOT_REGISTERED", Message: "No registered account for this email; the person must sign up first"}
 	// GatewayMasterInvalidServices — GATEWAY.MASTER.INVALID_SERVICES
 	GatewayMasterInvalidServices = Entry{HTTP: 400, Code: "GATEWAY.MASTER.INVALID_SERVICES", Message: "Некорректный список услуг"}
+	// GatewayPaymentWebhookForbidden — GATEWAY.PAYMENT.WEBHOOK_FORBIDDEN
+	GatewayPaymentWebhookForbidden = Entry{HTTP: 403, Code: "GATEWAY.PAYMENT.WEBHOOK_FORBIDDEN", Message: "Webhook отклонён: не пройдена верификация источника"}
 	// GatewayUpstreamInvalidArgument — GATEWAY.UPSTREAM.INVALID_ARGUMENT
 	GatewayUpstreamInvalidArgument = Entry{HTTP: 400, Code: "GATEWAY.UPSTREAM.INVALID_ARGUMENT", Message: "Некорректный запрос"}
 	// GatewayUpstreamNotFound — GATEWAY.UPSTREAM.NOT_FOUND
@@ -185,6 +189,8 @@ func ByCode(code string) (Entry, bool) {
 		return GatewayCrmStaffEmailNotRegistered, true
 	case "GATEWAY.MASTER.INVALID_SERVICES":
 		return GatewayMasterInvalidServices, true
+	case "GATEWAY.PAYMENT.WEBHOOK_FORBIDDEN":
+		return GatewayPaymentWebhookForbidden, true
 	case "GATEWAY.UPSTREAM.INVALID_ARGUMENT":
 		return GatewayUpstreamInvalidArgument, true
 	case "GATEWAY.UPSTREAM.NOT_FOUND":

@@ -5,59 +5,25 @@ import (
 	"net"
 	"net/http"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/rs/zerolog"
 	"github.com/tienlao/agregator/pkg/config"
 	"github.com/tienlao/agregator/services/api-gateway/internal/apicatalog"
+	"github.com/tienlao/agregator/services/api-gateway/internal/ratelimit"
 )
-
-// forgotPasswordHits limits POST /auth/forgot-password per client IP.
-// In-memory only: suitable for single replica / dev. Behind several gateway replicas use a shared store (e.g. Redis).
-type forgotPasswordHits struct {
-	mu   sync.Mutex
-	byIP map[string][]time.Time
-}
-
-func (h *forgotPasswordHits) Allow(_ context.Context, ip string, max int, window time.Duration) (bool, error) {
-	if max <= 0 {
-		return true, nil
-	}
-	now := time.Now()
-	cutoff := now.Add(-window)
-
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	if h.byIP == nil {
-		h.byIP = make(map[string][]time.Time)
-	}
-	prev := h.byIP[ip]
-	kept := prev[:0]
-	for _, ts := range prev {
-		if ts.After(cutoff) {
-			kept = append(kept, ts)
-		}
-	}
-	if len(kept) >= max {
-		h.byIP[ip] = kept
-		return false, nil
-	}
-	kept = append(kept, now)
-	h.byIP[ip] = kept
-	return true, nil
-}
 
 type forgotPasswordLimiter interface {
 	Allow(ctx context.Context, key string, limit int, window time.Duration) (bool, error)
 }
 
+// clientIP returns the resolved real client IP for rate-limiting and audit
+// purposes. It prefers the value stored by the RealIP middleware in context
+// (ClientIPFromCtx); if the middleware has not run (e.g. in tests that call
+// handlers directly) it falls back to parsing r.RemoteAddr.
 func clientIP(r *http.Request) string {
-	if xff := strings.TrimSpace(r.Header.Get("X-Forwarded-For")); xff != "" {
-		if i := strings.IndexByte(xff, ','); i >= 0 {
-			xff = strings.TrimSpace(xff[:i])
-		}
-		return xff
+	if ip := ClientIPFromCtx(r.Context()); ip != "" {
+		return ip
 	}
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
@@ -73,7 +39,7 @@ func clientIP(r *http.Request) string {
 // FORGOT_PASSWORD_RATE_LIMIT_FAIL_OPEN (default true): if limiter backend errors, allow request.
 func ForgotPasswordRateLimit(log zerolog.Logger, limiter forgotPasswordLimiter) func(http.Handler) http.Handler {
 	if limiter == nil {
-		limiter = &forgotPasswordHits{}
+		limiter = ratelimit.New()
 	}
 	max := config.GetEnvInt("FORGOT_PASSWORD_RATE_LIMIT_MAX", 10)
 	winStr := strings.TrimSpace(config.GetEnv("FORGOT_PASSWORD_RATE_LIMIT_WINDOW", "15m"))

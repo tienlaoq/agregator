@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/rs/zerolog"
@@ -31,8 +32,15 @@ type Server struct {
 	log       zerolog.Logger
 }
 
+const internalErrMsg = "internal error"
+
 func NewServer(uc *usecase.VenueUseCase, publisher *events.Publisher, tg *telegram.Notifier, log zerolog.Logger) *Server {
 	return &Server{uc: uc, publisher: publisher, tg: tg, log: log}
+}
+
+func (s *Server) internalErr(err error, msg string) error {
+	s.log.Error().Err(err).Msg(msg)
+	return pkgerrors.Internal(internalErrMsg)
 }
 
 func (s *Server) CreateVenue(ctx context.Context, req *venuev1.CreateVenueRequest) (*venuev1.VenueResponse, error) {
@@ -81,7 +89,7 @@ func (s *Server) CreateVenue(ctx context.Context, req *venuev1.CreateVenueReques
 		if _, ok := status.FromError(err); ok {
 			return nil, err
 		}
-		return nil, pkgerrors.Internal(err.Error())
+		return nil, s.internalErr(err, "create venue failed")
 	}
 
 	if len(req.GetHalls()) > 0 {
@@ -93,25 +101,27 @@ func (s *Server) CreateVenue(ctx context.Context, req *venuev1.CreateVenueReques
 			if _, ok := status.FromError(err); ok {
 				return nil, err
 			}
-			return nil, pkgerrors.Internal(err.Error())
+			return nil, s.internalErr(err, "replace venue halls failed")
 		}
 		v2, err := s.uc.GetByID(ctx, venue.ID)
 		if err != nil {
-			return nil, pkgerrors.Internal(err.Error())
+			return nil, s.internalErr(err, "get venue after create failed")
 		}
 		if v2 != nil {
 			venue = v2
 		}
 	}
 
-	_ = s.publisher.VenueCreated(venue)
+	if pubErr := s.publisher.VenueCreated(ctx, venue); pubErr != nil {
+		s.log.Warn().Err(pubErr).Str("venue_id", venue.ID.String()).Msg("venue.created publish failed")
+	}
 	v := venue
 	if v.Status != domain.StatusDraft {
-		go func() {
-			if err := s.tg.NotifyNewVenue(v); err != nil {
-				s.log.Warn().Err(err).Str("venue_id", v.ID.String()).Msg("telegram notify new venue failed")
-			}
-		}()
+		tgCtx, tgCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer tgCancel()
+		if err := s.tg.NotifyNewVenue(tgCtx, v); err != nil {
+			s.log.Warn().Err(err).Str("venue_id", v.ID.String()).Msg("telegram notify new venue failed")
+		}
 	}
 
 	return venueToProto(venue), nil
@@ -131,9 +141,11 @@ func (s *Server) SubmitVenueForReview(ctx context.Context, req *venuev1.SubmitVe
 		if _, ok := status.FromError(err); ok {
 			return nil, err
 		}
-		return nil, pkgerrors.Internal(err.Error())
+		return nil, s.internalErr(err, "submit venue for review failed")
 	}
-	_ = s.publisher.VenueUpdated(v)
+	if pubErr := s.publisher.VenueUpdated(ctx, v); pubErr != nil {
+		s.log.Warn().Err(pubErr).Str("venue_id", v.ID.String()).Msg("venue.updated publish failed")
+	}
 	return venueToProto(v), nil
 }
 
@@ -145,7 +157,7 @@ func (s *Server) UpdateVenue(ctx context.Context, req *venuev1.UpdateVenueReques
 
 	existing, err := s.uc.GetByID(ctx, id)
 	if err != nil {
-		return nil, pkgerrors.Internal(err.Error())
+		return nil, s.internalErr(err, "get venue for update failed")
 	}
 	if existing == nil {
 		return nil, pkgerrors.NotFound("venue not found")
@@ -217,7 +229,7 @@ func (s *Server) UpdateVenue(ctx context.Context, req *venuev1.UpdateVenueReques
 		if _, ok := status.FromError(err); ok {
 			return nil, err
 		}
-		return nil, pkgerrors.Internal(err.Error())
+		return nil, s.internalErr(err, "update venue failed")
 	}
 
 	if sr := req.GetServicesReplace(); sr != nil {
@@ -238,7 +250,7 @@ func (s *Server) UpdateVenue(ctx context.Context, req *venuev1.UpdateVenueReques
 			if _, ok := status.FromError(err); ok {
 				return nil, err
 			}
-			return nil, pkgerrors.Internal(err.Error())
+			return nil, s.internalErr(err, "replace venue services failed")
 		}
 	}
 
@@ -251,19 +263,21 @@ func (s *Server) UpdateVenue(ctx context.Context, req *venuev1.UpdateVenueReques
 			if _, ok := status.FromError(err); ok {
 				return nil, err
 			}
-			return nil, pkgerrors.Internal(err.Error())
+			return nil, s.internalErr(err, "replace venue halls failed")
 		}
 	}
 
 	out, err := s.uc.GetByID(ctx, id)
 	if err != nil {
-		return nil, pkgerrors.Internal(err.Error())
+		return nil, s.internalErr(err, "get venue after update failed")
 	}
 	if out == nil {
 		return nil, pkgerrors.NotFound("venue not found")
 	}
 
-	_ = s.publisher.VenueUpdated(out)
+	if pubErr := s.publisher.VenueUpdated(ctx, out); pubErr != nil {
+		s.log.Warn().Err(pubErr).Str("venue_id", out.ID.String()).Msg("venue.updated publish failed")
+	}
 
 	return venueToProto(out), nil
 }
@@ -276,7 +290,7 @@ func (s *Server) GetVenue(ctx context.Context, req *venuev1.GetVenueRequest) (*v
 
 	v, err := s.uc.GetByID(ctx, id)
 	if err != nil {
-		return nil, pkgerrors.Internal(err.Error())
+		return nil, s.internalErr(err, "get venue failed")
 	}
 	if v == nil {
 		return nil, pkgerrors.NotFound("venue not found")
@@ -284,10 +298,37 @@ func (s *Server) GetVenue(ctx context.Context, req *venuev1.GetVenueRequest) (*v
 	return venueToProto(v), nil
 }
 
+func (s *Server) GetVenuesBatch(ctx context.Context, req *venuev1.GetVenuesBatchRequest) (*venuev1.GetVenuesBatchResponse, error) {
+	rawIDs := req.GetIds()
+	if len(rawIDs) == 0 {
+		return &venuev1.GetVenuesBatchResponse{Venues: map[string]*venuev1.VenueResponse{}}, nil
+	}
+	ids := make([]uuid.UUID, 0, len(rawIDs))
+	for _, raw := range rawIDs {
+		id, err := uuid.Parse(raw)
+		if err != nil {
+			continue // silently skip malformed ids
+		}
+		ids = append(ids, id)
+	}
+	venues, err := s.uc.GetByIDs(ctx, ids)
+	if err != nil {
+		return nil, s.internalErr(err, "get venues batch failed")
+	}
+	resp := &venuev1.GetVenuesBatchResponse{
+		Venues: make(map[string]*venuev1.VenueResponse, len(venues)),
+	}
+	for i := range venues {
+		v := &venues[i]
+		resp.Venues[v.ID.String()] = venueToProto(v)
+	}
+	return resp, nil
+}
+
 func (s *Server) GetVenueBySlug(ctx context.Context, req *venuev1.GetVenueBySlugRequest) (*venuev1.VenueResponse, error) {
 	v, err := s.uc.GetBySlug(ctx, req.GetSlug())
 	if err != nil {
-		return nil, pkgerrors.Internal(err.Error())
+		return nil, s.internalErr(err, "get venue by slug failed")
 	}
 	if v == nil {
 		return nil, pkgerrors.NotFound("venue not found")
@@ -298,11 +339,19 @@ func (s *Server) GetVenueBySlug(ctx context.Context, req *venuev1.GetVenueBySlug
 func (s *Server) ListVenues(ctx context.Context, req *venuev1.ListVenuesRequest) (*venuev1.ListVenuesResponse, error) {
 	result, err := s.uc.List(ctx, req.GetPage(), req.GetPageSize(), req.GetType(), req.GetSortBy())
 	if err != nil {
-		return nil, pkgerrors.Internal(err.Error())
+		return nil, s.internalErr(err, "list venues failed")
 	}
 	return listResultToProto(result), nil
 }
 
+// SearchVenues handles venue search.
+//
+// Multi-city filter contract (gateway → venue-service):
+// The API-gateway encodes each city as base64url (no padding) and sends it as
+// a repeated gRPC metadata key "x-city-b64". This sidesteps protobuf field
+// limits and allows the gateway to forward arbitrary UTF-8 city strings without
+// escaping. Example: city "Москва" → base64url("Москва") → metadata key value.
+// If no "x-city-b64" metadata is present the handler falls back to req.city.
 func (s *Server) SearchVenues(ctx context.Context, req *venuev1.SearchVenuesRequest) (*venuev1.ListVenuesResponse, error) {
 	query := strings.TrimSpace(req.GetQuery())
 	var cs []string
@@ -325,9 +374,8 @@ func (s *Server) SearchVenues(ctx context.Context, req *venuev1.SearchVenuesRequ
 		query = cs[0]
 	}
 	params := domain.SearchParams{
-		Query:     query,
-		City:      "",
-		Cities:    cs,
+		Query:  query,
+		Cities: cs,
 		Lat:       req.GetLatitude(),
 		Lng:       req.GetLongitude(),
 		RadiusKM:  req.GetRadiusKm(),
@@ -342,32 +390,13 @@ func (s *Server) SearchVenues(ctx context.Context, req *venuev1.SearchVenuesRequ
 
 	result, err := s.uc.Search(ctx, params)
 	if err != nil {
-		return nil, pkgerrors.Internal(err.Error())
+		return nil, s.internalErr(err, "search venues failed")
 	}
 	return listResultToProto(result), nil
 }
 
-func (s *Server) ListOwnerVenues(ctx context.Context, req *venuev1.ListOwnerVenuesRequest) (*venuev1.ListVenuesResponse, error) {
-	ownerID, err := uuid.Parse(req.GetOwnerId())
-	if err != nil {
-		return nil, pkgerrors.InvalidArgument("invalid owner_id")
-	}
-
-	venues, err := s.uc.ListForManagingUser(ctx, ownerID)
-	if err != nil {
-		return nil, pkgerrors.Internal(err.Error())
-	}
-
-	resp := &venuev1.ListVenuesResponse{
-		Total:    int32(len(venues)),
-		Page:     1,
-		PageSize: int32(len(venues)),
-	}
-	for i := range venues {
-		resp.Venues = append(resp.Venues, venueToProto(&venues[i]))
-	}
-	return resp, nil
-}
+// ListOwnerVenues was removed: api-gateway now composes the owner venue list
+// from crm.ListManagedVenues + venue.GetVenuesBatch. See proto/venue/v1/venue.proto.
 
 func (s *Server) CheckSlotAvailability(ctx context.Context, req *venuev1.CheckSlotRequest) (*venuev1.CheckSlotResponse, error) {
 	venueID, err := uuid.Parse(req.GetVenueId())
@@ -377,9 +406,35 @@ func (s *Server) CheckSlotAvailability(ctx context.Context, req *venuev1.CheckSl
 
 	available, err := s.uc.CheckSlot(ctx, venueID, req.GetDate(), req.GetTimeFrom(), req.GetTimeTo())
 	if err != nil {
-		return nil, pkgerrors.Internal(err.Error())
+		return nil, s.internalErr(err, "check slot availability failed")
 	}
 	return &venuev1.CheckSlotResponse{Available: available}, nil
+}
+
+func (s *Server) BatchCheckSlotAvailability(ctx context.Context, req *venuev1.BatchCheckSlotRequest) (*venuev1.BatchCheckSlotResponse, error) {
+	venueID, err := uuid.Parse(req.GetVenueId())
+	if err != nil {
+		return nil, pkgerrors.InvalidArgument("invalid venue_id")
+	}
+
+	protoSlots := req.GetSlots()
+	if len(protoSlots) == 0 {
+		return &venuev1.BatchCheckSlotResponse{}, nil
+	}
+	if len(protoSlots) > 100 {
+		return nil, pkgerrors.InvalidArgument("too many slots: max 100 per request")
+	}
+
+	slots := make([][2]string, len(protoSlots))
+	for i, ps := range protoSlots {
+		slots[i] = [2]string{ps.GetTimeFrom(), ps.GetTimeTo()}
+	}
+
+	available, err := s.uc.BatchCheckSlots(ctx, venueID, req.GetDate(), slots)
+	if err != nil {
+		return nil, s.internalErr(err, "batch check slot availability failed")
+	}
+	return &venuev1.BatchCheckSlotResponse{Available: available}, nil
 }
 
 func (s *Server) ReserveSlot(ctx context.Context, req *venuev1.ReserveSlotRequest) (*venuev1.ReserveSlotResponse, error) {
@@ -396,7 +451,7 @@ func (s *Server) ReserveSlot(ctx context.Context, req *venuev1.ReserveSlotReques
 		if errors.Is(err, repository.ErrSlotUnavailable) {
 			return nil, pkgerrors.InvalidArgument("time slot not available")
 		}
-		return nil, pkgerrors.Internal(err.Error())
+		return nil, s.internalErr(err, "reserve slot failed")
 	}
 	return &venuev1.ReserveSlotResponse{Success: true}, nil
 }
@@ -412,7 +467,7 @@ func (s *Server) ReleaseSlot(ctx context.Context, req *venuev1.ReleaseSlotReques
 	}
 
 	if err := s.uc.ReleaseSlot(ctx, venueID, bookingID); err != nil {
-		return nil, pkgerrors.Internal(err.Error())
+		return nil, s.internalErr(err, "release slot failed")
 	}
 	return &venuev1.ReleaseSlotResponse{Success: true}, nil
 }
@@ -432,7 +487,7 @@ func (s *Server) CreateManualSlotBlock(ctx context.Context, req *venuev1.CreateM
 		if _, ok := status.FromError(err); ok {
 			return nil, err
 		}
-		return nil, pkgerrors.Internal(err.Error())
+		return nil, s.internalErr(err, "create manual slot block failed")
 	}
 	return &venuev1.CreateManualSlotBlockResponse{
 		Block: &venuev1.ManualSlotBlock{
@@ -464,7 +519,7 @@ func (s *Server) DeleteManualSlotBlock(ctx context.Context, req *venuev1.DeleteM
 		if _, ok := status.FromError(err); ok {
 			return nil, err
 		}
-		return nil, pkgerrors.Internal(err.Error())
+		return nil, s.internalErr(err, "delete manual slot block failed")
 	}
 	return &venuev1.DeleteManualSlotBlockResponse{Success: true}, nil
 }
@@ -484,7 +539,7 @@ func (s *Server) ListManualSlotBlocks(ctx context.Context, req *venuev1.ListManu
 		if _, ok := status.FromError(err); ok {
 			return nil, err
 		}
-		return nil, pkgerrors.Internal(err.Error())
+		return nil, s.internalErr(err, "list manual slot blocks failed")
 	}
 	out := make([]*venuev1.ManualSlotBlock, len(blocks))
 	for i := range blocks {
@@ -493,174 +548,10 @@ func (s *Server) ListManualSlotBlocks(ctx context.Context, req *venuev1.ListManu
 	return &venuev1.ListManualSlotBlocksResponse{Blocks: out}, nil
 }
 
-func (s *Server) GetVenueManagementAccess(ctx context.Context, req *venuev1.GetVenueManagementAccessRequest) (*venuev1.GetVenueManagementAccessResponse, error) {
-	venueID, err := uuid.Parse(req.GetVenueId())
-	if err != nil {
-		return nil, pkgerrors.InvalidArgument("invalid venue_id")
-	}
-	userID, err := uuid.Parse(req.GetUserId())
-	if err != nil {
-		return nil, pkgerrors.InvalidArgument("invalid user_id")
-	}
-	access, err := s.uc.GetVenueManagementAccess(ctx, venueID, userID)
-	if err != nil {
-		return nil, pkgerrors.Internal(err.Error())
-	}
-	return &venuev1.GetVenueManagementAccessResponse{Access: access}, nil
-}
-
-func (s *Server) ListVenueStaff(ctx context.Context, req *venuev1.ListVenueStaffRequest) (*venuev1.ListVenueStaffResponse, error) {
-	venueID, err := uuid.Parse(req.GetVenueId())
-	if err != nil {
-		return nil, pkgerrors.InvalidArgument("invalid venue_id")
-	}
-	actorID, err := uuid.Parse(req.GetActorId())
-	if err != nil {
-		return nil, pkgerrors.InvalidArgument("invalid actor_id")
-	}
-	members, err := s.uc.ListVenueStaff(ctx, venueID, actorID)
-	if err != nil {
-		if _, ok := status.FromError(err); ok {
-			return nil, err
-		}
-		return nil, pkgerrors.Internal(err.Error())
-	}
-	out := &venuev1.ListVenueStaffResponse{}
-	for i := range members {
-		m := &members[i]
-		out.Members = append(out.Members, &venuev1.VenueStaffMember{
-			UserId:    m.UserID.String(),
-			Role:      m.Role,
-			InvitedBy: m.InvitedBy.String(),
-			CreatedAt: timestamppb.New(m.CreatedAt),
-		})
-	}
-	return out, nil
-}
-
-func (s *Server) AddVenueStaff(ctx context.Context, req *venuev1.AddVenueStaffRequest) (*venuev1.AddVenueStaffResponse, error) {
-	venueID, err := uuid.Parse(req.GetVenueId())
-	if err != nil {
-		return nil, pkgerrors.InvalidArgument("invalid venue_id")
-	}
-	actorID, err := uuid.Parse(req.GetActorId())
-	if err != nil {
-		return nil, pkgerrors.InvalidArgument("invalid actor_id")
-	}
-	targetID, err := uuid.Parse(req.GetUserId())
-	if err != nil {
-		return nil, pkgerrors.InvalidArgument("invalid user_id")
-	}
-	if err := s.uc.AddVenueStaff(ctx, venueID, actorID, targetID, req.GetRole()); err != nil {
-		if _, ok := status.FromError(err); ok {
-			return nil, err
-		}
-		return nil, pkgerrors.Internal(err.Error())
-	}
-	return &venuev1.AddVenueStaffResponse{}, nil
-}
-
-func (s *Server) RemoveVenueStaff(ctx context.Context, req *venuev1.RemoveVenueStaffRequest) (*venuev1.RemoveVenueStaffResponse, error) {
-	venueID, err := uuid.Parse(req.GetVenueId())
-	if err != nil {
-		return nil, pkgerrors.InvalidArgument("invalid venue_id")
-	}
-	actorID, err := uuid.Parse(req.GetActorId())
-	if err != nil {
-		return nil, pkgerrors.InvalidArgument("invalid actor_id")
-	}
-	targetID, err := uuid.Parse(req.GetUserId())
-	if err != nil {
-		return nil, pkgerrors.InvalidArgument("invalid user_id")
-	}
-	if err := s.uc.RemoveVenueStaff(ctx, venueID, actorID, targetID); err != nil {
-		if _, ok := status.FromError(err); ok {
-			return nil, err
-		}
-		return nil, pkgerrors.Internal(err.Error())
-	}
-	return &venuev1.RemoveVenueStaffResponse{}, nil
-}
-
-func (s *Server) ListVenueCRMTasks(ctx context.Context, req *venuev1.ListVenueCRMTasksRequest) (*venuev1.ListVenueCRMTasksResponse, error) {
-	venueID, err := uuid.Parse(req.GetVenueId())
-	if err != nil {
-		return nil, pkgerrors.InvalidArgument("invalid venue_id")
-	}
-	actorID, err := uuid.Parse(req.GetActorId())
-	if err != nil {
-		return nil, pkgerrors.InvalidArgument("invalid actor_id")
-	}
-	tasks, err := s.uc.ListVenueCRMTasks(ctx, venueID, actorID, req.GetStatus())
-	if err != nil {
-		if _, ok := status.FromError(err); ok {
-			return nil, err
-		}
-		return nil, pkgerrors.Internal(err.Error())
-	}
-	out := &venuev1.ListVenueCRMTasksResponse{}
-	for i := range tasks {
-		out.Tasks = append(out.Tasks, venueCRMTaskToProto(&tasks[i]))
-	}
-	return out, nil
-}
-
-func (s *Server) CreateVenueCRMTask(ctx context.Context, req *venuev1.CreateVenueCRMTaskRequest) (*venuev1.CreateVenueCRMTaskResponse, error) {
-	venueID, err := uuid.Parse(req.GetVenueId())
-	if err != nil {
-		return nil, pkgerrors.InvalidArgument("invalid venue_id")
-	}
-	actorID, err := uuid.Parse(req.GetActorId())
-	if err != nil {
-		return nil, pkgerrors.InvalidArgument("invalid actor_id")
-	}
-	var bookingID *uuid.UUID
-	if b := strings.TrimSpace(req.GetBookingId()); b != "" {
-		u, perr := uuid.Parse(b)
-		if perr != nil {
-			return nil, pkgerrors.InvalidArgument("invalid booking_id")
-		}
-		bookingID = &u
-	}
-	var assignee *uuid.UUID
-	if a := strings.TrimSpace(req.GetAssigneeUserId()); a != "" {
-		u, perr := uuid.Parse(a)
-		if perr != nil {
-			return nil, pkgerrors.InvalidArgument("invalid assignee_user_id")
-		}
-		assignee = &u
-	}
-	t, err := s.uc.CreateVenueCRMTask(ctx, venueID, actorID, req.GetTitle(), req.GetBody(), bookingID, assignee)
-	if err != nil {
-		if _, ok := status.FromError(err); ok {
-			return nil, err
-		}
-		return nil, pkgerrors.Internal(err.Error())
-	}
-	return &venuev1.CreateVenueCRMTaskResponse{Task: venueCRMTaskToProto(t)}, nil
-}
-
-func (s *Server) CompleteVenueCRMTask(ctx context.Context, req *venuev1.CompleteVenueCRMTaskRequest) (*venuev1.CompleteVenueCRMTaskResponse, error) {
-	venueID, err := uuid.Parse(req.GetVenueId())
-	if err != nil {
-		return nil, pkgerrors.InvalidArgument("invalid venue_id")
-	}
-	actorID, err := uuid.Parse(req.GetActorId())
-	if err != nil {
-		return nil, pkgerrors.InvalidArgument("invalid actor_id")
-	}
-	taskID, err := uuid.Parse(req.GetTaskId())
-	if err != nil {
-		return nil, pkgerrors.InvalidArgument("invalid task_id")
-	}
-	if err := s.uc.CompleteVenueCRMTask(ctx, venueID, actorID, taskID); err != nil {
-		if _, ok := status.FromError(err); ok {
-			return nil, err
-		}
-		return nil, pkgerrors.Internal(err.Error())
-	}
-	return &venuev1.CompleteVenueCRMTaskResponse{}, nil
-}
+// CRM RPCs (GetVenueManagementAccess, ListVenueStaff, AddVenueStaff,
+// RemoveVenueStaff, ListVenueCRMTasks, CreateVenueCRMTask,
+// CompleteVenueCRMTask) were extracted to crm-service. See
+// services/crm-service/internal/delivery/grpc/server.go.
 
 func (s *Server) UpdateRating(ctx context.Context, req *venuev1.UpdateRatingRequest) (*venuev1.UpdateRatingResponse, error) {
 	venueID, err := uuid.Parse(req.GetVenueId())
@@ -669,7 +560,7 @@ func (s *Server) UpdateRating(ctx context.Context, req *venuev1.UpdateRatingRequ
 	}
 
 	if err := s.uc.UpdateRating(ctx, venueID, req.GetAvgRating(), req.GetReviewCount()); err != nil {
-		return nil, pkgerrors.Internal(err.Error())
+		return nil, s.internalErr(err, "update venue rating failed")
 	}
 	return &venuev1.UpdateRatingResponse{}, nil
 }
@@ -692,7 +583,7 @@ func (s *Server) publishVenueManagementAlert(ctx context.Context, venueID uuid.U
 		RecipientUserIDs:  uidStrs,
 		ModerationComment: comment,
 	}
-	if pubErr := s.publisher.VenueManagementAlert(alert); pubErr != nil {
+	if pubErr := s.publisher.PublishVenueManagementAlert(ctx, alert); pubErr != nil {
 		s.log.Warn().Err(pubErr).Str("venue_id", v.ID.String()).Str("alert_type", typ).Msg("venue.management.alert publish failed")
 	}
 }
@@ -713,10 +604,12 @@ func (s *Server) ModerateVenue(ctx context.Context, req *venuev1.ModerateVenueRe
 		if _, ok := status.FromError(err); ok {
 			return nil, err
 		}
-		return nil, pkgerrors.Internal(err.Error())
+		return nil, s.internalErr(err, "moderate venue failed")
 	}
 
-	_ = s.publisher.VenueUpdated(v)
+	if pubErr := s.publisher.VenueUpdated(ctx, v); pubErr != nil {
+		s.log.Warn().Err(pubErr).Str("venue_id", v.ID.String()).Msg("venue.updated publish failed")
+	}
 	actionLower := strings.ToLower(strings.TrimSpace(req.GetAction()))
 	if v.Status == domain.StatusSuspended && actionLower == "suspend" {
 		s.publishVenueManagementAlert(ctx, venueID, v, "suspended", req.GetComment())
@@ -724,7 +617,9 @@ func (s *Server) ModerateVenue(ctx context.Context, req *venuev1.ModerateVenueRe
 	if v.Status == domain.StatusActive && actionLower == "resume" {
 		s.publishVenueManagementAlert(ctx, venueID, v, "resumed", req.GetComment())
 	}
-	if err := s.tg.NotifyModerated(v); err != nil {
+	tgCtx, tgCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer tgCancel()
+	if err := s.tg.NotifyModerated(tgCtx, v); err != nil {
 		s.log.Warn().Err(err).Str("venue_id", v.ID.String()).Msg("telegram notify moderated failed")
 	}
 
@@ -739,7 +634,7 @@ func (s *Server) ListPendingVenues(ctx context.Context, req *venuev1.ListPending
 
 	result, err := s.uc.ListByStatus(ctx, status, req.GetPage(), req.GetPageSize(), req.GetNameQuery())
 	if err != nil {
-		return nil, pkgerrors.Internal(err.Error())
+		return nil, s.internalErr(err, "list pending venues failed")
 	}
 	return listResultToProto(result), nil
 }
@@ -763,9 +658,11 @@ func (s *Server) AddVenuePhoto(ctx context.Context, req *venuev1.AddVenuePhotoRe
 		if _, ok := status.FromError(err); ok {
 			return nil, err
 		}
-		return nil, pkgerrors.Internal(err.Error())
+		return nil, s.internalErr(err, "add venue photo failed")
 	}
-	_ = s.publisher.VenueUpdated(v)
+	if pubErr := s.publisher.VenueUpdated(ctx, v); pubErr != nil {
+		s.log.Warn().Err(pubErr).Str("venue_id", v.ID.String()).Msg("venue.updated publish failed")
+	}
 	return venueToProto(v), nil
 }
 
@@ -788,14 +685,16 @@ func (s *Server) DeleteVenuePhoto(ctx context.Context, req *venuev1.DeleteVenueP
 		if _, ok := status.FromError(err); ok {
 			return nil, err
 		}
-		return nil, pkgerrors.Internal(err.Error())
+		return nil, s.internalErr(err, "delete venue photo failed")
 	}
 	v, err := s.uc.GetByID(ctx, venueID)
 	if err != nil {
-		return nil, pkgerrors.Internal(err.Error())
+		return nil, s.internalErr(err, "get venue after photo delete failed")
 	}
 	if v != nil {
-		_ = s.publisher.VenueUpdated(v)
+		if pubErr := s.publisher.VenueUpdated(ctx, v); pubErr != nil {
+			s.log.Warn().Err(pubErr).Str("venue_id", v.ID.String()).Msg("venue.updated publish failed")
+		}
 	}
 	return &venuev1.DeleteVenuePhotoResponse{Url: deletedURL}, nil
 }
@@ -819,9 +718,11 @@ func (s *Server) SetVenueCoverPhoto(ctx context.Context, req *venuev1.SetVenueCo
 		if _, ok := status.FromError(err); ok {
 			return nil, err
 		}
-		return nil, pkgerrors.Internal(err.Error())
+		return nil, s.internalErr(err, "set venue cover photo failed")
 	}
-	_ = s.publisher.VenueUpdated(v)
+	if pubErr := s.publisher.VenueUpdated(ctx, v); pubErr != nil {
+		s.log.Warn().Err(pubErr).Str("venue_id", v.ID.String()).Msg("venue.updated publish failed")
+	}
 	return venueToProto(v), nil
 }
 
@@ -847,9 +748,11 @@ func (s *Server) AddVenueHallPhoto(ctx context.Context, req *venuev1.AddVenueHal
 		if _, ok := status.FromError(err); ok {
 			return nil, err
 		}
-		return nil, pkgerrors.Internal(err.Error())
+		return nil, s.internalErr(err, "add venue hall photo failed")
 	}
-	_ = s.publisher.VenueUpdated(v)
+	if pubErr := s.publisher.VenueUpdated(ctx, v); pubErr != nil {
+		s.log.Warn().Err(pubErr).Str("venue_id", v.ID.String()).Msg("venue.updated publish failed")
+	}
 	return venueToProto(v), nil
 }
 
@@ -875,14 +778,16 @@ func (s *Server) DeleteVenueHallPhoto(ctx context.Context, req *venuev1.DeleteVe
 		if _, ok := status.FromError(err); ok {
 			return nil, err
 		}
-		return nil, pkgerrors.Internal(err.Error())
+		return nil, s.internalErr(err, "delete venue hall photo failed")
 	}
 	v, err := s.uc.GetByID(ctx, venueID)
 	if err != nil {
-		return nil, pkgerrors.Internal(err.Error())
+		return nil, s.internalErr(err, "get venue after hall photo delete failed")
 	}
 	if v != nil {
-		_ = s.publisher.VenueUpdated(v)
+		if pubErr := s.publisher.VenueUpdated(ctx, v); pubErr != nil {
+			s.log.Warn().Err(pubErr).Str("venue_id", v.ID.String()).Msg("venue.updated publish failed")
+		}
 	}
 	return &venuev1.DeleteVenueHallPhotoResponse{Url: deletedURL}, nil
 }
@@ -909,32 +814,12 @@ func (s *Server) SetVenueHallCoverPhoto(ctx context.Context, req *venuev1.SetVen
 		if _, ok := status.FromError(err); ok {
 			return nil, err
 		}
-		return nil, pkgerrors.Internal(err.Error())
+		return nil, s.internalErr(err, "set venue hall cover photo failed")
 	}
-	_ = s.publisher.VenueUpdated(v)
+	if pubErr := s.publisher.VenueUpdated(ctx, v); pubErr != nil {
+		s.log.Warn().Err(pubErr).Str("venue_id", v.ID.String()).Msg("venue.updated publish failed")
+	}
 	return venueToProto(v), nil
-}
-
-func venueCRMTaskToProto(t *domain.VenueCRMTask) *venuev1.VenueCRMTask {
-	p := &venuev1.VenueCRMTask{
-		Id:        t.ID.String(),
-		VenueId:   t.VenueID.String(),
-		Title:     t.Title,
-		Body:      t.Body,
-		Status:    t.Status,
-		CreatedBy: t.CreatedBy.String(),
-		CreatedAt: timestamppb.New(t.CreatedAt),
-		UpdatedAt: timestamppb.New(t.UpdatedAt),
-	}
-	if t.BookingID != nil {
-		s := t.BookingID.String()
-		p.BookingId = &s
-	}
-	if t.AssigneeUserID != nil {
-		s := t.AssigneeUserID.String()
-		p.AssigneeUserId = &s
-	}
-	return p
 }
 
 func manualBlockToProto(b *domain.ManualSlotBlock) *venuev1.ManualSlotBlock {
@@ -979,7 +864,6 @@ func venueToProto(v *domain.Venue) *venuev1.VenueResponse {
 		SocialLinks:             v.SocialLinks,
 		PayoutLegalForm:         v.PayoutLegalForm,
 		YookassaSellerAccountId: v.YooKassaSellerAccountID,
-		ManagementAccess:        v.ManagementAccess,
 	}
 
 	if v.ModeratedAt != nil {

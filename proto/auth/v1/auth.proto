@@ -72,6 +72,11 @@ message OAuthLoginRequest {
   string email = 3;
   string name = 4;
   string avatar_url = 5;
+  // email_verified must be set to true only when the OAuth provider has
+  // cryptographically confirmed ownership of the email address.
+  // When false, the email may not be used to link to an existing account
+  // (prevents account-takeover via unverified email from a rogue provider).
+  bool email_verified = 6;
 }
 
 message OAuthLoginResponse {

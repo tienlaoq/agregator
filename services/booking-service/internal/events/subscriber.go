@@ -1,16 +1,22 @@
 package events
 
 import (
-	"context"
 	"encoding/json"
+	"time"
 
 	"github.com/nats-io/nats.go"
 	"github.com/rs/zerolog"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"github.com/tienlao/agregator/pkg/natsutil"
 	"github.com/tienlao/agregator/services/booking-service/internal/usecase"
 )
+
+// handlerTimeout — максимальное время обработки одного NATS сообщения.
+// Включает: DB-запросы, gRPC-вызовы к venue/payment, NATS publish.
+// При превышении контекст отменяется → gRPC/pgx вернут DeadlineExceeded → Nak → retry.
+const handlerTimeout = 30 * time.Second
 
 type paymentEvent struct {
 	PaymentID string `json:"payment_id"`
@@ -43,44 +49,51 @@ func (s *Subscriber) SubscribePaymentEvents() error {
 }
 
 func (s *Subscriber) handlePaymentCompleted(msg *nats.Msg) {
+	// MsgContext создаётся первым — msg_id доступен во всех лог-сообщениях включая ошибку парсинга.
+	ctx, cancel := natsutil.MsgContext(msg, handlerTimeout)
+	defer cancel()
+	msgID := natsutil.MsgIDFromCtx(ctx)
+
 	var evt paymentEvent
 	if err := json.Unmarshal(msg.Data, &evt); err != nil {
-		s.log.Error().Err(err).Msg("unmarshal payment.completed")
+		s.log.Error().Err(err).Str("msg_id", msgID).Msg("unmarshal payment.completed")
 		_ = msg.Nak()
 		return
 	}
 
-	ctx := context.Background()
 	if err := s.uc.ConfirmBooking(ctx, evt.BookingID, evt.PaymentID); err != nil {
 		if st, ok := status.FromError(err); ok && (st.Code() == codes.InvalidArgument || st.Code() == codes.NotFound) {
-			s.log.Warn().Err(err).Str("booking_id", evt.BookingID).Msg("confirm booking skipped (terminal or invalid state)")
+			s.log.Warn().Err(err).Str("msg_id", msgID).Str("booking_id", evt.BookingID).Msg("confirm booking skipped (terminal or invalid state)")
 			_ = msg.Ack()
 			return
 		}
-		s.log.Error().Err(err).Str("booking_id", evt.BookingID).Msg("confirm booking failed")
+		s.log.Error().Err(err).Str("msg_id", msgID).Str("booking_id", evt.BookingID).Msg("confirm booking failed")
 		_ = msg.Nak()
 		return
 	}
 
-	s.log.Info().Str("booking_id", evt.BookingID).Msg("booking confirmed via payment")
+	s.log.Info().Str("msg_id", msgID).Str("booking_id", evt.BookingID).Msg("booking confirmed via payment")
 	_ = msg.Ack()
 }
 
 func (s *Subscriber) handlePaymentFailed(msg *nats.Msg) {
+	ctx, cancel := natsutil.MsgContext(msg, handlerTimeout)
+	defer cancel()
+	msgID := natsutil.MsgIDFromCtx(ctx)
+
 	var evt paymentEvent
 	if err := json.Unmarshal(msg.Data, &evt); err != nil {
-		s.log.Error().Err(err).Msg("unmarshal payment.failed")
+		s.log.Error().Err(err).Str("msg_id", msgID).Msg("unmarshal payment.failed")
 		_ = msg.Nak()
 		return
 	}
 
-	ctx := context.Background()
 	if err := s.uc.CancelBookingByPayment(ctx, evt.BookingID); err != nil {
-		s.log.Error().Err(err).Str("booking_id", evt.BookingID).Msg("cancel booking on payment failure")
+		s.log.Error().Err(err).Str("msg_id", msgID).Str("booking_id", evt.BookingID).Msg("cancel booking on payment failure")
 		_ = msg.Nak()
 		return
 	}
 
-	s.log.Info().Str("booking_id", evt.BookingID).Msg("booking cancelled via payment failure")
+	s.log.Info().Str("msg_id", msgID).Str("booking_id", evt.BookingID).Msg("booking cancelled via payment failure")
 	_ = msg.Ack()
 }

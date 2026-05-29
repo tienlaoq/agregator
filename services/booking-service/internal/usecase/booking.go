@@ -2,14 +2,18 @@ package usecase
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"strings"
 	"time"
 	"unicode/utf8"
 
+	"github.com/rs/zerolog"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	crmv1 "github.com/tienlao/agregator/gen/go/crm/v1"
 	paymentv1 "github.com/tienlao/agregator/gen/go/payment/v1"
 	venuev1 "github.com/tienlao/agregator/gen/go/venue/v1"
 	pkgerr "github.com/tienlao/agregator/pkg/errors"
@@ -24,29 +28,55 @@ type EventPublisher interface {
 }
 
 type BookingUseCase struct {
-	repo           domain.BookingRepository
-	venueClient    venuev1.VenueServiceClient
-	paymentClient  paymentv1.PaymentServiceClient
-	publisher      EventPublisher
-	visitTimeZone  string
+	repo                domain.BookingRepository
+	venueClient         venuev1.VenueServiceClient
+	crmClient           crmv1.CRMServiceClient
+	paymentClient       paymentv1.PaymentServiceClient
+	publisher           EventPublisher
+	log                 zerolog.Logger
+	visitTimeZone       string
+	cancelDeadlineHours int
 }
 
 func NewBookingUseCase(
 	repo domain.BookingRepository,
 	venueClient venuev1.VenueServiceClient,
+	crmClient crmv1.CRMServiceClient,
 	paymentClient paymentv1.PaymentServiceClient,
 	publisher EventPublisher,
+	log zerolog.Logger,
 	visitTimeZone string,
+	cancelDeadlineHours int,
 ) *BookingUseCase {
 	if visitTimeZone == "" {
 		visitTimeZone = "Europe/Moscow"
 	}
+	if cancelDeadlineHours < 0 {
+		cancelDeadlineHours = 0
+	}
 	return &BookingUseCase{
-		repo:          repo,
-		venueClient:   venueClient,
-		paymentClient: paymentClient,
-		publisher:     publisher,
-		visitTimeZone: visitTimeZone,
+		repo:                repo,
+		venueClient:         venueClient,
+		crmClient:           crmClient,
+		paymentClient:       paymentClient,
+		publisher:           publisher,
+		log:                 log,
+		visitTimeZone:       visitTimeZone,
+		cancelDeadlineHours: cancelDeadlineHours,
+	}
+}
+
+// publishEvent вызывает fn и логирует ошибку если NATS недоступен.
+// Ошибка не возвращается вызывающему: операция с БД уже совершена,
+// откатить её нельзя. Правильное решение — outbox; до его реализации
+// лог позволяет обнаружить потерянные события по booking_id.
+// См. TECH_DEBT [BOOKING-PUBLISH-LOSS].
+func (uc *BookingUseCase) publishEvent(ctx context.Context, subject, bookingID string, fn func() error) {
+	if err := fn(); err != nil {
+		uc.log.Error().Err(err).
+			Str("subject", subject).
+			Str("booking_id", bookingID).
+			Msg("NATS publish failed — event lost until outbox is implemented")
 	}
 }
 
@@ -58,15 +88,33 @@ type CreateBookingInput struct {
 	ServiceIDs []string
 	HallIDs    []string
 	Date       string
-	TimeFrom   string
-	TimeTo     string
-	Guests     int32
-	Comment    string
+	// TimeFrom/TimeTo — строки "HH:MM" с proto-границы; валидируются через ParseTimeOfDay
+	// внутри CreateBooking до любых внешних вызовов.
+	TimeFrom string
+	TimeTo   string
+	Guests   int32
+	Comment  string
 }
 
 func (uc *BookingUseCase) CreateBooking(ctx context.Context, in CreateBookingInput) (*domain.Booking, error) {
-	if strings.TrimSpace(in.TimeTo) == "" {
-		return nil, pkgerr.InvalidArgument("укажите время окончания визита")
+	// Парсинг и валидация времени — единственное место в сервисе где "HH:MM" → TimeOfDay.
+	timeFrom, err := domain.ParseTimeOfDay(in.TimeFrom)
+	if err != nil {
+		return nil, pkgerr.InvalidArgument("неверное время начала: " + err.Error())
+	}
+	timeTo, err := domain.ParseTimeOfDay(in.TimeTo)
+	if err != nil {
+		return nil, pkgerr.InvalidArgument("неверное время окончания: " + err.Error())
+	}
+	minutes, ok := timeFrom.MinutesUntil(timeTo)
+	if !ok {
+		return nil, pkgerr.InvalidArgument("время окончания должно быть позже времени начала")
+	}
+	if minutes < 30 {
+		return nil, pkgerr.InvalidArgument("минимальная длительность брони 30 минут")
+	}
+	if minutes > 720 {
+		return nil, pkgerr.InvalidArgument("максимальная длительность брони 12 часов")
 	}
 
 	vResp, err := uc.venueClient.GetVenue(ctx, &venuev1.GetVenueRequest{Id: in.VenueID})
@@ -75,17 +123,6 @@ func (uc *BookingUseCase) CreateBooking(ctx context.Context, in CreateBookingInp
 	}
 	if vResp == nil {
 		return nil, pkgerr.NotFound("заведение не найдено")
-	}
-
-	minutes, err := slotDurationMinutes(in.TimeFrom, in.TimeTo)
-	if err != nil {
-		return nil, err
-	}
-	if minutes < 30 {
-		return nil, pkgerr.InvalidArgument("минимальная длительность брони 30 минут")
-	}
-	if minutes > 720 {
-		return nil, pkgerr.InvalidArgument("максимальная длительность брони 12 часов")
 	}
 
 	effectiveIDs := normalizeBookingServiceIDs(in.ServiceIDs, in.ServiceID)
@@ -98,6 +135,8 @@ func (uc *BookingUseCase) CreateBooking(ctx context.Context, in CreateBookingInp
 		return nil, err
 	}
 
+	// Быстрая pre-check без блокировки: отсекает очевидно занятые слоты раньше,
+	// чем мы дойдём до ReserveSlot, и даёт более понятный ответ клиенту.
 	slotResp, err := uc.venueClient.CheckSlotAvailability(ctx, &venuev1.CheckSlotRequest{
 		VenueId:  in.VenueID,
 		Date:     in.Date,
@@ -132,24 +171,43 @@ func (uc *BookingUseCase) CreateBooking(ctx context.Context, in CreateBookingInp
 
 	svcID, pkgIDs := persistServiceFields(effectiveIDs)
 	b := &domain.Booking{
-		UserID:              in.UserID,
-		VenueID:             in.VenueID,
-		VenueName:           in.VenueName,
-		ServiceID:           svcID,
-		PackageServiceIDs:   pkgIDs,
-		HallIDs:             hallIDs,
-		Date:                dateParsed,
-		TimeFrom:            in.TimeFrom,
-		TimeTo:              in.TimeTo,
-		Guests:              in.Guests,
-		Comment:             in.Comment,
-		Status:              "pending",
-		TotalPrice:          totalPrice,
+		UserID:            in.UserID,
+		VenueID:           in.VenueID,
+		VenueName:         in.VenueName,
+		ServiceID:         svcID,
+		PackageServiceIDs: pkgIDs,
+		HallIDs:           hallIDs,
+		Date:              dateParsed,
+		TimeFrom:          timeFrom,
+		TimeTo:            timeTo,
+		Guests:            in.Guests,
+		Comment:           in.Comment,
+		Status:            domain.StatusPending,
+		TotalPrice:        totalPrice,
 	}
+
+	// Порядок внешних вызовов:
+	//
+	//  1. repo.Create          — INSERT со status='pending', получаем booking_id.
+	//                            EXCLUDE constraint (005_booking_slot_exclusion) даёт
+	//                            атомарную защиту от двойной брони на уровне PG.
+	//  2. ReserveSlot          — захват слота в venue-service с реальным booking_id.
+	//                            Компенсация при ошибке: repo.Delete.
+	//  3. CreatePayment        — создание платежа. Компенсация при ошибке:
+	//                            ReleaseSlot + repo.Delete.
+	//  4. repo.SetPaymentAndStatus — один UPDATE: payment_id + payment_url + status='payment_pending'.
+	//                            Компенсация при ошибке: ReleaseSlot + repo.Delete.
+	//                            Если этот UPDATE упадёт — платёж уже создан, но бронь
+	//                            остаётся в 'pending' без payment_id. Это устраняемо
+	//                            reaper-джобом (см. TECH_DEBT [BOOKING-ORPHAN]) или
+	//                            добавлением CancelPayment RPC (см. [BOOKING-ORPHAN-PAYMENT]).
+
+	// Шаг 1: атомарная запись в БД — защита от двойной брони через EXCLUDE.
 	if err := uc.repo.Create(ctx, b); err != nil {
 		return nil, fmt.Errorf("create booking: %w", err)
 	}
 
+	// Шаг 2: захват слота в venue-service.
 	_, err = uc.venueClient.ReserveSlot(ctx, &venuev1.ReserveSlotRequest{
 		VenueId:   in.VenueID,
 		BookingId: b.ID,
@@ -165,11 +223,19 @@ func (uc *BookingUseCase) CreateBooking(ctx context.Context, in CreateBookingInp
 		return nil, fmt.Errorf("reserve slot: %w", err)
 	}
 
+	// Шаг 3: создание платежа.
+	//
+	// Idempotency key derivation: sha256(booking_id + ":" + user_id).
+	// Binding the key to both the booking and the user prevents idempotency-key
+	// squatting — a different user cannot pre-register the same key and intercept
+	// this payment.  The booking_id is a server-generated UUID (unguessable from
+	// outside) so the combined hash is unpredictable even without a separate nonce.
+	idemKey := bookingIdempotencyKey(b.ID, b.UserID)
 	payResp, err := uc.paymentClient.CreatePayment(ctx, &paymentv1.CreatePaymentRequest{
 		BookingId:               b.ID,
 		Amount:                  b.TotalPrice,
 		Description:             fmt.Sprintf("Booking %s", b.ID),
-		IdempotencyKey:          b.ID,
+		IdempotencyKey:          idemKey,
 		CounterpartyType:        "venue",
 		CounterpartyId:          in.VenueID,
 		YookassaSellerAccountId: strings.TrimSpace(vResp.GetYookassaSellerAccountId()),
@@ -183,24 +249,34 @@ func (uc *BookingUseCase) CreateBooking(ctx context.Context, in CreateBookingInp
 		return nil, fmt.Errorf("create payment: %w", err)
 	}
 
-	if err := uc.repo.SetPaymentID(ctx, b.ID, payResp.Id); err != nil {
-		return nil, fmt.Errorf("set payment id: %w", err)
-	}
-	if err := uc.repo.UpdateStatus(ctx, b.ID, "payment_pending"); err != nil {
-		return nil, fmt.Errorf("update status: %w", err)
+	// Шаг 4: один атомарный UPDATE — payment_id и status за один round-trip.
+	// Заменяет два последовательных SetPaymentID + UpdateStatus.
+	if err := uc.repo.SetPaymentAndStatus(ctx, b.ID, payResp.Id, payResp.PaymentUrl, string(domain.StatusPaymentPending)); err != nil {
+		_, _ = uc.venueClient.ReleaseSlot(ctx, &venuev1.ReleaseSlotRequest{
+			VenueId:   in.VenueID,
+			BookingId: b.ID,
+		})
+		_ = uc.repo.Delete(ctx, b.ID)
+		return nil, fmt.Errorf("finalize booking: %w", err)
 	}
 
-	b.Status = "payment_pending"
+	b.Status = domain.StatusPaymentPending
 	b.PaymentID = payResp.Id
 	b.PaymentURL = payResp.PaymentUrl
 
-	_ = uc.publisher.PublishBookingCreated(ctx, b)
+	uc.publishEvent(ctx, "booking.created", b.ID, func() error {
+		return uc.publisher.PublishBookingCreated(ctx, b)
+	})
 
 	return b, nil
 }
 
 func (uc *BookingUseCase) GetBooking(ctx context.Context, id string) (*domain.Booking, error) {
 	return uc.repo.GetByID(ctx, id)
+}
+
+func (uc *BookingUseCase) GetBookingsBatch(ctx context.Context, ids []string) ([]*domain.Booking, error) {
+	return uc.repo.GetByIDs(ctx, ids)
 }
 
 func (uc *BookingUseCase) ListUserBookings(ctx context.Context, userID, statusFilter string, page, pageSize int32) ([]*domain.Booking, int, error) {
@@ -218,7 +294,7 @@ func (uc *BookingUseCase) requireVenueCRMAccess(ctx context.Context, venueID, us
 	if strings.TrimSpace(userID) == "" {
 		return pkgerr.InvalidArgument("user id is required")
 	}
-	resp, err := uc.venueClient.GetVenueManagementAccess(ctx, &venuev1.GetVenueManagementAccessRequest{
+	resp, err := uc.crmClient.GetManagementAccess(ctx, &crmv1.GetManagementAccessRequest{
 		VenueId: venueID,
 		UserId:  userID,
 	})
@@ -231,18 +307,14 @@ func (uc *BookingUseCase) requireVenueCRMAccess(ctx context.Context, venueID, us
 	return nil
 }
 
-func (uc *BookingUseCase) ListVenueBookings(ctx context.Context, venueID, requesterUserID, statusFilter, date string, page, pageSize int32) ([]*domain.Booking, int, error) {
+func (uc *BookingUseCase) ListVenueBookings(ctx context.Context, venueID, requesterUserID, statusFilter, date, cursor string, pageSize int32) ([]*domain.Booking, int, string, error) {
 	if err := uc.requireVenueCRMAccess(ctx, venueID, requesterUserID); err != nil {
-		return nil, 0, err
+		return nil, 0, "", err
 	}
 	if pageSize <= 0 {
 		pageSize = 20
 	}
-	if page <= 0 {
-		page = 1
-	}
-	offset := int((page - 1) * pageSize)
-	return uc.repo.ListByVenue(ctx, venueID, statusFilter, date, offset, int(pageSize))
+	return uc.repo.ListByVenue(ctx, venueID, statusFilter, date, cursor, int(pageSize))
 }
 
 const maxBookingStaffNoteRunes = 4000
@@ -293,54 +365,62 @@ func (uc *BookingUseCase) CancelBooking(ctx context.Context, id, userID string) 
 	if b.UserID != userID {
 		return nil, pkgerr.PermissionDenied("not your booking")
 	}
-	if b.Status == "completed" || b.Status == "cancelled" {
+	if !b.CanCancel() {
 		return nil, pkgerr.InvalidArgument("booking cannot be cancelled in current status")
 	}
 
-	if err := uc.repo.UpdateStatus(ctx, id, "cancelled"); err != nil {
+	// Проверка дедлайна отмены: запрещаем отмену, если до начала визита осталось
+	// меньше cancelDeadlineHours. 0 означает «без ограничений» (только для тестов).
+	if uc.cancelDeadlineHours > 0 {
+		loc, lerr := time.LoadLocation(uc.visitTimeZone)
+		if lerr != nil {
+			loc = time.UTC
+		}
+		visitStart := b.TimeFrom.ToTimeIn(b.Date, loc)
+		deadline := visitStart.Add(-time.Duration(uc.cancelDeadlineHours) * time.Hour)
+		if time.Now().In(loc).After(deadline) {
+			return nil, pkgerr.InvalidArgument(
+				fmt.Sprintf("отмена невозможна: до начала визита менее %d ч.", uc.cancelDeadlineHours),
+			)
+		}
+	}
+
+	if err := uc.repo.UpdateStatus(ctx, id, string(domain.StatusCancelled)); err != nil {
 		return nil, err
 	}
-	b.Status = "cancelled"
+	b.Status = domain.StatusCancelled
 
 	_, _ = uc.venueClient.ReleaseSlot(ctx, &venuev1.ReleaseSlotRequest{
 		VenueId:   b.VenueID,
 		BookingId: b.ID,
 	})
 
-	_ = uc.publisher.PublishBookingCancelled(ctx, b)
+	// PublishBookingCancelled триггерит рефанд в payment-service (subscriber booking.cancelled).
+	uc.publishEvent(ctx, "booking.cancelled", b.ID, func() error {
+		return uc.publisher.PublishBookingCancelled(ctx, b)
+	})
 
 	return b, nil
 }
 
+// ConfirmBooking переводит бронь в статус confirmed.
+// Вызывается из обработчика payment.completed (NATS) — может прийти дважды при редублировании.
+// Идемпотентно: если бронь уже confirmed/completed/cancelled — publish не делается, ошибки нет.
+// Атомарность: один UPDATE … WHERE status='payment_pending' исключает двойное подтверждение
+// при параллельных вызовах (второй UPDATE даст RowsAffected=0 и не опубликует событие).
 func (uc *BookingUseCase) ConfirmBooking(ctx context.Context, id, paymentID string) error {
-	b, err := uc.repo.GetByID(ctx, id)
+	b, confirmed, err := uc.repo.ConfirmPayment(ctx, id, paymentID)
 	if err != nil {
 		return err
 	}
-	switch b.Status {
-	case "confirmed", "completed", "cancelled":
+	if !confirmed {
+		// Бронь уже в терминальном статусе — publish не делаем (идемпотентность).
 		return nil
-	case "payment_pending":
-		if b.PaymentID != "" && b.PaymentID != paymentID {
-			return pkgerr.InvalidArgument("payment does not match booking")
-		}
-		if b.PaymentID == "" {
-			if err := uc.repo.SetPaymentID(ctx, id, paymentID); err != nil {
-				return fmt.Errorf("set payment id: %w", err)
-			}
-		}
-		if err := uc.repo.UpdateStatus(ctx, id, "confirmed"); err != nil {
-			return err
-		}
-		b, err = uc.repo.GetByID(ctx, id)
-		if err != nil {
-			return err
-		}
-		_ = uc.publisher.PublishBookingConfirmed(ctx, b)
-		return nil
-	default:
-		return pkgerr.InvalidArgument("booking cannot be confirmed from current status")
 	}
+	uc.publishEvent(ctx, "booking.confirmed", b.ID, func() error {
+		return uc.publisher.PublishBookingConfirmed(ctx, b)
+	})
+	return nil
 }
 
 func (uc *BookingUseCase) CompleteBooking(ctx context.Context, id string) (*domain.Booking, error) {
@@ -348,16 +428,13 @@ func (uc *BookingUseCase) CompleteBooking(ctx context.Context, id string) (*doma
 	if err != nil {
 		return nil, err
 	}
-	if b.Status != "confirmed" {
-		return nil, pkgerr.InvalidArgument("only confirmed bookings can be completed")
+	if !b.CanComplete() {
+		return nil, pkgerr.InvalidArgument("only confirmed bookings with payment can be completed")
 	}
-	if b.PaymentID == "" {
-		return nil, pkgerr.InvalidArgument("booking has no payment")
-	}
-	if err := uc.repo.UpdateStatus(ctx, id, "completed"); err != nil {
+	if err := uc.repo.UpdateStatus(ctx, id, string(domain.StatusCompleted)); err != nil {
 		return nil, err
 	}
-	b.Status = "completed"
+	b.Status = domain.StatusCompleted
 	return b, nil
 }
 
@@ -370,41 +447,28 @@ func (uc *BookingUseCase) CancelBookingByPayment(ctx context.Context, bookingID 
 		}
 		return err
 	}
-	if b.Status != "payment_pending" {
+	if b.Status != domain.StatusPaymentPending {
 		return nil
 	}
 
-	if err := uc.repo.UpdateStatus(ctx, bookingID, "cancelled"); err != nil {
+	if err := uc.repo.UpdateStatus(ctx, bookingID, string(domain.StatusCancelled)); err != nil {
 		return err
 	}
-	b.Status = "cancelled"
+	b.Status = domain.StatusCancelled
 
 	_, _ = uc.venueClient.ReleaseSlot(ctx, &venuev1.ReleaseSlotRequest{
 		VenueId:   b.VenueID,
 		BookingId: b.ID,
 	})
 
-	_ = uc.publisher.PublishBookingCancelled(ctx, b)
+	uc.publishEvent(ctx, "booking.cancelled", b.ID, func() error {
+		return uc.publisher.PublishBookingCancelled(ctx, b)
+	})
 	return nil
 }
 
 func (uc *BookingUseCase) HasCompletedBooking(ctx context.Context, userID, venueID string) (bool, error) {
 	return uc.repo.HasCompleted(ctx, userID, venueID)
-}
-
-func slotDurationMinutes(timeFrom, timeTo string) (int, error) {
-	tf, err := time.Parse("15:04", timeFrom)
-	if err != nil {
-		return 0, pkgerr.InvalidArgument("неверное время начала, ожидается ЧЧ:ММ")
-	}
-	tt, err := time.Parse("15:04", timeTo)
-	if err != nil {
-		return 0, pkgerr.InvalidArgument("неверное время окончания, ожидается ЧЧ:ММ")
-	}
-	if !tt.After(tf) {
-		return 0, pkgerr.InvalidArgument("время окончания должно быть позже времени начала")
-	}
-	return int(tt.Sub(tf).Minutes()), nil
 }
 
 func hourlyTotal(priceFrom int64, minutes int) int64 {
@@ -435,6 +499,11 @@ func normalizeBookingHallIDs(fromList []string) []string {
 	return out
 }
 
+// validateHallIDs проверяет, что все переданные hall_id принадлежат заведению.
+//
+// Статус архивирования/отключения залов не проверяется: proto VenueHall (venue/v1/venue.proto)
+// не содержит поля archived/disabled/is_active — функциональности нет на уровне схемы.
+// TODO: добавить проверку h.GetIsActive() == false → InvalidArgument, когда поле появится в proto.
 func validateHallIDs(v *venuev1.VenueResponse, ids []string) error {
 	if len(ids) == 0 {
 		return nil
@@ -453,19 +522,22 @@ func validateHallIDs(v *venuev1.VenueResponse, ids []string) error {
 
 func effectiveHourlyPriceFromVenueAndHalls(v *venuev1.VenueResponse, hallIDs []string) int64 {
 	base := v.GetPriceFrom()
+	if len(hallIDs) == 0 {
+		return base
+	}
+	// Строим карту id→priceFrom один раз — O(venueHalls) вместо O(hallIDs×venueHalls).
+	// Типичный случай: 1-2 выбранных зала из ~5-50 в заведении.
+	hallPrice := make(map[string]int64, len(v.GetHalls()))
+	for _, h := range v.GetHalls() {
+		hallPrice[h.GetId()] = h.GetPriceFrom()
+	}
 	for _, hid := range hallIDs {
 		hid = strings.TrimSpace(hid)
 		if hid == "" {
 			continue
 		}
-		for _, h := range v.GetHalls() {
-			if h.GetId() != hid {
-				continue
-			}
-			if pf := h.GetPriceFrom(); pf > base {
-				base = pf
-			}
-			break
+		if pf := hallPrice[hid]; pf > base {
+			base = pf
 		}
 	}
 	return base
@@ -541,15 +613,85 @@ func computeBookingTotalPriceMulti(v *venuev1.VenueResponse, serviceIDs []string
 	return sum, nil
 }
 
-// AutoCompletePastVisits переводит confirmed → completed после окончания слота (date+time_to) в visitTimeZone.
+// orphanPendingMaxAgeMinutes — максимальный возраст pending-брони без payment_id.
+// Нормальный путь Create→SetPaymentAndStatus занимает секунды; 15 минут — консервативный
+// порог при котором ложных срабатываний быть не может.
+// См. TECH_DEBT [BOOKING-ORPHAN].
+const orphanPendingMaxAgeMinutes = 15
+
+// AutoCompletePastVisits переводит confirmed → completed после окончания слота,
+// публикует booking.completed для каждой затронутой брони,
+// и попутно удаляет осиротевшие pending-брони (reaper).
+//
+// Гарантия at-least-once publish:
+//  1. UPDATE status='completed' (completed_event_sent_at остаётся NULL).
+//  2. Для каждой строки: publish → MarkCompletedEventSent (метка).
+//  3. publishUnpublishedCompleted — catch-up для строк где п.2 прервался.
+//  4. Reaper — DELETE pending без payment_id старше 15 минут (BOOKING-ORPHAN).
+//
+// При падении между UPDATE и publish: следующий вызов AutoCompletePastVisits
+// не тронет строку (статус уже completed), но publishUnpublishedCompleted
+// найдёт её через partial-индекс и повторит publish.
+//
+// Downstream (review/notification) должны быть идемпотентны по booking_id.
 func (uc *BookingUseCase) AutoCompletePastVisits(ctx context.Context) (int, error) {
+	// Шаг 1: перевести все просроченные confirmed → completed.
 	refs, err := uc.repo.AutoCompleteVisitEnded(ctx, uc.visitTimeZone)
 	if err != nil {
 		return 0, err
 	}
+
+	published := 0
+	// Шаг 2: publish + метка для только что завершённых броней.
 	for _, ref := range refs {
-		b := &domain.Booking{ID: ref.ID, UserID: ref.UserID, VenueID: ref.VenueID, Status: "completed"}
-		_ = uc.publisher.PublishBookingCompleted(ctx, b)
+		b := &domain.Booking{ID: ref.ID, UserID: ref.UserID, VenueID: ref.VenueID, Status: domain.StatusCompleted}
+		if err := uc.publisher.PublishBookingCompleted(ctx, b); err == nil {
+			_ = uc.repo.MarkCompletedEventSent(ctx, ref.ID)
+			published++
+		}
+		// Если publish упал — completed_event_sent_at остаётся NULL;
+		// catch-up (шаг 3) подхватит на следующей итерации поллера.
 	}
-	return len(refs), nil
+
+	// Шаг 3: catch-up — найти completed без метки (упали на предыдущих итерациях).
+	catchUp, err := uc.repo.FindUnpublishedCompleted(ctx, 100)
+	if err != nil {
+		// Catch-up не критичен — основная работа (шаги 1-2) уже выполнена.
+		// Логируем для видимости, возврат ошибки не нужен.
+		uc.log.Error().Err(err).Msg("booking: catch-up FindUnpublishedCompleted failed")
+	}
+	for _, ref := range catchUp {
+		b := &domain.Booking{ID: ref.ID, UserID: ref.UserID, VenueID: ref.VenueID, Status: domain.StatusCompleted}
+		if err := uc.publisher.PublishBookingCompleted(ctx, b); err == nil {
+			_ = uc.repo.MarkCompletedEventSent(ctx, ref.ID)
+			published++
+		}
+	}
+
+	// Шаг 4: reaper — удалить pending-брони без payment_id старше порога.
+	// Такие строки появляются если booking-service упал между repo.Create и
+	// repo.SetPaymentAndStatus и компенсационный repo.Delete не отработал.
+	// Они блокируют EXCLUDE-слот навсегда — reaper освобождает его.
+	if n, err := uc.repo.DeleteOrphanPending(ctx, orphanPendingMaxAgeMinutes); err != nil {
+		uc.log.Error().Err(err).Msg("booking: orphan pending reaper failed")
+	} else if n > 0 {
+		uc.log.Warn().Int64("count", n).Msg("booking: deleted orphan pending bookings — check BOOKING-ORPHAN in TECH_DEBT")
+	}
+
+	return published, nil
+}
+
+// bookingIdempotencyKey derives a stable, user-bound idempotency key for the
+// CreatePayment call.
+//
+// key = hex(sha256(bookingID + ":" + userID))
+//
+// Binding both IDs prevents idempotency-key squatting: even if an attacker
+// learns the booking UUID, they cannot register the same key on behalf of a
+// different user because the key is cryptographically tied to userID.
+// The booking UUID is server-generated and unguessable, so the hash is
+// unpredictable without a separate nonce.
+func bookingIdempotencyKey(bookingID, userID string) string {
+	h := sha256.Sum256([]byte(bookingID + ":" + userID))
+	return hex.EncodeToString(h[:])
 }

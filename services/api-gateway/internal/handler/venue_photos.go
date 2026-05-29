@@ -2,26 +2,25 @@ package handler
 
 import (
 	"bytes"
-	"fmt"
-	"io"
 	"net/http"
-	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 	venuev1 "github.com/tienlao/agregator/gen/go/venue/v1"
 	"github.com/tienlao/agregator/services/api-gateway/internal/apicatalog"
+	"github.com/tienlao/agregator/services/api-gateway/internal/limits"
 	"github.com/tienlao/agregator/services/api-gateway/internal/middleware"
 )
 
-const maxVenuePhotoBytes = 5 << 20 // 5 MiB
+// maxVenuePhotoBytes is a package-local alias; canonical value in limits.PhotoMaxBytes.
+var maxVenuePhotoBytes = limits.PhotoMaxBytes
 
 var pngMagic = []byte{0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A}
 
-// venuePhotoExt picks storage extension from Content-Type and/or raw magic bytes.
-// Avoids relying on Seek() on multipart.File (not always supported in browsers).
+// venuePhotoExt returns the storage extension for the given Content-Type and
+// magic bytes. Both signals are checked so that browsers that lie about
+// Content-Type (or don't set it) are still handled correctly.
 func venuePhotoExt(contentType string, head []byte) (ext string, ok bool) {
 	switch contentType {
 	case "image/jpeg", "image/pjpeg":
@@ -46,114 +45,23 @@ func venuePhotoExt(contentType string, head []byte) (ext string, ok bool) {
 	return "", false
 }
 
-// venueUploadDiskSuffix maps request path to a path under uploadRoot (venues/{venueId}/{file}).
-// Accepts full gateway paths and /uploads/... as seen on chi sub-routers.
-func venueUploadDiskSuffix(urlPath string) string {
-	p := strings.TrimPrefix(strings.TrimSpace(urlPath), "/")
-	switch {
-	case strings.HasPrefix(p, "api/v1/uploads/"):
-		p = strings.TrimPrefix(p, "api/v1/uploads/")
-	case strings.HasPrefix(p, "uploads/"):
-		p = strings.TrimPrefix(p, "uploads/")
-	default:
-		return ""
+// keyFromPublicURL extracts the storage object key from a public URL produced
+// by storage.Uploader.Put. Works for both DiskUploader and MinioUploader URLs
+// by finding the "venues/" or "masters/" segment and keeping everything from
+// there. Example:
+//
+//	"/api/v1/uploads/venues/abc/photo.jpg" → "venues/abc/photo.jpg"
+//	"https://cdn.example.com/photos/venues/abc/photo.jpg" → "venues/abc/photo.jpg"
+func keyFromPublicURL(publicURL string) string {
+	for _, marker := range []string{"/venues/", "/masters/"} {
+		if idx := strings.LastIndex(publicURL, marker); idx >= 0 {
+			return publicURL[idx+1:] // "venues/abc/photo.jpg"
+		}
 	}
-	p = strings.TrimPrefix(p, "/")
-	if p == "" || strings.Contains(p, "..") {
-		return ""
-	}
-	return p
+	return ""
 }
 
-// ServeVenueUploads serves files from uploadRoot matching URL /api/v1/uploads/venues/{venueId}/{file}.
-func ServeVenueUploads(uploadRoot string) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet && r.Method != http.MethodHead {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-		suffix := venueUploadDiskSuffix(r.URL.Path)
-		if suffix == "" {
-			http.NotFound(w, r)
-			return
-		}
-		full := filepath.Join(uploadRoot, filepath.FromSlash(suffix))
-		cleanRoot, err := filepath.Abs(uploadRoot)
-		if err != nil {
-			http.Error(w, "internal error", http.StatusInternalServerError)
-			return
-		}
-		cleanFile, err := filepath.Abs(full)
-		if err != nil {
-			http.Error(w, "internal error", http.StatusInternalServerError)
-			return
-		}
-		if !strings.HasPrefix(cleanFile, cleanRoot+string(os.PathSeparator)) && cleanFile != cleanRoot {
-			http.Error(w, "forbidden", http.StatusForbidden)
-			return
-		}
-		http.ServeFile(w, r, full)
-	})
-}
-
-func (h *VenueHandler) absPathFromPublicURL(publicPath string) (string, error) {
-	p := strings.TrimSpace(publicPath)
-	const prefix = "/api/v1/uploads/venues/"
-	if !strings.HasPrefix(p, prefix) {
-		return "", fmt.Errorf("invalid public path")
-	}
-	rest := strings.TrimPrefix(p, prefix)
-	parts := strings.Split(rest, "/")
-	var rel []string
-	switch {
-	case len(parts) == 2:
-		vid, fname := parts[0], parts[1]
-		if _, err := uuid.Parse(vid); err != nil {
-			return "", fmt.Errorf("invalid venue id in path")
-		}
-		if fname == "" || strings.Contains(fname, "..") {
-			return "", fmt.Errorf("invalid filename")
-		}
-		rel = []string{"venues", vid, fname}
-	case len(parts) == 4 && parts[1] == "halls":
-		vid, hid, fname := parts[0], parts[2], parts[3]
-		if _, err := uuid.Parse(vid); err != nil {
-			return "", fmt.Errorf("invalid venue id in path")
-		}
-		if _, err := uuid.Parse(hid); err != nil {
-			return "", fmt.Errorf("invalid hall id in path")
-		}
-		if fname == "" || strings.Contains(fname, "..") {
-			return "", fmt.Errorf("invalid filename")
-		}
-		rel = []string{"venues", vid, "halls", hid, fname}
-	default:
-		return "", fmt.Errorf("invalid public path")
-	}
-	full := filepath.Join(h.uploadRoot, filepath.Join(rel...))
-	cleanRoot, err := filepath.Abs(h.uploadRoot)
-	if err != nil {
-		return "", err
-	}
-	cleanFile, err := filepath.Abs(full)
-	if err != nil {
-		return "", err
-	}
-	if !strings.HasPrefix(cleanFile, cleanRoot+string(os.PathSeparator)) && cleanFile != cleanRoot {
-		return "", fmt.Errorf("path traversal")
-	}
-	return full, nil
-}
-
-func (h *VenueHandler) removeStoredUpload(publicPath string) {
-	abs, err := h.absPathFromPublicURL(publicPath)
-	if err != nil {
-		return
-	}
-	_ = os.Remove(abs)
-}
-
-// UploadVenuePhoto expects multipart field "photo" (JPEG, PNG or WebP).
+// UploadVenuePhoto handles POST /venues/{id}/photos (multipart field "photo").
 func (h *VenueHandler) UploadVenuePhoto(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.UserIDFromCtx(r.Context())
 	if userID == "" {
@@ -167,64 +75,26 @@ func (h *VenueHandler) UploadVenuePhoto(w http.ResponseWriter, r *http.Request) 
 	}
 
 	r.Body = http.MaxBytesReader(w, r.Body, maxVenuePhotoBytes+1024)
-	if err := r.ParseMultipartForm(maxVenuePhotoBytes); err != nil {
-		writeCatalog(w, apicatalog.GatewayRequestInvalidMultipart)
-		return
-	}
-	file, _, err := r.FormFile("photo")
-	if err != nil {
-		writeCatalog(w, apicatalog.GatewayRequestPhotoFieldRequired)
-		return
-	}
-	defer file.Close()
-
-	head := make([]byte, 512)
-	n, err := io.ReadFull(file, head)
-	if err != nil && err != io.ErrUnexpectedEOF && err != io.EOF {
-		writeCatalog(w, apicatalog.GatewayRequestInvalidFileRead)
-		return
-	}
-	if n == 0 {
-		writeCatalog(w, apicatalog.GatewayRequestEmptyFile)
-		return
-	}
-	ct := http.DetectContentType(head[:n])
-	ext, ok := venuePhotoExt(ct, head[:n])
+	photo, ok := readPhotoFromMultipart(w, r)
 	if !ok {
-		writeCatalog(w, apicatalog.GatewayRequestInvalidImageType)
 		return
 	}
 
-	body := io.MultiReader(bytes.NewReader(head[:n]), file)
-
-	fname := uuid.NewString() + ext
-	dir := filepath.Join(h.uploadRoot, "venues", venueID)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		writeCatalog(w, apicatalog.GatewayStorageFailed)
-		return
-	}
-	fullPath := filepath.Join(dir, fname)
-	dst, err := os.Create(fullPath)
+	key := "venues/" + venueID + "/" + uuid.NewString() + photo.Ext
+	publicURL, err := h.storage.Put(r.Context(), key, photo.ContentType, -1, photo.Body)
 	if err != nil {
 		writeCatalog(w, apicatalog.GatewayStorageFailed)
 		return
 	}
-	defer dst.Close()
 
-	if _, err := io.Copy(dst, body); err != nil {
-		_ = os.Remove(fullPath)
-		writeCatalog(w, apicatalog.GatewayStorageFailed)
-		return
-	}
-
-	publicURL := "/api/v1/uploads/venues/" + venueID + "/" + fname
 	resp, err := h.client.AddVenuePhoto(r.Context(), &venuev1.AddVenuePhotoRequest{
 		VenueId: venueID,
 		OwnerId: userID,
 		Url:     publicURL,
 	})
 	if err != nil {
-		_ = os.Remove(fullPath)
+		// Best-effort cleanup: remove the uploaded object if the DB write fails.
+		_ = h.storage.Delete(r.Context(), key)
 		grpcErrorToHTTP(w, err)
 		return
 	}
@@ -232,7 +102,7 @@ func (h *VenueHandler) UploadVenuePhoto(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusCreated, venueToJSON(resp, true))
 }
 
-// DeleteVenuePhoto removes DB row and file on disk, returns updated venue (owner view).
+// DeleteVenuePhoto handles DELETE /venues/{id}/photos/{photoId}.
 func (h *VenueHandler) DeleteVenuePhoto(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.UserIDFromCtx(r.Context())
 	if userID == "" {
@@ -260,7 +130,9 @@ func (h *VenueHandler) DeleteVenuePhoto(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if u := delResp.GetUrl(); u != "" {
-		h.removeStoredUpload(u)
+		if key := keyFromPublicURL(u); key != "" {
+			_ = h.storage.Delete(r.Context(), key)
+		}
 	}
 
 	v, err := h.client.GetVenue(r.Context(), &venuev1.GetVenueRequest{Id: venueID})
@@ -271,7 +143,7 @@ func (h *VenueHandler) DeleteVenuePhoto(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, venueToJSON(v, true))
 }
 
-// SetVenueCoverPhoto marks one photo as cover (others cleared).
+// SetVenueCoverPhoto handles POST /venues/{id}/photos/{photoId}/cover.
 func (h *VenueHandler) SetVenueCoverPhoto(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.UserIDFromCtx(r.Context())
 	if userID == "" {

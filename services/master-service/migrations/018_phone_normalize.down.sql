@@ -1,0 +1,3 @@
+-- Normalisation of phone numbers is a one-way data migration; the original
+-- free-form strings are not recoverable. Down migration is intentionally a
+-- no-op — if a rollback is needed, restore from a pre-migration backup.

@@ -10,6 +10,7 @@ import (
 type mockUserRepo struct {
 	CreateFunc     func(ctx context.Context, user *domain.User) error
 	GetByIDFunc    func(ctx context.Context, id string) (*domain.User, error)
+	GetBatchFunc   func(ctx context.Context, ids []string) (map[string]*domain.User, error)
 	GetByEmailFunc func(ctx context.Context, email string) (*domain.User, error)
 	UpdateFunc     func(ctx context.Context, user *domain.User) error
 }
@@ -25,14 +26,26 @@ func (m *mockUserRepo) GetByID(ctx context.Context, id string) (*domain.User, er
 	if m.GetByIDFunc != nil {
 		return m.GetByIDFunc(ctx, id)
 	}
-	return nil, nil
+	// Default mirrors the real repo contract: missing rows surface as
+	// ErrNotFound, never (nil, nil). Tests that need a positive result must
+	// set GetByIDFunc explicitly.
+	return nil, domain.ErrNotFound
+}
+
+func (m *mockUserRepo) GetBatch(ctx context.Context, ids []string) (map[string]*domain.User, error) {
+	if m.GetBatchFunc != nil {
+		return m.GetBatchFunc(ctx, ids)
+	}
+	return map[string]*domain.User{}, nil
 }
 
 func (m *mockUserRepo) GetByEmail(ctx context.Context, email string) (*domain.User, error) {
 	if m.GetByEmailFunc != nil {
 		return m.GetByEmailFunc(ctx, email)
 	}
-	return nil, nil
+	// Default mirrors the real repo contract: missing rows surface as
+	// ErrNotFound, never (nil, nil).
+	return nil, domain.ErrNotFound
 }
 
 func (m *mockUserRepo) Update(ctx context.Context, user *domain.User) error {

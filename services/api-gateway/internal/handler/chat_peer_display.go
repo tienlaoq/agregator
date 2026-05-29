@@ -11,35 +11,20 @@ import (
 	venuev1 "github.com/tienlao/agregator/gen/go/venue/v1"
 )
 
-func userDisplayName(ctx context.Context, users userGatewayClient, userID string) string {
-	if users == nil || strings.TrimSpace(userID) == "" {
-		return ""
-	}
-	u, err := users.GetUser(ctx, &userv1.GetUserRequest{Id: userID})
-	if err != nil || u == nil {
-		return ""
-	}
-	if n := strings.TrimSpace(u.GetName()); n != "" {
-		return n
-	}
-	if e := strings.TrimSpace(u.GetEmail()); e != "" {
-		if at := strings.IndexByte(e, '@'); at > 0 {
-			return e[:at]
-		}
-		return e
-	}
-	return ""
-}
-
-// peerDisplayNamesBatch resolves peer_display_name for many threads with at most one
-// GetBooking per distinct venue_booking ref_id, one GetVenue per distinct venue_id (guest view only),
-// one GetMasterBooking per distinct master_booking ref_id, one GetUser per distinct user id needed.
-func (h *ChatHandler) peerDisplayNamesBatch(ctx context.Context, viewerID string, threads []*chatv1.ChatThread) map[string]string {
+// peerDisplayNamesBatch resolves peer_display_name for many threads in at most 4 RPC
+// round-trips regardless of the number of threads:
+//  1. GetBookingsBatch  — all distinct venue_booking ref_ids (one call)
+//  2. GetVenuesBatch    — all venue_ids where the viewer is the guest and venue_name
+//     was not stored on the booking (one call, may be empty)
+//  3. GetMasterBookingsBatch — all distinct master_booking ref_ids (one call)
+//  4. GetUsersBatch     — all user_ids that need display names (one call)
+func (h *chatThreadResolver) peerDisplayNamesBatch(ctx context.Context, viewerID string, threads []*chatv1.ChatThread) map[string]string {
 	out := make(map[string]string, len(threads))
 	if len(threads) == 0 || h == nil {
 		return out
 	}
 
+	// ── Collect distinct ref_ids per kind ─────────────────────────────────────
 	venueRefsUnique := make([]string, 0)
 	seenVenueRef := make(map[string]struct{}, len(threads))
 	masterRefsUnique := make([]string, 0)
@@ -55,70 +40,78 @@ func (h *ChatHandler) peerDisplayNamesBatch(ctx context.Context, viewerID string
 		}
 		switch strings.TrimSpace(t.GetKind()) {
 		case "venue_booking":
-			if _, ok := seenVenueRef[ref]; ok {
-				continue
+			if _, ok := seenVenueRef[ref]; !ok {
+				seenVenueRef[ref] = struct{}{}
+				venueRefsUnique = append(venueRefsUnique, ref)
 			}
-			seenVenueRef[ref] = struct{}{}
-			venueRefsUnique = append(venueRefsUnique, ref)
 		case "master_booking":
-			if _, ok := seenMasterRef[ref]; ok {
-				continue
+			if _, ok := seenMasterRef[ref]; !ok {
+				seenMasterRef[ref] = struct{}{}
+				masterRefsUnique = append(masterRefsUnique, ref)
 			}
-			seenMasterRef[ref] = struct{}{}
-			masterRefsUnique = append(masterRefsUnique, ref)
 		}
 	}
 
+	// ── Round-trip 1: GetBookingsBatch ────────────────────────────────────────
 	bookingByRef := make(map[string]*bookingv1.BookingResponse, len(venueRefsUnique))
-	if h.booking != nil {
-		for _, ref := range venueRefsUnique {
-			b, err := h.booking.GetBooking(ctx, &bookingv1.GetBookingRequest{Id: ref})
-			if err != nil || b == nil {
-				continue
+	if h.booking != nil && len(venueRefsUnique) > 0 {
+		resp, err := h.booking.GetBookingsBatch(ctx, &bookingv1.GetBookingsBatchRequest{Ids: venueRefsUnique})
+		if err == nil && resp != nil {
+			for id, b := range resp.GetBookings() {
+				if b != nil {
+					bookingByRef[id] = b
+				}
 			}
-			bookingByRef[ref] = b
 		}
 	}
 
-	// Гостю по брони нужно название заведения; владельцу/CRM — имя клиента (GetUser), не карточка venue.
-	venueIDsNeedingName := make(map[string]struct{})
+	// ── Round-trip 2: GetVenuesBatch (guest view only, when venue_name absent) ─
+	venueIDsNeedingName := make([]string, 0)
+	seenVenueID := make(map[string]struct{})
 	for _, b := range bookingByRef {
 		clientID := strings.TrimSpace(b.GetUserId())
 		if !sameUserID(viewerID, clientID) {
-			continue
+			continue // owner side: will use user name, not venue card
 		}
 		if strings.TrimSpace(b.GetVenueName()) != "" {
-			continue
+			continue // venue_name already stored on booking — no extra fetch needed
 		}
 		if vid := strings.TrimSpace(b.GetVenueId()); vid != "" {
-			venueIDsNeedingName[vid] = struct{}{}
+			if _, ok := seenVenueID[vid]; !ok {
+				seenVenueID[vid] = struct{}{}
+				venueIDsNeedingName = append(venueIDsNeedingName, vid)
+			}
 		}
 	}
 	venueNameByID := make(map[string]string, len(venueIDsNeedingName))
-	if h.venue != nil {
-		for vid := range venueIDsNeedingName {
-			v, err := h.venue.GetVenue(ctx, &venuev1.GetVenueRequest{Id: vid})
-			if err != nil || v == nil {
-				continue
+	if h.venue != nil && len(venueIDsNeedingName) > 0 {
+		resp, err := h.venue.GetVenuesBatch(ctx, &venuev1.GetVenuesBatchRequest{Ids: venueIDsNeedingName})
+		if err == nil && resp != nil {
+			for id, v := range resp.GetVenues() {
+				if v != nil {
+					venueNameByID[id] = strings.TrimSpace(v.GetName())
+				}
 			}
-			venueNameByID[vid] = strings.TrimSpace(v.GetName())
 		}
 	}
 
+	// ── Round-trip 3: GetMasterBookingsBatch ──────────────────────────────────
 	masterBkByRef := make(map[string]*masterv1.MasterBooking, len(masterRefsUnique))
-	if h.master != nil {
-		for _, ref := range masterRefsUnique {
-			mb, err := h.master.GetMasterBooking(ctx, &masterv1.GetMasterBookingRequest{
-				BookingId:   ref,
-				ActorUserId: viewerID,
-			})
-			if err != nil || mb.GetBooking() == nil {
-				continue
+	if h.master != nil && len(masterRefsUnique) > 0 {
+		resp, err := h.master.GetMasterBookingsBatch(ctx, &masterv1.GetMasterBookingsBatchRequest{
+			BookingIds:  masterRefsUnique,
+			ActorUserId: viewerID,
+		})
+		if err == nil && resp != nil {
+			for id, bk := range resp.GetBookings() {
+				if bk != nil {
+					masterBkByRef[id] = bk
+				}
 			}
-			masterBkByRef[ref] = mb.GetBooking()
 		}
 	}
 
+	// ── Collect all user IDs → Round-trip 4: GetUsersBatch ───────────────────
 	userIDs := make(map[string]struct{})
 	for _, b := range bookingByRef {
 		cid := strings.TrimSpace(b.GetUserId())
@@ -135,13 +128,33 @@ func (h *ChatHandler) peerDisplayNamesBatch(ctx context.Context, viewerID string
 			userIDs[id] = struct{}{}
 		}
 	}
+
 	userNameByID := make(map[string]string, len(userIDs))
-	if h.users != nil {
+	if h.users != nil && len(userIDs) > 0 {
+		ids := make([]string, 0, len(userIDs))
 		for uid := range userIDs {
-			userNameByID[uid] = userDisplayName(ctx, h.users, uid)
+			ids = append(ids, uid)
+		}
+		batchResp, err := h.users.GetUsersBatch(ctx, &userv1.GetUsersBatchRequest{Ids: ids})
+		if err == nil && batchResp != nil {
+			for uid, u := range batchResp.GetUsers() {
+				if u == nil {
+					continue
+				}
+				if n := strings.TrimSpace(u.GetName()); n != "" {
+					userNameByID[uid] = n
+				} else if e := strings.TrimSpace(u.GetEmail()); e != "" {
+					if at := strings.IndexByte(e, '@'); at > 0 {
+						userNameByID[uid] = e[:at]
+					} else {
+						userNameByID[uid] = e
+					}
+				}
+			}
 		}
 	}
 
+	// ── Assemble output ───────────────────────────────────────────────────────
 	for _, t := range threads {
 		if t == nil {
 			continue
@@ -159,16 +172,17 @@ func (h *ChatHandler) peerDisplayNamesBatch(ctx context.Context, viewerID string
 			}
 			clientID := strings.TrimSpace(b.GetUserId())
 			if sameUserID(viewerID, clientID) {
+				// viewer is the guest: show venue name
 				if n := strings.TrimSpace(b.GetVenueName()); n != "" {
 					out[threadID] = n
 					continue
 				}
-				vid := strings.TrimSpace(b.GetVenueId())
-				if n := venueNameByID[vid]; n != "" {
+				if n := venueNameByID[strings.TrimSpace(b.GetVenueId())]; n != "" {
 					out[threadID] = n
 				}
 				continue
 			}
+			// viewer is the owner/CRM: show client name
 			if h.users == nil {
 				continue
 			}

@@ -26,31 +26,34 @@ type bookingEvent struct {
 }
 
 func (p *Publisher) PublishBookingCreated(ctx context.Context, b *domain.Booking) error {
-	return p.publish("booking.created", b)
+	return p.publish(ctx, "booking.created", b)
 }
 
 func (p *Publisher) PublishBookingConfirmed(ctx context.Context, b *domain.Booking) error {
-	return p.publish("booking.confirmed", b)
+	return p.publish(ctx, "booking.confirmed", b)
 }
 
 func (p *Publisher) PublishBookingCancelled(ctx context.Context, b *domain.Booking) error {
-	return p.publish("booking.cancelled", b)
+	return p.publish(ctx, "booking.cancelled", b)
 }
 
 func (p *Publisher) PublishBookingCompleted(ctx context.Context, b *domain.Booking) error {
-	return p.publish("booking.completed", b)
+	return p.publish(ctx, "booking.completed", b)
 }
 
-func (p *Publisher) publish(subject string, b *domain.Booking) error {
+// publish отправляет событие в JetStream синхронно, уважая дедлайн/отмену ctx.
+// nats.Context(ctx) позволяет js.PublishMsg вернуть ошибку немедленно если
+// контекст отменён или истёк — без зависания на залипшей шине.
+func (p *Publisher) publish(ctx context.Context, subject string, b *domain.Booking) error {
 	data, err := json.Marshal(bookingEvent{
 		BookingID: b.ID,
 		UserID:    b.UserID,
 		VenueID:   b.VenueID,
-		Status:    b.Status,
+		Status:    string(b.Status),
 	})
 	if err != nil {
 		return fmt.Errorf("marshal event: %w", err)
 	}
-	_, err = p.js.Publish(subject, data)
+	_, err = p.js.PublishMsg(&nats.Msg{Subject: subject, Data: data}, nats.Context(ctx))
 	return err
 }

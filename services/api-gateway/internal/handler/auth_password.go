@@ -23,10 +23,7 @@ type completePasswordResetRequest struct {
 
 func (h *AuthHandler) ForgotPassword(w http.ResponseWriter, r *http.Request) {
 	var req forgotPasswordRequest
-	if err := readJSON(r, &req); err != nil {
-		writeCatalog(w, apicatalog.GatewayRequestInvalidBody)
-		return
-	}
+	if !readJSONOrRespond(w, r, &req) { return }
 	if strings.TrimSpace(req.Email) == "" {
 		writeCatalog(w, apicatalog.GatewayRequestEmailRequired)
 		return
@@ -47,10 +44,7 @@ func (h *AuthHandler) ForgotPassword(w http.ResponseWriter, r *http.Request) {
 
 func (h *AuthHandler) ResetPassword(w http.ResponseWriter, r *http.Request) {
 	var req completePasswordResetRequest
-	if err := readJSON(r, &req); err != nil {
-		writeCatalog(w, apicatalog.GatewayRequestInvalidBody)
-		return
-	}
+	if !readJSONOrRespond(w, r, &req) { return }
 	if strings.TrimSpace(req.Token) == "" || strings.TrimSpace(req.NewPassword) == "" {
 		writeCatalog(w, apicatalog.GatewayRequestInvalidBody)
 		return

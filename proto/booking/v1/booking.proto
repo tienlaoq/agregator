@@ -9,6 +9,7 @@ import "google/protobuf/timestamp.proto";
 service BookingService {
   rpc CreateBooking(CreateBookingRequest) returns (BookingResponse);
   rpc GetBooking(GetBookingRequest) returns (BookingResponse);
+  rpc GetBookingsBatch(GetBookingsBatchRequest) returns (GetBookingsBatchResponse);
   rpc ListUserBookings(ListUserBookingsRequest) returns (ListBookingsResponse);
   rpc ListVenueBookings(ListVenueBookingsRequest) returns (ListBookingsResponse);
   rpc CancelBooking(CancelBookingRequest) returns (BookingResponse);
@@ -58,6 +59,17 @@ message GetBookingRequest {
   string id = 1;
 }
 
+// GetBookingsBatch fetches multiple bookings by id in a single round-trip.
+// Unknown ids are silently omitted from the response map.
+message GetBookingsBatchRequest {
+  repeated string ids = 1;
+}
+
+message GetBookingsBatchResponse {
+  // bookings is keyed by booking id.
+  map<string, BookingResponse> bookings = 1;
+}
+
 message ListUserBookingsRequest {
   string user_id = 1;
   string status = 2;
@@ -73,11 +85,17 @@ message ListVenueBookingsRequest {
   string date = 4;
   int32 page = 5;
   int32 page_size = 6;
+  // Keyset cursor for CRM pagination: opaque token returned as next_cursor.
+  // When set, page/page_size are ignored and keyset seek is used instead.
+  string cursor = 7;
 }
 
 message ListBookingsResponse {
   repeated BookingResponse bookings = 1;
   int32 total = 2;
+  // next_cursor is non-empty when there is a next page (keyset pagination).
+  // Pass as cursor in the next ListVenueBookingsRequest.
+  string next_cursor = 3;
 }
 
 message CancelBookingRequest {

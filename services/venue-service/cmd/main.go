@@ -7,8 +7,12 @@ import (
 	"os/signal"
 	"path/filepath"
 	"syscall"
+	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/health"
+	"google.golang.org/grpc/health/grpc_health_v1"
+	"google.golang.org/grpc/reflection"
 
 	venuev1 "github.com/tienlao/agregator/gen/go/venue/v1"
 	"github.com/tienlao/agregator/pkg/grpcutil"
@@ -18,8 +22,8 @@ import (
 	pkgredis "github.com/tienlao/agregator/pkg/redis"
 
 	"github.com/tienlao/agregator/services/venue-service/config"
-	delivery "github.com/tienlao/agregator/services/venue-service/internal/delivery/grpc"
 	"github.com/tienlao/agregator/services/venue-service/internal/dbmigrate"
+	delivery "github.com/tienlao/agregator/services/venue-service/internal/delivery/grpc"
 	"github.com/tienlao/agregator/services/venue-service/internal/events"
 	"github.com/tienlao/agregator/services/venue-service/internal/repository"
 	"github.com/tienlao/agregator/services/venue-service/internal/telegram"
@@ -67,8 +71,15 @@ func main() {
 		log.Fatal().Err(err).Msg("failed to ensure VENUES stream")
 	}
 
+	if os.Getenv("FRONTEND_URL") == "" {
+		log.Warn().Msg("FRONTEND_URL not set: generated links (notifications, admin) will be broken")
+	}
+
 	repo := repository.NewVenueRepo(pgPool)
-	uc := usecase.NewVenueUseCase(repo, rdb)
+	uc := usecase.NewVenueUseCaseWithConfig(repo, rdb, log, usecase.Config{
+		VenueCacheTTL:  cfg.VenueCacheTTL,
+		SearchCacheTTL: cfg.SearchCacheTTL,
+	})
 	publisher := events.NewPublisher(js)
 	tgNotifier := telegram.NewNotifier(
 		os.Getenv("TELEGRAM_BOT_TOKEN"),
@@ -79,25 +90,75 @@ func main() {
 		log.Warn().Msg("Telegram notifications disabled: set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID (e.g. in deploy/.env)")
 	}
 
-	grpcServer := grpc.NewServer(grpcutil.ServerOptions()...)
+	srvOpts, err := grpcutil.ServerOptionsFromEnv()
+	if err != nil {
+		log.Fatal().Err(err).Msg("gRPC server transport config error")
+	}
+	srvOpts = append(srvOpts, grpc.ChainUnaryInterceptor(
+		grpcutil.SafePgErrorUnaryInterceptor(),
+	))
+	grpcServer := grpc.NewServer(srvOpts...)
 	venuev1.RegisterVenueServiceServer(grpcServer, delivery.NewServer(uc, publisher, tgNotifier, log))
+
+	healthSrv := health.NewServer()
+	grpc_health_v1.RegisterHealthServer(grpcServer, healthSrv)
+	healthSrv.SetServingStatus("", grpc_health_v1.HealthCheckResponse_NOT_SERVING)
+
+	const pingTimeout = 3 * time.Second
+
+	go func() {
+		const interval = 10 * time.Second
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				healthSrv.SetServingStatus("", grpc_health_v1.HealthCheckResponse_NOT_SERVING)
+				return
+			case <-ticker.C:
+				pingCtx, pingCancel := context.WithTimeout(ctx, pingTimeout)
+				err := pgPool.Ping(pingCtx)
+				pingCancel()
+				if err != nil {
+					log.Warn().Err(err).Msg("health: postgres ping failed, marking NOT_SERVING")
+					healthSrv.SetServingStatus("", grpc_health_v1.HealthCheckResponse_NOT_SERVING)
+				} else {
+					healthSrv.SetServingStatus("", grpc_health_v1.HealthCheckResponse_SERVING)
+				}
+			}
+		}
+	}()
+
+	initPingCtx, initPingCancel := context.WithTimeout(ctx, pingTimeout)
+	if err := pgPool.Ping(initPingCtx); err != nil {
+		log.Warn().Err(err).Msg("health: initial postgres ping failed, starting NOT_SERVING")
+	} else {
+		healthSrv.SetServingStatus("", grpc_health_v1.HealthCheckResponse_SERVING)
+	}
+	initPingCancel()
+
+	reflection.Register(grpcServer)
 
 	lis, err := net.Listen("tcp", ":"+cfg.GRPCPort)
 	if err != nil {
 		log.Fatal().Err(err).Msg("failed to listen")
 	}
 
+	serveErr := make(chan error, 1)
 	go func() {
 		log.Info().Str("port", cfg.GRPCPort).Msg("gRPC server starting")
-		if err := grpcServer.Serve(lis); err != nil {
-			log.Fatal().Err(err).Msg("gRPC server failed")
-		}
+		serveErr <- grpcServer.Serve(lis)
 	}()
 
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-	sig := <-quit
-	log.Info().Str("signal", sig.String()).Msg("shutting down")
+
+	select {
+	case sig := <-quit:
+		log.Info().Str("signal", sig.String()).Msg("shutting down")
+	case err := <-serveErr:
+		log.Error().Err(err).Msg("gRPC server exited")
+	}
 
 	grpcServer.GracefulStop()
 	cancel()

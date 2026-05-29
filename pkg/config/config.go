@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"time"
 )
 
 func GetEnv(key, fallback string) string {
@@ -18,6 +19,17 @@ func GetEnvInt(key string, fallback int) int {
 	if val := os.Getenv(key); val != "" {
 		if i, err := strconv.Atoi(val); err == nil {
 			return i
+		}
+	}
+	return fallback
+}
+
+// GetEnvDuration reads key as a time.Duration string (e.g. "15m", "1h").
+// Returns fallback on missing or unparseable values.
+func GetEnvDuration(key string, fallback time.Duration) time.Duration {
+	if val := os.Getenv(key); val != "" {
+		if d, err := time.ParseDuration(val); err == nil && d > 0 {
+			return d
 		}
 	}
 	return fallback

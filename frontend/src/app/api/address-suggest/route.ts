@@ -1,9 +1,13 @@
 import { NextRequest, NextResponse } from "next/server"
 import { isStreetSuggestReady } from "@/lib/address-suggest-rules"
+import { RateLimiter, getClientIp } from "@/lib/rate-limit"
 
 const MAX_CITY_LEN = 120
 const MAX_STREET_LEN = 200
 const NOMINATIM = "https://nominatim.openstreetmap.org/search"
+
+// 30 запросов в минуту на IP — достаточно для автодополнения при наборе.
+const limiter = new RateLimiter({ maxRequests: 30, windowMs: 60_000 })
 
 function formatHit(addr: Record<string, string | undefined>): string | null {
   const road =
@@ -40,6 +44,14 @@ function cityMatches(selected: string, hitCity: string): boolean {
 }
 
 export async function GET(req: NextRequest) {
+  const ip = getClientIp(req.headers)
+  if (!limiter.check(ip)) {
+    return NextResponse.json(
+      { suggestions: [] as string[], error: "rate_limited" },
+      { status: 429, headers: { "Retry-After": "60" } },
+    )
+  }
+
   const city = req.nextUrl.searchParams.get("city")?.trim() ?? ""
   const street = req.nextUrl.searchParams.get("street")?.trim() ?? ""
 

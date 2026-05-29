@@ -1,12 +1,14 @@
 import Link from "next/link"
 import { Flame } from "lucide-react"
+import { SEO_CITY_HUBS } from "@/lib/seo-city-hubs"
+
+const footerCities = SEO_CITY_HUBS.slice(0, 8)
 
 export function Footer() {
   return (
     <footer className="border-t border-border bg-card py-12">
       <div className="container mx-auto px-4">
         <div className="grid gap-8 md:grid-cols-4">
-          {/* Logo & Description */}
           <div className="md:col-span-1">
             <Link href="/" className="mb-4 flex items-center gap-2">
               <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary">
@@ -15,22 +17,21 @@ export function Footer() {
               <span className="text-xl font-bold text-card-foreground">БаняГид</span>
             </Link>
             <p className="text-sm text-muted-foreground">
-              Агрегатор бань и саун России. Найди идеальное место для отдыха и релаксации.
+              Каталог бань и саун с отзывами и онлайн-бронированием. Подборки по городам и типу парения.
             </p>
           </div>
 
-          {/* Navigation */}
           <div>
             <h4 className="mb-4 font-semibold text-card-foreground">Навигация</h4>
             <ul className="space-y-2 text-sm">
               <li>
                 <Link href="/venues" className="text-muted-foreground transition-colors hover:text-foreground">
-                  Каталог
+                  Каталог заведений
                 </Link>
               </li>
               <li>
-                <Link href="/about" className="text-muted-foreground transition-colors hover:text-foreground">
-                  О нас
+                <Link href="/masters" className="text-muted-foreground transition-colors hover:text-foreground">
+                  Мастера
                 </Link>
               </li>
               <li>
@@ -38,53 +39,51 @@ export function Footer() {
                   Для владельцев
                 </Link>
               </li>
+              <li>
+                <Link href="/support" className="text-muted-foreground transition-colors hover:text-foreground">
+                  Поддержка
+                </Link>
+              </li>
             </ul>
           </div>
 
-          {/* Cities */}
           <div>
             <h4 className="mb-4 font-semibold text-card-foreground">Города</h4>
             <ul className="space-y-2 text-sm">
+              {footerCities.map((c) => (
+                <li key={c.slug}>
+                  <Link
+                    href={`/venues/city/${c.slug}`}
+                    className="text-muted-foreground transition-colors hover:text-foreground"
+                  >
+                    {c.name}
+                  </Link>
+                </li>
+              ))}
               <li>
-                <Link href="#" className="text-muted-foreground transition-colors hover:text-foreground">
-                  Москва
-                </Link>
-              </li>
-              <li>
-                <Link href="#" className="text-muted-foreground transition-colors hover:text-foreground">
-                  Санкт-Петербург
-                </Link>
-              </li>
-              <li>
-                <Link href="#" className="text-muted-foreground transition-colors hover:text-foreground">
-                  Казань
-                </Link>
-              </li>
-              <li>
-                <Link href="#" className="text-muted-foreground transition-colors hover:text-foreground">
-                  Новосибирск
+                <Link href="/venues" className="text-muted-foreground transition-colors hover:text-foreground">
+                  Все города в каталоге
                 </Link>
               </li>
             </ul>
           </div>
 
-          {/* Support */}
           <div>
-            <h4 className="mb-4 font-semibold text-card-foreground">Поддержка</h4>
+            <h4 className="mb-4 font-semibold text-card-foreground">Документы</h4>
             <ul className="space-y-2 text-sm">
               <li>
-                <Link href="#" className="text-muted-foreground transition-colors hover:text-foreground">
-                  Помощь
+                <Link href="/support" className="text-muted-foreground transition-colors hover:text-foreground">
+                  Помощь и контакты
                 </Link>
               </li>
               <li>
-                <Link href="#" className="text-muted-foreground transition-colors hover:text-foreground">
-                  Контакты
-                </Link>
-              </li>
-              <li>
-                <Link href="#" className="text-muted-foreground transition-colors hover:text-foreground">
+                <Link href="/privacy" className="text-muted-foreground transition-colors hover:text-foreground">
                   Политика конфиденциальности
+                </Link>
+              </li>
+              <li>
+                <Link href="/terms" className="text-muted-foreground transition-colors hover:text-foreground">
+                  Пользовательское соглашение
                 </Link>
               </li>
             </ul>

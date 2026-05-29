@@ -1,7 +1,7 @@
 "use client"
 
 import { Suspense, useEffect } from "react"
-import { useRouter, useSearchParams } from "next/navigation"
+import { useRouter } from "next/navigation"
 import { getProfile } from "@/lib/api"
 import { useAuthStore } from "@/store/auth"
 import { Flame } from "lucide-react"
@@ -22,34 +22,50 @@ export default function OAuthCallbackPage() {
   )
 }
 
+/**
+ * Reads the access_token from the URL fragment (#access_token=...).
+ *
+ * The gateway no longer puts tokens in query parameters to prevent them from
+ * appearing in proxy/CDN logs, Referer headers, and browser history:
+ *   - refresh_token → HttpOnly "banya_refresh" cookie (set by the gateway,
+ *     consumed by /api/auth/refresh; JS never sees it).
+ *   - access_token  → URL fragment (not sent to the server, not in Referer).
+ *
+ * Fragments are not available server-side, so this must be a Client Component
+ * that reads window.location.hash after mount.
+ */
 function CallbackHandler() {
   const router = useRouter()
-  const searchParams = useSearchParams()
   const authLogin = useAuthStore((s) => s.login)
 
   useEffect(() => {
-    const accessToken = searchParams.get("access_token")
-    const refreshToken = searchParams.get("refresh_token")
+    // Parse the fragment: "#access_token=<value>" → URLSearchParams
+    const fragment = window.location.hash.slice(1) // strip leading '#'
+    const params = new URLSearchParams(fragment)
+    const accessToken = params.get("access_token")
 
     if (!accessToken) {
       router.push("/auth/login?error=oauth_failed")
       return
     }
 
-    localStorage.setItem("token", accessToken)
-    if (refreshToken) {
-      localStorage.setItem("refresh_token", refreshToken)
-    }
+    // Clear the fragment from the address bar so the token is not visible in
+    // browser history entries created after this navigation.
+    window.history.replaceState(null, "", window.location.pathname)
 
+    // The refresh token was delivered as an HttpOnly cookie by the gateway.
+    // Pass an empty string to login() — it will still call /api/auth/set-refresh
+    // but with an empty body, which the route handler ignores (missing token → no-op).
+    // The cookie is already set; no further action is needed.
     getProfile()
       .then((user) => {
-        authLogin(accessToken, refreshToken || "", user)
+        authLogin(accessToken, "", user)
         router.push("/")
       })
       .catch(() => {
         router.push("/auth/login?error=profile_failed")
       })
-  }, [searchParams, authLogin, router])
+  }, [authLogin, router])
 
   return (
     <div className="flex min-h-[60vh] flex-col items-center justify-center gap-4">

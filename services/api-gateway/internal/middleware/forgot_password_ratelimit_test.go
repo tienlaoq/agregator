@@ -128,6 +128,39 @@ func TestForgotPasswordRateLimit_keyPrefixFromEnv(t *testing.T) {
 	require.Equal(t, "custom:forgot:10.10.10.10", gotKey)
 }
 
+// TestForgotPasswordRateLimit_xffDoesNotBypassLimit ensures that a client
+// cannot bypass the rate limit by rotating X-Forwarded-For values.
+// clientIP() reads only r.RemoteAddr; RealIP middleware is responsible for
+// sanitising XFF before this middleware runs.
+func TestForgotPasswordRateLimit_xffDoesNotBypassLimit(t *testing.T) {
+	t.Setenv("FORGOT_PASSWORD_RATE_LIMIT_MAX", "2")
+	t.Setenv("FORGOT_PASSWORD_RATE_LIMIT_WINDOW", "1h")
+
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
+	h := ForgotPasswordRateLimit(zerolog.Nop(), nil)(next)
+
+	makeReq := func(xff string) *http.Request {
+		r := httptest.NewRequest(http.MethodPost, "/api/v1/auth/forgot-password", nil)
+		r.RemoteAddr = "203.0.113.1:9999" // fixed RemoteAddr — the real identity
+		r.Header.Set("X-Forwarded-For", xff)
+		return r
+	}
+
+	// First two requests are within the limit.
+	rec1 := httptest.NewRecorder()
+	h.ServeHTTP(rec1, makeReq("10.10.10.10"))
+	assert.Equal(t, http.StatusOK, rec1.Code)
+
+	rec2 := httptest.NewRecorder()
+	h.ServeHTTP(rec2, makeReq("20.20.20.20"))
+	assert.Equal(t, http.StatusOK, rec2.Code)
+
+	// Third request: attacker rotates XFF to a "different" IP — must still be blocked.
+	rec3 := httptest.NewRecorder()
+	h.ServeHTTP(rec3, makeReq("99.99.99.99"))
+	assert.Equal(t, http.StatusTooManyRequests, rec3.Code, "rotating XFF must not bypass rate limit")
+}
+
 func TestForgotPasswordRateLimit_failClosed(t *testing.T) {
 	t.Setenv("FORGOT_PASSWORD_RATE_LIMIT_MAX", "1")
 	t.Setenv("FORGOT_PASSWORD_RATE_LIMIT_FAIL_OPEN", "false")

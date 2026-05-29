@@ -2,13 +2,19 @@ package usecase
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
+	"path"
+	"regexp"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
+	"github.com/rs/zerolog"
 	paymentv1 "github.com/tienlao/agregator/gen/go/payment/v1"
 	"google.golang.org/grpc"
 
@@ -17,63 +23,182 @@ import (
 	"github.com/tienlao/agregator/services/master-service/internal/domain"
 )
 
-type MasterRepo interface {
-	Insert(ctx context.Context, m *domain.Master) error
-	GetByUserID(ctx context.Context, userID uuid.UUID) (*domain.Master, error)
-	GetByID(ctx context.Context, id uuid.UUID) (*domain.Master, error)
-	GetBySlug(ctx context.Context, slug string) (*domain.Master, error)
-	UpdateProfile(ctx context.Context, m *domain.Master) error
-	UpdateStatus(ctx context.Context, masterID uuid.UUID, status, comment string, moderatedBy *uuid.UUID) error
-	ListByStatus(ctx context.Context, statusFilter string, limit, offset int32) ([]domain.Master, int32, error)
-	ListPublic(ctx context.Context, params domain.ListPublicMastersParams) ([]domain.Master, int32, error)
-	ReplaceServices(ctx context.Context, masterID uuid.UUID, items []domain.MasterServiceUpsert) error
-	InsertModerationHistory(ctx context.Context, e *domain.ModerationHistoryEntry) error
-	ListModerationHistory(ctx context.Context, masterID uuid.UUID, limit int32) ([]domain.ModerationHistoryEntry, error)
-	InsertBooking(ctx context.Context, b *domain.MasterBooking) error
-	GetBookingByID(ctx context.Context, bookingID uuid.UUID) (*domain.MasterBooking, error)
-	GetBookingByPaymentID(ctx context.Context, paymentID string) (*domain.MasterBooking, error)
-	SetBookingPayment(ctx context.Context, bookingID uuid.UUID, paymentID, paymentURL string, totalPrice int64, status string) error
-	ListBookingsByMaster(ctx context.Context, masterID uuid.UUID, statusFilter string) ([]domain.MasterBooking, error)
-	ListBookingsByClient(ctx context.Context, clientUserID uuid.UUID, statusFilter string) ([]domain.MasterBooking, error)
-	UpdateBookingStatus(ctx context.Context, bookingID uuid.UUID, status string) error
-	HasCompletedBookingByClientMaster(ctx context.Context, clientUserID, masterID uuid.UUID) (bool, error)
-	NewSlug(ctx context.Context, displayName string) (string, error)
-
-	CountPhotosByMaster(ctx context.Context, masterID uuid.UUID) (int32, error)
-	AddMasterPhoto(ctx context.Context, masterID uuid.UUID, url string) (*domain.MasterPhoto, error)
-	DeleteMasterPhoto(ctx context.Context, masterID, photoID uuid.UUID) (deletedURL string, err error)
-	SetMasterCoverPhoto(ctx context.Context, masterID, photoID uuid.UUID) error
-}
-
 type MasterUseCase struct {
-	repo          MasterRepo
+	repo          domain.MasterRepository
 	paymentClient paymentGatewayClient
+	log           zerolog.Logger
 }
 
 type paymentGatewayClient interface {
 	CreatePayment(ctx context.Context, in *paymentv1.CreatePaymentRequest, opts ...grpc.CallOption) (*paymentv1.PaymentResponse, error)
 }
 
-func NewMasterUseCase(repo MasterRepo, paymentClient paymentGatewayClient) *MasterUseCase {
-	return &MasterUseCase{repo: repo, paymentClient: paymentClient}
-}
-
-const maxMasterPhotos int32 = 12
-
-func masterPhotoURLPrefix(masterID uuid.UUID) string {
-	return fmt.Sprintf("/api/v1/uploads/masters/%s/", masterID.String())
-}
-
-func validateMasterPhotoURL(masterID uuid.UUID, url string) error {
-	url = strings.TrimSpace(url)
-	if url == "" || strings.Contains(url, "..") {
-		return fmt.Errorf("invalid photo url")
+// NewMasterUseCase constructs a MasterUseCase. paymentClient must be non-nil;
+// a nil payment client is a programmer error and panics at startup rather than
+// surfacing as a runtime error deep inside CreateBooking.
+func NewMasterUseCase(repo domain.MasterRepository, paymentClient paymentGatewayClient, log zerolog.Logger) *MasterUseCase {
+	if paymentClient == nil {
+		panic("NewMasterUseCase: paymentClient must not be nil")
 	}
-	want := masterPhotoURLPrefix(masterID)
-	if !strings.HasPrefix(url, want) {
-		return fmt.Errorf("photo url must be under master upload path")
+	return &MasterUseCase{repo: repo, paymentClient: paymentClient, log: log}
+}
+
+// maxMasterPhotos moved to domain.MaxMasterPhotos so the repo and usecase
+// share the same value; the limit is now enforced inside the repo transaction.
+
+// masterPhotoKeyRe matches the storage object key for a master photo after the
+// key is extracted from the public URL and cleaned.
+// Format: masters/<masterID>/<filename>
+// Filename may contain letters, digits, dots, underscores and hyphens only —
+// no path separators, no percent signs, no unicode tricks.
+var masterPhotoKeyRe = regexp.MustCompile(`^masters/[0-9a-f-]{36}/[a-zA-Z0-9._-]+$`)
+
+// extractMasterPhotoKey extracts the storage object key from a public URL
+// produced by either DiskUploader or MinioUploader:
+//
+//	"/api/v1/uploads/masters/<id>/photo.jpg" → "masters/<id>/photo.jpg"
+//	"https://cdn.example.com/photos/masters/<id>/photo.jpg" → "masters/<id>/photo.jpg"
+//
+// The URL path is parsed structurally by splitting on "/" and locating the
+// first "masters" segment. This avoids LastIndex ambiguity where a crafted URL
+// with multiple "/masters/" occurrences could cause key extraction to start
+// from the wrong (attacker-controlled) segment.
+//
+// Only exactly two segments after "masters" are captured (UUID + filename),
+// so any trailing path components are silently dropped rather than passed
+// through to the regexp and prefix checks.
+//
+// Returns ("", false) if the URL is unparseable or does not contain a
+// "masters" segment followed by at least two more segments.
+func extractMasterPhotoKey(rawURL string) (string, bool) {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return "", false
+	}
+	// Operate on the URL path only — ignore scheme, host, query, fragment.
+	// path.Clean normalises duplicate slashes and dots before splitting.
+	segments := strings.Split(strings.Trim(path.Clean(parsed.Path), "/"), "/")
+	for i, seg := range segments {
+		if seg == "masters" && i+2 < len(segments) {
+			// Take exactly three segments: "masters", UUID, filename.
+			// Joining only these prevents trailing path components from
+			// leaking through to subsequent validation steps.
+			return "masters/" + segments[i+1] + "/" + segments[i+2], true
+		}
+	}
+	return "", false
+}
+
+// validateMasterServices checks the service list supplied to ReplaceServices
+// before it reaches the repository. Limits are defined as domain constants so
+// the DB CHECK constraints (migration 016) and the application layer stay in
+// sync automatically.
+func validateMasterServices(items []domain.MasterServiceUpsert) error {
+	if int32(len(items)) > domain.MaxServicesPerMaster {
+		return pkgerrors.InvalidArgument(fmt.Sprintf(
+			"too many services: %d provided, max %d", len(items), domain.MaxServicesPerMaster,
+		))
+	}
+	for i, it := range items {
+		name := strings.TrimSpace(it.Name)
+		if name == "" {
+			return pkgerrors.InvalidArgument(fmt.Sprintf("service[%d]: name is required", i))
+		}
+		if len([]rune(name)) > domain.MaxServiceName {
+			return pkgerrors.InvalidArgument(fmt.Sprintf(
+				"service[%d]: name exceeds %d characters", i, domain.MaxServiceName,
+			))
+		}
+		if len([]rune(strings.TrimSpace(it.Description))) > domain.MaxServiceDescription {
+			return pkgerrors.InvalidArgument(fmt.Sprintf(
+				"service[%d]: description exceeds %d characters", i, domain.MaxServiceDescription,
+			))
+		}
+		if it.DurationMin < 0 {
+			return pkgerrors.InvalidArgument(fmt.Sprintf("service[%d]: duration_min must be non-negative", i))
+		}
+		if it.Price < 0 {
+			return pkgerrors.InvalidArgument(fmt.Sprintf("service[%d]: price must be non-negative", i))
+		}
 	}
 	return nil
+}
+
+// normalizeMasterPhotoURL validates rawURL and returns a canonical URL that
+// should be persisted. The caller must use the returned value — not rawURL —
+// so that percent-encoding, double-slashes, and query strings are stripped
+// before the URL reaches the database.
+//
+// Canonicalisation steps:
+//  1. Parse the URL to separate scheme+host from path.
+//  2. Extract the storage key via structural path segment matching
+//     (extractMasterPhotoKey), which takes the first "masters" segment and
+//     exactly two following segments — preventing double-marker attacks.
+//  3. URL-decode the key to catch %2e%2e / %2f / %5c variants.
+//  4. path.Clean to collapse any remaining ".." or duplicate slashes.
+//  5. Allowlist regexp: ^masters/<uuid>/<safe-filename>$.
+//  6. Owner check: cleaned key must start with "masters/<masterID>/".
+//  7. Reconstruct a clean URL: scheme://host/<path-prefix>/<cleaned-key>.
+//     rawURL is never stored; only the reconstructed canonical form is.
+func normalizeMasterPhotoURL(masterID uuid.UUID, rawURL string) (string, error) {
+	rawURL = strings.TrimSpace(rawURL)
+	if rawURL == "" {
+		return "", fmt.Errorf("photo url is empty")
+	}
+
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return "", fmt.Errorf("photo url is not a valid URL")
+	}
+
+	key, ok := extractMasterPhotoKey(rawURL)
+	if !ok {
+		return "", fmt.Errorf("photo url does not contain a master upload path")
+	}
+
+	// URL-decode to normalise %2e%2e, %2f, %5c and similar before cleaning.
+	decoded, err := url.PathUnescape(key)
+	if err != nil {
+		return "", fmt.Errorf("photo url contains invalid percent-encoding")
+	}
+
+	// path.Clean collapses "..", ".", duplicate slashes so that any residual
+	// traversal sequences become a non-matching string before the regexp check.
+	cleaned := path.Clean(decoded)
+
+	// Strict allowlist: masters/<uuid>/<safe-filename-no-slashes>
+	if !masterPhotoKeyRe.MatchString(cleaned) {
+		return "", fmt.Errorf("photo url has invalid format")
+	}
+
+	// Verify the key belongs to this master specifically (not another master's directory).
+	expectedPrefix := "masters/" + masterID.String() + "/"
+	if !strings.HasPrefix(cleaned, expectedPrefix) {
+		return "", fmt.Errorf("photo url does not belong to this master")
+	}
+
+	// Reconstruct a canonical URL from the verified, cleaned key.
+	// This strips query strings, fragments, double-slashes, and any
+	// percent-encoding from what gets stored in the database.
+	//
+	// For relative URLs (no host): path only, e.g. "/api/v1/uploads/masters/<id>/photo.jpg".
+	// For absolute URLs (with host): preserve scheme+host, e.g. "https://cdn.example.com/masters/<id>/photo.jpg".
+	//
+	// Path prefix: everything in the original cleaned path up to (but not
+	// including) the "masters/" segment, so the public URL shape is preserved.
+	origCleanPath := path.Clean(parsed.Path)
+	mastersIdx := strings.Index(origCleanPath, "/masters/")
+	var canonicalURL string
+	if mastersIdx >= 0 {
+		prefix := origCleanPath[:mastersIdx]
+		canonicalURL = prefix + "/" + cleaned
+	} else {
+		canonicalURL = "/" + cleaned
+	}
+	if parsed.Host != "" {
+		canonicalURL = parsed.Scheme + "://" + parsed.Host + canonicalURL
+	}
+	return canonicalURL, nil
 }
 
 func (uc *MasterUseCase) CreateMyProfile(ctx context.Context, userID uuid.UUID, displayName string) (*domain.Master, error) {
@@ -88,32 +213,52 @@ func (uc *MasterUseCase) CreateMyProfile(ctx context.Context, userID uuid.UUID, 
 	if existing != nil {
 		return nil, pkgerrors.AlreadyExists("master profile already exists")
 	}
-	slug, err := uc.repo.NewSlug(ctx, displayName)
-	if err != nil {
-		return nil, err
-	}
+	// Build the master record and insert it. NewSlug produces a candidate slug
+	// using crypto/rand; if a concurrent insert wins the UNIQUE constraint race
+	// the repo returns ErrSlugConflict and we retry with a fresh candidate.
+	// Three attempts are sufficient: the probability of three consecutive
+	// collisions with a 32-bit random suffix is negligibly small in practice.
+	const maxSlugAttempts = 3
 	m := &domain.Master{
 		ID:                       uuid.New(),
 		UserID:                   userID,
-		Slug:                     slug,
 		DisplayName:              displayName,
 		Bio:                      "",
 		Phone:                    "",
 		City:                     "",
 		WorkFormat:               domain.WorkFormatBoth,
 		Specializations:          []string{},
+		TravelExcludeZones:       []domain.MasterTravelExcludeZone{},
+		Services:                 []domain.MasterService{},
+		Photos:                   []domain.MasterPhoto{},
 		Status:                   domain.StatusDraft,
 		AvailabilityJSON:         "{}",
 		PayoutVerificationStatus: domain.PayoutVerificationUnverified,
 	}
-	if err := uc.repo.Insert(ctx, m); err != nil {
-		return nil, err
+	var insertErr error
+	for i := 0; i < maxSlugAttempts; i++ {
+		s, err := uc.repo.NewSlug(ctx, displayName, userID)
+		if err != nil {
+			return nil, err
+		}
+		m.Slug = s
+		insertErr = uc.repo.Insert(ctx, m)
+		if !errors.Is(insertErr, domain.ErrSlugConflict) {
+			break
+		}
 	}
-	out, err := uc.repo.GetByUserID(ctx, userID)
-	if err != nil {
-		return nil, err
+	if insertErr != nil {
+		// A concurrent CreateMyProfile for the same userID won the race between
+		// GetByUserID and Insert. Surface as AlreadyExists — same as the pre-check
+		// path — so the client gets a clean 6/AlreadyExists rather than a 5xx.
+		if errors.Is(insertErr, domain.ErrUserProfileExists) {
+			return nil, pkgerrors.AlreadyExists("master profile already exists")
+		}
+		return nil, insertErr
 	}
-	return out, nil
+	// Insert writes back CreatedAt/UpdatedAt via RETURNING — no round-trip needed.
+	// Services and Photos are empty slices: a freshly created profile has none.
+	return m, nil
 }
 
 type UpdateMasterInput struct {
@@ -163,10 +308,33 @@ func (uc *MasterUseCase) UpdateMyProfile(ctx context.Context, userID uuid.UUID, 
 		m.Bio = strings.TrimSpace(*in.Bio)
 	}
 	if in.Phone != nil {
-		m.Phone = strings.TrimSpace(*in.Phone)
+		normalized := normalizeRussianMobileDigits(*in.Phone)
+		if strings.TrimSpace(*in.Phone) == "" {
+			// Explicit empty string: refuse to clear a phone that was already set.
+			// Allowing silent erasure would leave the profile in a state where
+			// SubmitForReview fails with an opaque "укажите телефон" error and the
+			// user has no idea why — they just "cleared" a field in the UI.
+			// If a phone genuinely needs to be replaced, the client must supply
+			// the new number in the same request; clearing without a replacement
+			// is never a valid operation on an existing profile.
+			if m.Phone != "" {
+				return nil, pkgerrors.InvalidArgument("нельзя удалить номер телефона — укажите новый номер")
+			}
+			// Phone was already empty (fresh profile, no phone set yet): allow
+			// the no-op so partial profile saves work without error.
+		} else if normalized == "" {
+			// Non-empty input that produced no digits — malformed number.
+			return nil, pkgerrors.InvalidArgument("укажите полный номер телефона в формате +7 (999) 123-45-67")
+		} else {
+			m.Phone = normalized
+		}
 	}
 	if in.City != nil {
-		m.City = strings.TrimSpace(*in.City)
+		// Normalise to lowercase so the city column can be compared with plain
+		// equality (m.city = ANY($n)) and the existing idx_masters_city B-Tree
+		// index is usable. The LOWER(TRIM(...)) applied at read-time in the old
+		// filter is no longer needed once all writes go through this path.
+		m.City = strings.ToLower(strings.TrimSpace(*in.City))
 	}
 	if in.WorkFormat != nil {
 		wf := strings.TrimSpace(*in.WorkFormat)
@@ -189,6 +357,16 @@ func (uc *MasterUseCase) UpdateMyProfile(ctx context.Context, userID uuid.UUID, 
 		m.ExperienceYears = *in.ExperienceYears
 	}
 	if in.ApplySpecializations {
+		if len(in.Specializations) > domain.MaxSpecializations {
+			return nil, pkgerrors.InvalidArgument(fmt.Sprintf(
+				"specializations must not exceed %d items", domain.MaxSpecializations))
+		}
+		for _, s := range in.Specializations {
+			if len([]rune(s)) > domain.MaxSpecializationLength {
+				return nil, pkgerrors.InvalidArgument(fmt.Sprintf(
+					"each specialization must not exceed %d characters", domain.MaxSpecializationLength))
+			}
+		}
 		m.Specializations = in.Specializations
 	}
 	if in.HourlyRate != nil {
@@ -199,14 +377,19 @@ func (uc *MasterUseCase) UpdateMyProfile(ctx context.Context, userID uuid.UUID, 
 		if s == "" {
 			s = "{}"
 		}
+		// Unmarshal into a concrete map[string]any rather than any:
+		// - arrays, strings, numbers, null all produce a type mismatch error
+		// - invalid JSON produces a syntax error
+		// One pass covers both the "valid JSON?" and "is it an object?" checks,
+		// matching the DB column's JSONB CHECK (jsonb_typeof(...) = 'object').
+		var top map[string]any
+		if err := json.Unmarshal([]byte(s), &top); err != nil {
+			return nil, pkgerrors.InvalidArgument("availability_json: must be a JSON object")
+		}
 		m.AvailabilityJSON = s
 	}
 	if in.PayoutLegalForm != nil {
-		v := strings.TrimSpace(strings.ToLower(*in.PayoutLegalForm))
-		// До миграции 005 в БД было «gph»; в UI и proto — «individual».
-		if v == "gph" {
-			v = domain.PayoutLegalFormIndividual
-		}
+		v := domain.NormalizePayoutLegalForm(*in.PayoutLegalForm)
 		switch v {
 		case "", domain.PayoutLegalFormIP, domain.PayoutLegalFormOOO, domain.PayoutLegalFormIndividual, domain.PayoutLegalFormSelfEmployed:
 			m.PayoutLegalForm = v
@@ -267,7 +450,7 @@ func (uc *MasterUseCase) UpdateMyProfile(ctx context.Context, userID uuid.UUID, 
 		in.PayoutSettlementAccount != nil ||
 		in.PayoutCorrespondentAccount != nil {
 		if hasAnyPayoutData(m) {
-			if err := validatePayoutProfileByLegalForm(m); err != nil {
+			if err := m.ValidatePayoutProfile(); err != nil {
 				return nil, pkgerrors.InvalidArgument(err.Error())
 			}
 		}
@@ -283,12 +466,34 @@ func (uc *MasterUseCase) UpdateMyProfile(ctx context.Context, userID uuid.UUID, 
 		m.ModeratedAt = nil
 	}
 
+	// Reject requests that explicitly set travel fields while the effective
+	// work_format is venue. Silent normalisation (apply-then-clear) is
+	// confusing: the client sends zones, gets back an empty list, and has no
+	// idea why. Returning InvalidArgument here surfaces the conflict immediately
+	// so the client can fix its logic rather than silently losing data.
+	//
+	// "Effective" means after in.WorkFormat has been applied to m above —
+	// so switching to venue in the same request while also sending travel data
+	// is caught too.
 	if m.WorkFormat == domain.WorkFormatVenue {
-		m.TravelBaseLatitude = nil
-		m.TravelBaseLongitude = nil
-		m.TravelRadiusKm = 0
-		m.TravelExcludeZones = nil
+		if in.TravelRadiusKm != nil && *in.TravelRadiusKm != 0 {
+			return nil, pkgerrors.InvalidArgument("travel_radius_km не применимо для формата venue")
+		}
+		if in.TravelBaseLatitude != nil || in.TravelBaseLongitude != nil {
+			return nil, pkgerrors.InvalidArgument("travel_base_lat/lng не применимо для формата venue")
+		}
+		if in.ApplyTravelExcludeZones && len(in.TravelExcludeZones) > 0 {
+			return nil, pkgerrors.InvalidArgument("travel_exclude_zones не применимо для формата venue")
+		}
 	}
+
+	// clearTravelFieldsForVenue runs after all input has been applied. It zeroes
+	// any travel fields that may already be stored in the DB when the master
+	// switches to venue format (in.WorkFormat = "venue" with no travel fields in
+	// this request). After the explicit-conflict check above, reaching here means
+	// the request either didn't touch travel fields or set them all to zero —
+	// so clearing is a safe normalisation, not a silent data loss.
+	clearTravelFieldsForVenue(m)
 
 	if err := validateTravelBaseForProfile(m); err != nil {
 		return nil, pkgerrors.InvalidArgument(err.Error())
@@ -302,11 +507,20 @@ func (uc *MasterUseCase) UpdateMyProfile(ctx context.Context, userID uuid.UUID, 
 	}
 
 	if in.ApplyServicesReplace {
-		if err := uc.repo.ReplaceServices(ctx, m.ID, in.ServicesReplace); err != nil {
+		if err := validateMasterServices(in.ServicesReplace); err != nil {
+			return nil, err
+		}
+		if _, err := uc.repo.ReplaceServices(ctx, m.ID, in.ServicesReplace); err != nil {
 			return nil, err
 		}
 	}
 
+	// Re-read the full profile so the response is consistent: Photos may have
+	// changed concurrently (AddMasterPhoto / DeleteMasterPhoto run outside this
+	// call), and UpdateProfile sets UpdatedAt server-side via RETURNING which
+	// would require an extra scan to propagate. A single GetByUserID costs two
+	// batch queries (master row + associations) and is cheaper than building a
+	// partial in-memory response that surprises callers with stale photo lists.
 	return uc.repo.GetByUserID(ctx, userID)
 }
 
@@ -331,8 +545,9 @@ func (uc *MasterUseCase) SubmitForReview(ctx context.Context, userID uuid.UUID) 
 	}
 	switch m.Status {
 	case domain.StatusDraft, domain.StatusNeedsRevision, domain.StatusRejected:
-		// ok
+		// ok — validate then submit
 	case domain.StatusPendingReview:
+		// already submitted — idempotent
 		return m, nil
 	default:
 		return nil, pkgerrors.InvalidArgument("profile cannot be submitted in current status: " + m.Status)
@@ -340,21 +555,20 @@ func (uc *MasterUseCase) SubmitForReview(ctx context.Context, userID uuid.UUID) 
 	if err := validateReadyForReview(m); err != nil {
 		return nil, pkgerrors.InvalidArgument(err.Error())
 	}
-	old := m.Status
-	m.Status = domain.StatusPendingReview
-	m.ModerationComment = ""
-	m.ModeratedBy = nil
-	m.ModeratedAt = nil
-	if err := uc.repo.UpdateProfile(ctx, m); err != nil {
+	// SubmitForReviewAtomic does UPDATE … WHERE status IN ('draft','needs_revision','rejected')
+	// and inserts the history entry in one transaction, eliminating the race window
+	// where two concurrent submits both read 'draft' and each write a history entry.
+	// If the status changed between GetByUserID and here (duplicate submit), the UPDATE
+	// touches 0 rows and ErrSubmitNotAllowed is returned — we re-read and return the
+	// current state so the caller gets an idempotent success.
+	if err := uc.repo.SubmitForReviewAtomic(ctx, m.ID, userID); err != nil {
+		if errors.Is(err, domain.ErrSubmitNotAllowed) {
+			// Race: another submit (or a moderator action) changed the status
+			// between our read and the atomic UPDATE. Re-read current state.
+			return uc.repo.GetByUserID(ctx, userID)
+		}
 		return nil, err
 	}
-	_ = uc.repo.InsertModerationHistory(ctx, &domain.ModerationHistoryEntry{
-		MasterID:  m.ID,
-		OldStatus: old,
-		NewStatus: domain.StatusPendingReview,
-		Comment:   "submitted by master",
-		ChangedBy: userID,
-	})
 	return uc.repo.GetByUserID(ctx, userID)
 }
 
@@ -389,6 +603,19 @@ func needsTravelBaseForFormat(wf string) bool {
 		return true
 	default:
 		return false
+	}
+}
+
+// clearTravelFieldsForVenue zeroes all travel-related fields when the master's
+// work format is venue-only. Callers must invoke this after all input fields
+// have been applied to m so that user-supplied travel data never reaches the DB
+// for a venue profile, regardless of what the gRPC request contained.
+func clearTravelFieldsForVenue(m *domain.Master) {
+	if m.WorkFormat == domain.WorkFormatVenue {
+		m.TravelBaseLatitude = nil
+		m.TravelBaseLongitude = nil
+		m.TravelRadiusKm = 0
+		m.TravelExcludeZones = nil
 	}
 }
 
@@ -476,7 +703,7 @@ func validateReadyForReview(m *domain.Master) error {
 	if strings.TrimSpace(m.City) == "" {
 		return fmt.Errorf("укажите город")
 	}
-	if normalizeRussianMobileDigits(m.Phone) == "" {
+	if m.Phone == "" {
 		return fmt.Errorf("укажите полный номер телефона в формате +7 (999) 123-45-67")
 	}
 	bioTrim := strings.TrimSpace(m.Bio)
@@ -486,16 +713,7 @@ func validateReadyForReview(m *domain.Master) error {
 	if len(m.Services) == 0 {
 		return fmt.Errorf("добавьте хотя бы одну услугу")
 	}
-	plf := strings.TrimSpace(strings.ToLower(m.PayoutLegalForm))
-	if plf == "gph" {
-		plf = domain.PayoutLegalFormIndividual
-	}
-	switch plf {
-	case domain.PayoutLegalFormIP, domain.PayoutLegalFormOOO, domain.PayoutLegalFormIndividual, domain.PayoutLegalFormSelfEmployed:
-	default:
-		return fmt.Errorf("укажите форму получения выплат: ИП, ООО, физическое лицо или самозанятость")
-	}
-	if err := validatePayoutProfileByLegalForm(m); err != nil {
+	if err := m.ValidatePayoutProfile(); err != nil {
 		return err
 	}
 	if err := validateTravelBaseForProfile(m); err != nil {
@@ -515,67 +733,6 @@ func normalizeDigits(s string) string {
 		}
 	}
 	return b.String()
-}
-
-func validatePayoutProfileByLegalForm(m *domain.Master) error {
-	plf := strings.TrimSpace(strings.ToLower(m.PayoutLegalForm))
-	if plf == "gph" {
-		plf = domain.PayoutLegalFormIndividual
-	}
-	switch plf {
-	case domain.PayoutLegalFormIP, domain.PayoutLegalFormOOO, domain.PayoutLegalFormIndividual, domain.PayoutLegalFormSelfEmployed:
-	default:
-		return fmt.Errorf("укажите форму получения выплат: ИП, ООО, физическое лицо или самозанятость")
-	}
-	if strings.TrimSpace(m.YookassaSellerAccountID) == "" {
-		return fmt.Errorf("укажите аккаунт получателя выплат ЮKassa")
-	}
-	if strings.TrimSpace(m.PayoutLegalName) == "" {
-		return fmt.Errorf("укажите ФИО или наименование получателя выплат")
-	}
-	if strings.TrimSpace(m.PayoutBankName) == "" {
-		return fmt.Errorf("укажите банк получателя")
-	}
-	if len(normalizeDigits(m.PayoutBIK)) != 9 {
-		return fmt.Errorf("БИК должен содержать 9 цифр")
-	}
-	if len(normalizeDigits(m.PayoutSettlementAccount)) != 20 {
-		return fmt.Errorf("расчетный счет должен содержать 20 цифр")
-	}
-	if len(normalizeDigits(m.PayoutCorrespondentAccount)) != 20 {
-		return fmt.Errorf("корреспондентский счет должен содержать 20 цифр")
-	}
-	innLen := len(normalizeDigits(m.PayoutINN))
-	if plf == domain.PayoutLegalFormOOO {
-		if innLen != 10 {
-			return fmt.Errorf("для ООО ИНН должен содержать 10 цифр")
-		}
-		if len(normalizeDigits(m.PayoutKPP)) != 9 {
-			return fmt.Errorf("для ООО КПП должен содержать 9 цифр")
-		}
-		if l := len(normalizeDigits(m.PayoutOGRN)); l != 13 {
-			return fmt.Errorf("для ООО ОГРН должен содержать 13 цифр")
-		}
-	}
-	if plf == domain.PayoutLegalFormIP {
-		if innLen != 12 {
-			return fmt.Errorf("для ИП ИНН должен содержать 12 цифр")
-		}
-		if l := len(normalizeDigits(m.PayoutOGRNIP)); l != 15 {
-			return fmt.Errorf("для ИП ОГРНИП должен содержать 15 цифр")
-		}
-	}
-	if plf == domain.PayoutLegalFormSelfEmployed {
-		if innLen != 12 {
-			return fmt.Errorf("для самозанятого ИНН должен содержать 12 цифр")
-		}
-	}
-	if plf == domain.PayoutLegalFormIndividual {
-		if innLen != 12 {
-			return fmt.Errorf("для физлица ИНН должен содержать 12 цифр")
-		}
-	}
-	return nil
 }
 
 func hasAnyPayoutData(m *domain.Master) bool {
@@ -614,6 +771,13 @@ func (uc *MasterUseCase) ListForModeration(ctx context.Context, statusFilter str
 func (uc *MasterUseCase) Moderate(ctx context.Context, masterID, moderatorID uuid.UUID, action, comment string) (*domain.Master, error) {
 	action = strings.TrimSpace(strings.ToLower(action))
 	comment = strings.TrimSpace(comment)
+	// 1000 chars is enough for any legitimate moderation note and prevents
+	// moderators from accidentally pasting personal data (PII/PD) into the
+	// history log, which is stored indefinitely and visible to other admins.
+	const maxCommentLen = 1000
+	if len([]rune(comment)) > maxCommentLen {
+		return nil, pkgerrors.InvalidArgument("comment must not exceed 1000 characters")
+	}
 
 	m, err := uc.repo.GetByID(ctx, masterID)
 	if err != nil {
@@ -637,6 +801,13 @@ func (uc *MasterUseCase) Moderate(ctx context.Context, masterID, moderatorID uui
 		default:
 			return nil, pkgerrors.InvalidArgument("approve is not allowed from status " + m.Status)
 		}
+		// Guard: prevent approving a master whose payout profile is incomplete.
+		// Without this check, the master becomes active but booking creation
+		// fails with an opaque payout error — confusing for both the user and
+		// the support team. Moderators must resolve payout issues before approve.
+		if err := m.ValidatePayoutProfile(); err != nil {
+			return nil, pkgerrors.InvalidArgument("cannot approve: payout profile is incomplete — " + err.Error())
+		}
 	case "request_revision":
 		switch m.Status {
 		case domain.StatusPendingReview, domain.StatusSuspended:
@@ -658,18 +829,32 @@ func (uc *MasterUseCase) Moderate(ctx context.Context, masterID, moderatorID uui
 		return nil, pkgerrors.InvalidArgument("unknown action: " + action)
 	}
 
-	old := m.Status
-	if err := uc.repo.UpdateStatus(ctx, masterID, newStatus, comment, &moderatorID); err != nil {
+	// ModerateAtomic guards the UPDATE with WHERE status = m.Status so that if
+	// a second moderator acted between our GetByID and this call, the UPDATE
+	// touches 0 rows and ErrModerationConflict is returned instead of silently
+	// overwriting the winning decision. Both status change and history entry are
+	// written atomically — no partial writes, no duplicate history rows.
+	if err := uc.repo.ModerateAtomic(ctx, masterID, m.Status, newStatus, comment, &moderatorID); err != nil {
+		switch {
+		case errors.Is(err, domain.ErrNotFound):
+			// Master deleted between GetByID and the UPDATE (concurrent admin delete).
+			return nil, pkgerrors.NotFound("master not found")
+		case errors.Is(err, domain.ErrModerationConflict):
+			// Another moderator acted first. Tell the client to refresh.
+			return nil, pkgerrors.Aborted("moderation conflict: the master status was changed by another moderator — please refresh and retry")
+		}
 		return nil, err
 	}
-	_ = uc.repo.InsertModerationHistory(ctx, &domain.ModerationHistoryEntry{
-		MasterID:  masterID,
-		OldStatus: old,
-		NewStatus: newStatus,
-		Comment:   comment,
-		ChangedBy: moderatorID,
-	})
-	return uc.repo.GetByID(ctx, masterID)
+	updated, err := uc.repo.GetByID(ctx, masterID)
+	if err != nil {
+		return nil, err
+	}
+	if updated == nil {
+		// Should not happen: UpdateStatusWithHistory succeeded so the row exists.
+		// Guard anyway to prevent nil-pointer dereference in the proto marshaller.
+		return nil, pkgerrors.NotFound("master not found after status update")
+	}
+	return updated, nil
 }
 
 func (uc *MasterUseCase) ListModerationHistory(ctx context.Context, masterID uuid.UUID, limit int32) ([]domain.ModerationHistoryEntry, error) {
@@ -677,6 +862,11 @@ func (uc *MasterUseCase) ListModerationHistory(ctx context.Context, masterID uui
 }
 
 func (uc *MasterUseCase) CreateBooking(ctx context.Context, clientUserID uuid.UUID, masterSlug string, serviceID *uuid.UUID, date, timeFrom, timeTo, comment string) (*domain.MasterBooking, error) {
+	comment = strings.TrimSpace(comment)
+	if len([]rune(comment)) > domain.MaxBookingCommentLength {
+		return nil, pkgerrors.InvalidArgument(fmt.Sprintf(
+			"comment must not exceed %d characters", domain.MaxBookingCommentLength))
+	}
 	m, err := uc.repo.GetBySlug(ctx, masterSlug)
 	if err != nil {
 		return nil, err
@@ -696,11 +886,11 @@ func (uc *MasterUseCase) CreateBooking(ctx context.Context, clientUserID uuid.UU
 			return nil, pkgerrors.InvalidArgument("unknown service")
 		}
 	}
-	if uc.paymentClient == nil {
-		return nil, pkgerrors.Internal("payment client is not configured")
-	}
-	if err := validatePayoutProfileByLegalForm(m); err != nil {
+	if err := m.ValidatePayoutProfile(); err != nil {
 		return nil, pkgerrors.InvalidArgument(err.Error())
+	}
+	if err := validateBookingSlot(date, timeFrom, timeTo); err != nil {
+		return nil, err
 	}
 	totalPrice, err := estimateMasterBookingPriceKopecks(m, serviceID, timeFrom, timeTo)
 	if err != nil {
@@ -721,35 +911,116 @@ func (uc *MasterUseCase) CreateBooking(ctx context.Context, clientUserID uuid.UU
 	if err := uc.repo.InsertBooking(ctx, b); err != nil {
 		return nil, err
 	}
+
+	// ── Payment saga ──────────────────────────────────────────────────────────
+	// Step 1: create the payment in payment-service.
+	// On failure: hard-delete the pending booking so it does not linger. We use
+	// context.Background so a cancelled request context does not prevent cleanup.
+	//
+	// Idempotency key: sha256(booking_id + ":" + client_user_id).
+	// Binds the key to both the booking and the authenticated user, preventing
+	// key squatting by another user who might learn the booking UUID.
+	idemKey := masterBookingIdempotencyKey(b.ID, b.ClientUserID)
 	payResp, err := uc.paymentClient.CreatePayment(ctx, &paymentv1.CreatePaymentRequest{
 		BookingId:               b.ID.String(),
 		Amount:                  totalPrice,
 		Description:             fmt.Sprintf("Master booking %s", b.ID.String()),
-		IdempotencyKey:          b.ID.String(),
+		IdempotencyKey:          idemKey,
 		CounterpartyType:        "master",
 		CounterpartyId:          m.ID.String(),
 		YookassaSellerAccountId: strings.TrimSpace(m.YookassaSellerAccountID),
 	})
 	if err != nil {
-		_ = uc.repo.UpdateBookingStatus(ctx, b.ID, "cancelled")
+		if delErr := uc.repo.DeleteBooking(context.Background(), b.ID); delErr != nil {
+			uc.log.Error().Err(delErr).Stringer("booking_id", b.ID).
+				Msg("CreateBooking saga: CreatePayment failed AND DeleteBooking failed — booking is stale pending")
+		}
 		return nil, fmt.Errorf("create payment: %w", err)
 	}
+
+	// Step 2: persist the payment reference on the booking row.
+	// On failure: the payment exists in YooKassa but the booking does not know
+	// its payment_id. Delete the booking to avoid a permanently stale row.
+	// The YooKassa payment will expire on its own TTL (~1 h for pending).
+	// This residual risk is documented in docs/TECH_DEBT.md [BOOKING-ORPHAN-PAYMENT].
 	b.PaymentID = strings.TrimSpace(payResp.GetId())
 	b.PaymentURL = strings.TrimSpace(payResp.GetPaymentUrl())
 	b.Status = "payment_pending"
 	if err := uc.repo.SetBookingPayment(ctx, b.ID, b.PaymentID, b.PaymentURL, b.TotalPrice, b.Status); err != nil {
-		return nil, err
+		uc.log.Error().Err(err).
+			Stringer("booking_id", b.ID).
+			Str("payment_id", b.PaymentID).
+			Msg("CreateBooking saga: SetBookingPayment failed after CreatePayment — attempting booking deletion; payment may be orphaned in YooKassa")
+		if delErr := uc.repo.DeleteBooking(context.Background(), b.ID); delErr != nil {
+			uc.log.Error().Err(delErr).Stringer("booking_id", b.ID).
+				Msg("CreateBooking saga: DeleteBooking also failed — booking AND payment are both orphaned; manual intervention required")
+		}
+		return nil, fmt.Errorf("set booking payment: %w", err)
 	}
-	list, err := uc.repo.ListBookingsByMaster(ctx, m.ID, "")
+	fresh, err := uc.repo.GetBookingByID(ctx, b.ID)
 	if err != nil {
+		// Non-fatal: SetBookingPayment succeeded, so the booking exists in the DB
+		// with the correct payment fields. Return the pre-update snapshot rather
+		// than surfacing a spurious read error to the caller.
 		return b, nil
 	}
-	for i := range list {
-		if list[i].ID == b.ID {
-			return &list[i], nil
-		}
+	return fresh, nil
+}
+
+// bookingMaxAdvanceDays is the maximum number of calendar days in the future
+// a booking date may fall. Six months (≈183 days) is a reasonable booking
+// horizon for personal-care masters; anything beyond that is almost certainly
+// a client error or an abuse vector.
+const bookingMaxAdvanceDays = 183
+
+// validateBookingSlot checks that date, time_from and time_to are well-formed,
+// internally consistent, and fall within the allowed booking window:
+//
+//   - date must be today or later (past dates are rejected — booking in the past
+//     is nonsensical and could be exploited to manufacture fake "completed"
+//     bookings for review manipulation via HasCompletedMasterBooking).
+//   - date must not exceed today + bookingMaxAdvanceDays (far-future dates are
+//     almost always a client mistake and inflate the master's calendar noise).
+//
+// "Today" is evaluated in Moscow time (UTC+3, fixed since 2014-10-26). All
+// master profiles are Russian, so Moscow time is the correct floor for the
+// booking window on the MVP. If multi-timezone support is added later, pass
+// the master's *time.Location as a parameter instead of the hard-coded offset.
+//
+// Format expectations match the DB column types (DATE / TIME):
+//   - date:     "2006-01-02"  (layout from time.DateOnly)
+//   - timeFrom: "15:04"
+//   - timeTo:   "15:04", must be strictly after timeFrom
+func validateBookingSlot(date, timeFrom, timeTo string) error {
+	parsedDate, err := time.Parse(time.DateOnly, strings.TrimSpace(date))
+	if err != nil {
+		return pkgerrors.InvalidArgument("invalid date: expected YYYY-MM-DD")
 	}
-	return b, nil
+
+	// Evaluate "today" in Moscow time (UTC+3, no DST).
+	const moscowOffset = 3 * time.Hour
+	nowMoscow := time.Now().UTC().Add(moscowOffset)
+	today := time.Date(nowMoscow.Year(), nowMoscow.Month(), nowMoscow.Day(), 0, 0, 0, 0, time.UTC)
+
+	if parsedDate.Before(today) {
+		return pkgerrors.InvalidArgument("date must not be in the past")
+	}
+	if parsedDate.After(today.AddDate(0, 0, bookingMaxAdvanceDays)) {
+		return pkgerrors.InvalidArgument(fmt.Sprintf("date must be within %d days from today", bookingMaxAdvanceDays))
+	}
+
+	start, err := time.Parse("15:04", strings.TrimSpace(timeFrom))
+	if err != nil {
+		return pkgerrors.InvalidArgument("invalid time_from: expected HH:MM")
+	}
+	end, err := time.Parse("15:04", strings.TrimSpace(timeTo))
+	if err != nil {
+		return pkgerrors.InvalidArgument("invalid time_to: expected HH:MM")
+	}
+	if !end.After(start) {
+		return pkgerrors.InvalidArgument("time_to must be later than time_from")
+	}
+	return nil
 }
 
 func estimateMasterBookingPriceKopecks(m *domain.Master, serviceID *uuid.UUID, timeFrom, timeTo string) (int64, error) {
@@ -767,17 +1038,9 @@ func estimateMasterBookingPriceKopecks(m *domain.Master, serviceID *uuid.UUID, t
 	if m.HourlyRate <= 0 {
 		return 0, pkgerrors.InvalidArgument("master hourly rate is not configured")
 	}
-	startAt, err := time.Parse("15:04", strings.TrimSpace(timeFrom))
-	if err != nil {
-		return 0, pkgerrors.InvalidArgument("invalid time_from")
-	}
-	endAt, err := time.Parse("15:04", strings.TrimSpace(timeTo))
-	if err != nil {
-		return 0, pkgerrors.InvalidArgument("invalid time_to")
-	}
-	if !endAt.After(startAt) {
-		return 0, pkgerrors.InvalidArgument("time_to must be later than time_from")
-	}
+	// Formats are pre-validated by validateBookingSlot; parse errors cannot occur here.
+	startAt, _ := time.Parse("15:04", strings.TrimSpace(timeFrom))
+	endAt, _ := time.Parse("15:04", strings.TrimSpace(timeTo))
 	minutes := int64(endAt.Sub(startAt).Minutes())
 	if minutes <= 0 {
 		return 0, pkgerrors.InvalidArgument("invalid booking duration")
@@ -805,6 +1068,52 @@ func (uc *MasterUseCase) ListClientBookings(ctx context.Context, userID uuid.UUI
 	return uc.repo.ListBookingsByClient(ctx, userID, statusFilter)
 }
 
+// GetBookingsForActorBatch fetches multiple master bookings visible to actorUserID.
+// Bookings the actor cannot access are silently omitted (not an error).
+// Two DB round-trips total: one for bookings, one for the distinct master profiles needed
+// to resolve ownership.
+func (uc *MasterUseCase) GetBookingsForActorBatch(ctx context.Context, bookingIDs []uuid.UUID, actorUserID uuid.UUID) ([]domain.MasterBooking, error) {
+	if len(bookingIDs) == 0 {
+		return nil, nil
+	}
+	bookings, err := uc.repo.GetBookingsByIDs(ctx, bookingIDs)
+	if err != nil {
+		return nil, err
+	}
+
+	// Collect master ids that aren't accessible as client (need ownership check).
+	masterIDsToCheck := make(map[uuid.UUID]struct{})
+	for i := range bookings {
+		if bookings[i].ClientUserID != actorUserID {
+			masterIDsToCheck[bookings[i].MasterID] = struct{}{}
+		}
+	}
+
+	// Resolve master owner user ids in one query.
+	masterIDs := make([]uuid.UUID, 0, len(masterIDsToCheck))
+	for mid := range masterIDsToCheck {
+		masterIDs = append(masterIDs, mid)
+	}
+	ownerByMaster, err := uc.repo.GetMasterUserIDsByIDs(ctx, masterIDs)
+	if err != nil {
+		return nil, err
+	}
+
+	out := make([]domain.MasterBooking, 0, len(bookings))
+	for i := range bookings {
+		b := &bookings[i]
+		if b.ClientUserID == actorUserID {
+			out = append(out, *b)
+			continue
+		}
+		if ownerByMaster[b.MasterID] == actorUserID {
+			out = append(out, *b)
+		}
+		// otherwise: actor has no access — silently skip
+	}
+	return out, nil
+}
+
 func (uc *MasterUseCase) GetBookingForActor(ctx context.Context, bookingID, actorUserID uuid.UUID) (*domain.MasterBooking, error) {
 	b, err := uc.repo.GetBookingByID(ctx, bookingID)
 	if err != nil {
@@ -829,6 +1138,12 @@ func (uc *MasterUseCase) GetBookingForActor(ctx context.Context, bookingID, acto
 	return b, nil
 }
 
+// GetMasterUserIDsBatch returns map[masterID]userID for a set of master profile ids.
+// Used by gRPC handlers to populate master_user_id on batch responses without N+1.
+func (uc *MasterUseCase) GetMasterUserIDsBatch(ctx context.Context, masterIDs []uuid.UUID) (map[uuid.UUID]uuid.UUID, error) {
+	return uc.repo.GetMasterUserIDsByIDs(ctx, masterIDs)
+}
+
 // MasterOwnerUserID returns the platform user id for the master profile (venue owner account).
 func (uc *MasterUseCase) MasterOwnerUserID(ctx context.Context, masterID uuid.UUID) (uuid.UUID, error) {
 	m, err := uc.repo.GetByID(ctx, masterID)
@@ -845,62 +1160,42 @@ func (uc *MasterUseCase) HasCompletedBookingByClientMaster(ctx context.Context, 
 	return uc.repo.HasCompletedBookingByClientMaster(ctx, clientUserID, masterID)
 }
 
+// ConfirmBookingByPayment transitions a master booking to confirmed in response
+// to a payment.completed NATS event.
+//
+// The actual state transition is done atomically in the repository via a single
+// conditional UPDATE (payment_pending → confirmed, matching payment_id). This
+// eliminates the GET→check→UPDATE race that would allow two concurrent NATS
+// redeliveries to both succeed, or a payment.completed/payment.failed pair to
+// corrupt the booking status.
+//
+// Sentinel errors returned (caller must use errors.Is):
+//
+//   - domain.ErrNotFound          — booking does not exist; caller should Nak and retry
+//   - domain.ErrBookingNotPending — booking is already in a terminal state; caller should Ack
+//   - domain.ErrPaymentMismatch   — payment_id does not match stored value; caller should Ack
 func (uc *MasterUseCase) ConfirmBookingByPayment(ctx context.Context, bookingID, paymentID string) error {
 	bid, err := uuid.Parse(strings.TrimSpace(bookingID))
 	if err != nil {
-		return pkgerrors.InvalidArgument("invalid booking_id")
+		return fmt.Errorf("%w: invalid booking_id: %v", domain.ErrInvalidArgument, err)
 	}
-	b, err := uc.repo.GetBookingByID(ctx, bid)
-	if err != nil {
-		return err
-	}
-	if b == nil {
-		return pkgerrors.NotFound("booking not found")
-	}
-	if b.PaymentID != "" && !strings.EqualFold(strings.TrimSpace(b.PaymentID), strings.TrimSpace(paymentID)) {
-		return pkgerrors.InvalidArgument("payment does not belong to booking")
-	}
-	if b.PaymentID == "" {
-		if err := uc.repo.SetBookingPayment(ctx, b.ID, strings.TrimSpace(paymentID), b.PaymentURL, b.TotalPrice, b.Status); err != nil {
-			return err
-		}
-	}
-	if b.Status == "confirmed" || b.Status == "cancelled" {
-		return nil
-	}
-	if b.Status != "payment_pending" {
-		return pkgerrors.InvalidArgument("booking is not waiting for payment")
-	}
-	return uc.repo.UpdateBookingStatus(ctx, b.ID, "confirmed")
+	return uc.repo.ConfirmBookingByPayment(ctx, bid, paymentID)
 }
 
+// CancelBookingByPayment transitions a master booking to cancelled in response
+// to a payment.failed NATS event. Same atomicity guarantees as ConfirmBookingByPayment.
+//
+// Sentinel errors returned (caller must use errors.Is):
+//
+//   - domain.ErrNotFound          — booking does not exist; caller should Nak and retry
+//   - domain.ErrBookingNotPending — booking is already in a terminal state; caller should Ack
+//   - domain.ErrPaymentMismatch   — payment_id does not match stored value; caller should Ack
 func (uc *MasterUseCase) CancelBookingByPayment(ctx context.Context, bookingID, paymentID string) error {
 	bid, err := uuid.Parse(strings.TrimSpace(bookingID))
 	if err != nil {
-		return pkgerrors.InvalidArgument("invalid booking_id")
+		return fmt.Errorf("%w: invalid booking_id: %v", domain.ErrInvalidArgument, err)
 	}
-	b, err := uc.repo.GetBookingByID(ctx, bid)
-	if err != nil {
-		return err
-	}
-	if b == nil {
-		return pkgerrors.NotFound("booking not found")
-	}
-	if b.PaymentID != "" && !strings.EqualFold(strings.TrimSpace(b.PaymentID), strings.TrimSpace(paymentID)) {
-		return pkgerrors.InvalidArgument("payment does not belong to booking")
-	}
-	if b.PaymentID == "" {
-		if err := uc.repo.SetBookingPayment(ctx, b.ID, strings.TrimSpace(paymentID), b.PaymentURL, b.TotalPrice, b.Status); err != nil {
-			return err
-		}
-	}
-	if b.Status == "cancelled" {
-		return nil
-	}
-	if b.Status != "payment_pending" {
-		return nil
-	}
-	return uc.repo.UpdateBookingStatus(ctx, b.ID, "cancelled")
+	return uc.repo.CancelBookingByPayment(ctx, bid, paymentID)
 }
 
 func (uc *MasterUseCase) AddMasterPhoto(ctx context.Context, userID uuid.UUID, url string) (*domain.Master, error) {
@@ -911,17 +1206,17 @@ func (uc *MasterUseCase) AddMasterPhoto(ctx context.Context, userID uuid.UUID, u
 	if m == nil {
 		return nil, pkgerrors.NotFound("master profile not found")
 	}
-	if err := validateMasterPhotoURL(m.ID, url); err != nil {
+	cleanURL, err := normalizeMasterPhotoURL(m.ID, url)
+	if err != nil {
 		return nil, pkgerrors.InvalidArgument(err.Error())
 	}
-	n, err := uc.repo.CountPhotosByMaster(ctx, m.ID)
-	if err != nil {
-		return nil, err
-	}
-	if n >= maxMasterPhotos {
-		return nil, pkgerrors.InvalidArgument("too many photos (max 12)")
-	}
-	if _, err := uc.repo.AddMasterPhoto(ctx, m.ID, strings.TrimSpace(url)); err != nil {
+	// The limit check (MaxMasterPhotos) is enforced inside the repo transaction
+	// so concurrent uploads cannot race past it. CountPhotosByMaster is no longer
+	// called here — the separate count+check pattern had a TOCTOU window.
+	if _, err := uc.repo.AddMasterPhoto(ctx, m.ID, cleanURL); err != nil {
+		if errors.Is(err, domain.ErrPhotoLimitReached) {
+			return nil, pkgerrors.InvalidArgument(fmt.Sprintf("too many photos (max %d)", domain.MaxMasterPhotos))
+		}
 		return nil, err
 	}
 	return uc.repo.GetByUserID(ctx, userID)
@@ -937,7 +1232,7 @@ func (uc *MasterUseCase) DeleteMasterPhoto(ctx context.Context, userID, photoID 
 	}
 	u, err := uc.repo.DeleteMasterPhoto(ctx, m.ID, photoID)
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, domain.ErrNotFound) {
 			return "", pkgerrors.NotFound("photo not found")
 		}
 		return "", err
@@ -954,10 +1249,23 @@ func (uc *MasterUseCase) SetMasterCoverPhoto(ctx context.Context, userID, photoI
 		return nil, pkgerrors.NotFound("master profile not found")
 	}
 	if err := uc.repo.SetMasterCoverPhoto(ctx, m.ID, photoID); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, domain.ErrNotFound) {
 			return nil, pkgerrors.NotFound("photo not found")
 		}
 		return nil, err
 	}
 	return uc.repo.GetByUserID(ctx, userID)
+}
+
+// masterBookingIdempotencyKey derives a stable, user-bound idempotency key for
+// the CreatePayment call from master-service.
+//
+// key = hex(sha256(bookingID + ":" + clientUserID))
+//
+// Binding both IDs prevents idempotency-key squatting: even if an attacker
+// learns the MasterBooking UUID, they cannot register the same key on behalf of
+// a different user because the key is cryptographically tied to clientUserID.
+func masterBookingIdempotencyKey(bookingID, clientUserID uuid.UUID) string {
+	h := sha256.Sum256([]byte(bookingID.String() + ":" + clientUserID.String()))
+	return hex.EncodeToString(h[:])
 }

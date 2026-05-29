@@ -12,4 +12,5 @@ use (
 	./services/venue-service
 	./services/master-service
 	./services/chat-service
+	./services/crm-service
 )
