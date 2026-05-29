@@ -1,5 +1,11 @@
 bin/
-gen/
+# Generated proto Go files are ignored, but the hand-maintained go.mod/go.sum
+# of the gen/go module must be committed so CI knows module deps before
+# `buf generate` runs. We ignore the contents of gen/go/ instead of the dir
+# itself, because git can't re-include files under a gitignored directory.
+gen/go/*
+!gen/go/go.mod
+!gen/go/go.sum
 .tools/
 *.exe
 *.test

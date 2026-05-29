@@ -41,6 +41,21 @@ jobs:
             services/${{ matrix.service }}/go.sum
             go.work.sum
 
+      - name: Setup buf
+        uses: bufbuild/buf-setup-action@v1
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install protoc plugins
+        working-directory: ${{ github.workspace }}
+        run: |
+          go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
+          go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest
+
+      - name: Generate proto code
+        working-directory: ${{ github.workspace }}
+        run: buf generate
+
       - name: Download modules
         run: go mod download
 

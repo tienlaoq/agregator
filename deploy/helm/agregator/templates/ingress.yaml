@@ -25,3 +25,31 @@ spec:
                 port:
                   number: {{ (index .Values.services "api-gateway").port }}
 {{- end }}
+{{- if .Values.ingressFrontend.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ .Release.Name }}-frontend
+  labels:
+    {{- include "agregator.labels" . | nindent 4 }}
+spec:
+  ingressClassName: {{ .Values.ingressFrontend.className }}
+  {{- if .Values.ingressFrontend.tlsSecretName }}
+  tls:
+    - hosts:
+        - {{ .Values.ingressFrontend.host }}
+      secretName: {{ .Values.ingressFrontend.tlsSecretName }}
+  {{- end }}
+  rules:
+    - host: {{ .Values.ingressFrontend.host }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ .Release.Name }}-frontend
+                port:
+                  number: {{ (index .Values.services "frontend").port }}
+{{- end }}
