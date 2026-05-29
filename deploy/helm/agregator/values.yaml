@@ -103,8 +103,24 @@ services:
     envFromSecrets:
       - api-gateway-env
 
+  frontend:
+    enabled: true
+    replicas: 1
+    port: 3000
+    image:
+      name: frontend
+      pullPolicy: IfNotPresent
+    env: {}
+    envFromSecrets: []
+
 ingress:
   enabled: false
   className: nginx
   host: api.example.com
+  tlsSecretName: ""
+
+ingressFrontend:
+  enabled: false
+  className: nginx
+  host: app.example.com
   tlsSecretName: ""
