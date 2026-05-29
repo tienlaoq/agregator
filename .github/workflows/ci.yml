@@ -41,6 +41,15 @@ jobs:
             services/${{ matrix.service }}/go.sum
             go.work.sum
 
+      - name: Setup buf
+        uses: bufbuild/buf-setup-action@v1
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Generate proto code
+        working-directory: ${{ github.workspace }}
+        run: buf generate
+
       - name: Download modules
         run: go mod download
 
