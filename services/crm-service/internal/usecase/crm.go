@@ -128,8 +128,19 @@ func (uc *CRMUseCase) CreateTask(ctx context.Context, venueID, actorID uuid.UUID
 	if utf8.RuneCountInString(title) > maxTaskTitleRunes {
 		return nil, pkgerrors.InvalidArgument("заголовок слишком длинный")
 	}
+	body = strings.TrimSpace(body)
 	if utf8.RuneCountInString(body) > maxTaskBodyRunes {
 		return nil, pkgerrors.InvalidArgument("описание слишком длинное")
+	}
+	// Assignee must manage this venue; actor was already verified above.
+	if assignee != nil && *assignee != actorID {
+		access, err := uc.repo.GetManagementAccess(ctx, venueID, *assignee)
+		if err != nil {
+			return nil, err
+		}
+		if access == "" {
+			return nil, pkgerrors.InvalidArgument("исполнитель не входит в персонал заведения")
+		}
 	}
 	t := &domain.Task{
 		VenueID:        venueID,
