@@ -8,19 +8,32 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/rs/zerolog"
 )
 
+const (
+	depWaitTimeout  = 60 * time.Second
+	depWaitInterval = time.Second
+)
+
+// dependencyTables must exist before crm migrations run. crm-service shares
+// venue_db with venue-service (strangler-fig phase B) and its migrations
+// FK-reference venues(id); venue-service owns that table. When CRM moves to its
+// own database and drops the cross-service FK, empty this list. See config.go.
+var dependencyTables = []string{"venues"}
+
 // Up applies *.up.sql from dir in numeric-prefix order, skipping versions
 // already recorded in schema_migrations.
 //
 // Strangler-fig caveat: crm-service shares its Postgres database with
-// venue-service, so the venue_staff / venue_crm_tasks tables may already
-// exist (created by venue-service migrations 012/013). The migration SQL
-// uses CREATE TABLE IF NOT EXISTS so re-applying is a safe no-op; this
-// function records the migration as applied without aborting.
+// venue-service. Because crm migrations FK-reference venues(id), and each
+// service migrates itself at startup with no guaranteed ordering (compose
+// gates crm on venue's service_started, not service_healthy), Up first waits
+// for the dependency tables to appear before applying migrations. The SQL uses
+// CREATE TABLE IF NOT EXISTS so re-applying is a safe no-op.
 func Up(ctx context.Context, dsn, dir string, log zerolog.Logger) error {
 	st, err := os.Stat(dir)
 	if err != nil || !st.IsDir() {
@@ -44,6 +57,17 @@ func Up(ctx context.Context, dsn, dir string, log zerolog.Logger) error {
 		applied_at timestamptz NOT NULL DEFAULT now()
 	)`); err != nil {
 		return fmt.Errorf("schema_migrations: %w", err)
+	}
+
+	tableExists := func(ctx context.Context, name string) (bool, error) {
+		var present bool
+		if err := conn.QueryRow(ctx, `SELECT to_regclass($1) IS NOT NULL`, name).Scan(&present); err != nil {
+			return false, err
+		}
+		return present, nil
+	}
+	if err := waitForTables(ctx, log, depWaitInterval, depWaitTimeout, dependencyTables, tableExists); err != nil {
+		return err
 	}
 
 	entries, err := os.ReadDir(dir)
@@ -92,6 +116,34 @@ func Up(ctx context.Context, dsn, dir string, log zerolog.Logger) error {
 			return fmt.Errorf("record migration %s: %w", name, err)
 		}
 		log.Info().Str("migration", name).Msg("applied migration")
+	}
+	return nil
+}
+
+// waitForTables blocks until every table reported by exists is present, polling
+// at interval until timeout. It returns ctx.Err() on cancellation and a
+// descriptive error if a table never appears within the deadline.
+func waitForTables(ctx context.Context, log zerolog.Logger, interval, timeout time.Duration, tables []string, exists func(context.Context, string) (bool, error)) error {
+	deadline := time.Now().Add(timeout)
+	for _, tbl := range tables {
+		for {
+			ok, err := exists(ctx, tbl)
+			if err != nil {
+				return fmt.Errorf("check dependency table %q: %w", tbl, err)
+			}
+			if ok {
+				break
+			}
+			if !time.Now().Before(deadline) {
+				return fmt.Errorf("dependency table %q not present after %s: ensure venue-service migrates venue_db first", tbl, timeout)
+			}
+			log.Info().Str("table", tbl).Msg("waiting for dependency table (owned by venue-service)")
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(interval):
+			}
+		}
 	}
 	return nil
 }
