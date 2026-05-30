@@ -79,10 +79,11 @@ func extractMasterPhotoKey(rawURL string) (string, bool) {
 	// path.Clean normalises duplicate slashes and dots before splitting.
 	segments := strings.Split(strings.Trim(path.Clean(parsed.Path), "/"), "/")
 	for i, seg := range segments {
-		if seg == "masters" && i+2 < len(segments) {
-			// Take exactly three segments: "masters", UUID, filename.
-			// Joining only these prevents trailing path components from
-			// leaking through to subsequent validation steps.
+		// Require exactly three trailing segments: "masters", UUID, filename.
+		// Allowing extra segments (e.g. "masters/<uuid>/dir/photo.jpg") would
+		// silently drop everything past the filename and accept a URL that
+		// targets a different storage object than what was provided.
+		if seg == "masters" && i+3 == len(segments) {
 			return "masters/" + segments[i+1] + "/" + segments[i+2], true
 		}
 	}

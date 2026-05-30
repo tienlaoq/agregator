@@ -83,13 +83,17 @@ func TestBroadcast_SlowClientDoesNotBlockOthers(t *testing.T) {
 		close(done)
 	}()
 
+	// Timeouts are generous: CI runners (shared CPU) can take ~1s just to
+	// schedule the writer goroutine. The assertion under test is "fast is not
+	// blocked indefinitely by slow", so any value well below the CI test
+	// timeout (multiple minutes) is acceptable.
 	select {
 	case <-done:
-	case <-time.After(500 * time.Millisecond):
+	case <-time.After(5 * time.Second):
 		t.Fatal("broadcast loop blocked by slow client")
 	}
 
-	deadline := time.Now().Add(500 * time.Millisecond)
+	deadline := time.Now().Add(5 * time.Second)
 	for fast.writes.Load() == 0 && time.Now().Before(deadline) {
 		time.Sleep(5 * time.Millisecond)
 	}

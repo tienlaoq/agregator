@@ -447,6 +447,9 @@ func TestOAuthLogin_UnverifiedEmail_DoesNotLinkExistingAccount(t *testing.T) {
 	// Victim has a password-based account at victim@example.com.
 	victimCred := &domain.Credential{UserID: "victim-uid", Email: "victim@example.com", PasswordHash: "hash"}
 
+	// linkAttempted tracks whether CreateOAuth was called with victim's UserID
+	// (true linking) — not whether CreateOAuth ran at all, since Branch 3 always
+	// inserts a fresh credential for the attacker's isolated new account.
 	var linkAttempted bool
 	creds := &mockCredRepo{
 		GetByProviderFunc: func(_ context.Context, _, _ string) (*domain.Credential, error) {
@@ -458,8 +461,10 @@ func TestOAuthLogin_UnverifiedEmail_DoesNotLinkExistingAccount(t *testing.T) {
 			}
 			return nil, errors.New("not found")
 		},
-		CreateOAuthFunc: func(_ context.Context, _ *domain.Credential) error {
-			linkAttempted = true
+		CreateOAuthFunc: func(_ context.Context, cred *domain.Credential) error {
+			if cred.UserID == victimCred.UserID {
+				linkAttempted = true
+			}
 			return nil
 		},
 		CreateFunc: func(_ context.Context, _ *domain.Credential) error { return nil },

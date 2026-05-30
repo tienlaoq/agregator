@@ -461,8 +461,9 @@ func TestCancelBookingByPayment_idempotency(t *testing.T) {
 
 func TestGetBookingsForActorBatch_rbac(t *testing.T) {
 	clientID := uuid.New()
+	otherClientID := uuid.New() // client of the second booking (NOT strangerID)
 	masterOwnerID := uuid.New()
-	strangerID := uuid.New()
+	strangerID := uuid.New() // truly unrelated: not a client of any booking, not a master owner
 
 	masterID := uuid.New()
 	master := activeMaster()
@@ -477,7 +478,7 @@ func TestGetBookingsForActorBatch_rbac(t *testing.T) {
 	otherBooking := &domain.MasterBooking{
 		ID:           uuid.New(),
 		MasterID:     masterID,
-		ClientUserID: strangerID,
+		ClientUserID: otherClientID,
 	}
 
 	repo := newStubRepo()

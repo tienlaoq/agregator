@@ -199,7 +199,7 @@ func (s *Server) UpdateMyProfile(ctx context.Context, req *masterv1.UpdateMyProf
 				DurationMin:  it.GetDurationMin(),
 				Price:        it.GetPrice(),
 				SortOrder:    it.GetSortOrder(),
-				SortOrderSet: it.HasSortOrder(),
+				SortOrderSet: it.SortOrder != nil,
 			}
 			if it.GetId() != "" {
 				id, err := uuid.Parse(it.GetId())
