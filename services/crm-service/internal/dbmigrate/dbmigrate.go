@@ -2,6 +2,7 @@ package dbmigrate
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -95,7 +96,7 @@ func Up(ctx context.Context, dsn, dir string, log zerolog.Logger) error {
 		if err == nil {
 			continue
 		}
-		if err != pgx.ErrNoRows {
+		if !errors.Is(err, pgx.ErrNoRows) {
 			return fmt.Errorf("check migration %s: %w", name, err)
 		}
 
