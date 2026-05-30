@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -290,7 +290,9 @@ export default function MasterProfilePage() {
   const [specText, setSpecText] = useState("");
   const [availabilityNote, setAvailabilityNote] = useState("");
   const [services, setServices] = useState<ServiceLine[]>([newServiceLine()]);
-  const hydratedProfileIdRef = useRef<string | null>(null);
+  // useState вместо useRef: ref нельзя писать во время рендера, а гидрация
+  // теперь делается render-time (см. ниже), не в useEffect.
+  const [hydratedProfileId, setHydratedProfileId] = useState<string | null>(null);
 
   useEffect(() => {
     if (hydrated && (!token || user?.role !== "master")) {
@@ -378,10 +380,11 @@ export default function MasterProfilePage() {
     ],
   );
 
-  useEffect(() => {
-    if (!profile) return;
-    if (hydratedProfileIdRef.current === profile.id) return;
-    hydratedProfileIdRef.current = profile.id;
+  // Render-time гидрация формы из профиля (React 19 pattern): однократно
+  // при смене profile.id заполняем все поля формы. Заменяет useEffect, чтобы
+  // не нарушать react-hooks/set-state-in-effect.
+  if (profile && hydratedProfileId !== profile.id) {
+    setHydratedProfileId(profile.id);
 
     setDisplayName(profile.display_name);
     setBio(profile.bio);
@@ -434,7 +437,7 @@ export default function MasterProfilePage() {
       setTravelExcludeZones([]);
     }
     setExcludePlacementMode(false);
-  }, [profile, user?.phone, user?.role]);
+  }
 
   const createMut = useMutation({
     mutationFn: () => createMasterProfile(createName.trim()),
@@ -539,40 +542,19 @@ export default function MasterProfilePage() {
     submitMut.mutate();
   };
 
-  useEffect(() => {
-    if (!submitWarning) return;
-    const msg = masterSubmitValidationMessage(buildMasterPatchBody());
-    if (msg === null) setSubmitWarning("");
-    else setSubmitWarning(msg);
-  }, [
-    submitWarning,
-    displayName,
-    bio,
-    phone,
-    city,
-    payoutLegalForm,
-    yookassaSellerAccountId,
-    payoutLegalName,
-    payoutInn,
-    payoutKpp,
-    payoutOgrn,
-    payoutOgrnip,
-    payoutBankName,
-    payoutBik,
-    payoutSettlementAccount,
-    payoutCorrespondentAccount,
-    workFormat,
-    travelRadius,
-    travelBasePinLat,
-    travelBasePinLon,
-    travelExcludeZones,
-    experienceYears,
-    hourlyRub,
-    specText,
-    availabilityNote,
-    services,
-    profile?.availability_json,
-  ]);
+  // Render-time переоценка submitWarning по мере редактирования формы.
+  // Раньше: useEffect с длинным списком зависимостей — нарушало
+  // react-hooks/set-state-in-effect. Теперь считаем актуальное предупреждение
+  // на каждом рендере (только когда уже показано) и синхронизируем в state
+  // через render-time setState (React 19 pattern).
+  const liveSubmitWarning = submitWarning
+    ? (masterSubmitValidationMessage(buildMasterPatchBody()) ?? "")
+    : "";
+  const [prevLiveSubmitWarning, setPrevLiveSubmitWarning] = useState(submitWarning);
+  if (submitWarning && liveSubmitWarning !== prevLiveSubmitWarning) {
+    setPrevLiveSubmitWarning(liveSubmitWarning);
+    setSubmitWarning(liveSubmitWarning);
+  }
 
   const uploadPhotoMu = useMutation({
     mutationFn: (file: File) => uploadMasterPhoto(file),

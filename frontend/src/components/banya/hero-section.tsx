@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useRef, useEffect } from "react"
+import { useState, useRef, useEffect, useMemo } from "react"
 import { useRouter } from "next/navigation"
 import Link from "next/link"
 import { Button } from "@/components/ui/button"
@@ -19,17 +19,15 @@ export function HeroSection() {
   const router = useRouter()
   const [city, setCity] = useState("")
   const [name, setName] = useState("")
-  const [suggestions, setSuggestions] = useState<string[]>([])
   const [showSuggestions, setShowSuggestions] = useState(false)
   const wrapperRef = useRef<HTMLDivElement>(null)
 
-  useEffect(() => {
-    if (city.length < 1) {
-      setSuggestions([])
-      return
-    }
+  // Derive during render: список подсказок — чистая функция от city, не нужно
+  // хранить как state и пересчитывать в useEffect (set-state-in-effect).
+  const suggestions = useMemo<string[]>(() => {
+    if (city.length < 1) return []
     const q = city.toLowerCase()
-    setSuggestions(RUSSIAN_CITIES.filter((c) => c.toLowerCase().startsWith(q)).slice(0, 6))
+    return RUSSIAN_CITIES.filter((c) => c.toLowerCase().startsWith(q)).slice(0, 6)
   }, [city])
 
   useEffect(() => {

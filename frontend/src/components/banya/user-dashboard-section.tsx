@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Empty, EmptyMedia, EmptyTitle, EmptyDescription, EmptyContent } from "@/components/ui/empty"
 import { CalendarDays, Users, Clock, X } from "lucide-react"
+import Link from "next/link"
 
 interface Booking {
   id: string
@@ -148,7 +149,7 @@ export function UserDashboardSection() {
                 </EmptyDescription>
                 <EmptyContent>
                   <Button asChild>
-                    <a href="/venues">Перейти в каталог</a>
+                    <Link href="/venues">Перейти в каталог</Link>
                   </Button>
                 </EmptyContent>
               </Empty>

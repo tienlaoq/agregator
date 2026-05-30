@@ -101,11 +101,16 @@ export function MasterPublicPageClient({
     refetchOnMount: ssrMaster ? false : true,
   });
 
+  // Render-time сброс reviews при смене мастера, а сам fetch — в effect
+  // (legit async sync с внешним миром). Раньше setReviews([]) синхронно
+  // в начале effect — нарушение react-hooks/set-state-in-effect.
+  const [prevMasterIdForReviews, setPrevMasterIdForReviews] = useState<string | undefined>(master?.id);
+  if (master?.id !== prevMasterIdForReviews) {
+    setPrevMasterIdForReviews(master?.id);
+    setReviews([]);
+  }
   useEffect(() => {
-    if (!master?.id) {
-      setReviews([]);
-      return;
-    }
+    if (!master?.id) return;
     getMasterReviews(master.id)
       .then(setReviews)
       .catch(() => {
@@ -113,7 +118,10 @@ export function MasterPublicPageClient({
       });
   }, [master?.id]);
 
-  const reloadReviews = useCallback(async () => {
+  // useCallback здесь был обязан правилам React Compiler удалить (он сам
+  // мемоизует). Оставлен как обычная функция — компилятор автоматически
+  // делает её стабильной для дочерних компонентов.
+  const reloadReviews = async () => {
     if (!master?.id) return;
     try {
       const r = await getMasterReviews(master.id);
@@ -121,7 +129,7 @@ export function MasterPublicPageClient({
     } catch {
       // keep current state on refresh errors
     }
-  }, [master?.id]);
+  };
 
   const showPublicTravelZone = useMemo(() => {
     if (!master) return false;
@@ -245,11 +253,13 @@ export function MasterPublicPageClient({
     return null;
   }, [master, selectedServiceIds, time, timeTo, slotValid]);
 
-  useEffect(() => {
-    if (!time || !master) {
-      if (!time) setTimeTo("");
-      return;
-    }
+  // Render-time управление time/timeTo вместо трёх useEffect'ов
+  // (react-hooks/set-state-in-effect). Логика:
+  //   1) при сбросе date — очищаем time и timeTo
+  //   2) при смене (time | selectedServiceIds | master.id) — пересчитываем timeTo
+  //   3) если текущий timeTo не входит в валидные опции для time — пересчитываем
+  const computeAutoTimeTo = (): string => {
+    if (!time || !master) return "";
     let addMin = 120;
     if (selectedServiceIds.length > 0) {
       let m = 30;
@@ -260,32 +270,43 @@ export function MasterPublicPageClient({
       }
       addMin = Math.max(30, m);
     }
-    setTimeTo(defaultEndTimeForDuration(time, addMin));
-  }, [time, selectedServiceIds, master]);
+    return defaultEndTimeForDuration(time, addMin);
+  };
 
-  useEffect(() => {
+  // 1) Сброс при очистке date.
+  const [prevDate, setPrevDate] = useState(date);
+  if (date !== prevDate) {
+    setPrevDate(date);
     if (!date) {
       setTime("");
       setTimeTo("");
     }
-  }, [date]);
+  }
 
-  useEffect(() => {
-    if (!time || !timeTo || !master) return;
-    const opts = endTimeOptionsThirtyMinutes(time);
-    if (opts.length === 0 || opts.includes(timeTo)) return;
-    let addMin = 120;
-    if (selectedServiceIds.length > 0) {
-      let m = 30;
-      for (const id of selectedServiceIds) {
-        const s = master.services?.find((x) => x.id === id);
-        if (!s) continue;
-        m = Math.max(m, masterServiceDurationMin(s));
-      }
-      addMin = Math.max(30, m);
+  // 2) Пересчёт timeTo при смене входов.
+  const autoTimeToKey = `${time}|${selectedServiceIds.join(",")}|${master?.id ?? ""}`;
+  const [prevAutoTimeToKey, setPrevAutoTimeToKey] = useState(autoTimeToKey);
+  if (autoTimeToKey !== prevAutoTimeToKey) {
+    setPrevAutoTimeToKey(autoTimeToKey);
+    if (!time) {
+      setTimeTo("");
+    } else if (master) {
+      setTimeTo(computeAutoTimeTo());
     }
-    setTimeTo(defaultEndTimeForDuration(time, addMin));
-  }, [time, timeTo, selectedServiceIds, master]);
+  }
+
+  // 3) Самокорректирующая проверка: если current timeTo не валиден — заменяем.
+  // Render-time setState разрешён, пока выход стабилизируется (newTimeTo === timeTo
+  // на следующем рендере).
+  if (time && timeTo && master) {
+    const opts = endTimeOptionsThirtyMinutes(time);
+    if (opts.length > 0 && !opts.includes(timeTo)) {
+      const newTimeTo = computeAutoTimeTo();
+      if (newTimeTo !== timeTo) {
+        setTimeTo(newTimeTo);
+      }
+    }
+  }
 
   const onBook = () => {
     setMsg("");

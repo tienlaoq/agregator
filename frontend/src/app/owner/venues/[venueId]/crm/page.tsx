@@ -275,11 +275,15 @@ export default function OwnerVenueCrmPage() {
     },
   });
 
-  useEffect(() => {
-    if (!venuesLoading && validId && venues && !venue) {
-      setPageError("Заведение не найдено в вашем доступе.");
-    }
-  }, [venuesLoading, validId, venues, venue]);
+  // Render-time pattern (React 19): когда выясняется, что у пользователя нет
+  // доступа к venue, выставляем ошибку один раз без useEffect (правило
+  // react-hooks/set-state-in-effect).
+  const accessDenied = !venuesLoading && validId && !!venues && !venue
+  const [accessDeniedReported, setAccessDeniedReported] = useState(false)
+  if (accessDenied && !accessDeniedReported) {
+    setAccessDeniedReported(true)
+    setPageError("Заведение не найдено в вашем доступе.")
+  }
 
   if (!hydrated || !token) return null;
 

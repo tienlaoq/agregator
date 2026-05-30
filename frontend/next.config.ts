@@ -18,7 +18,7 @@ function buildCsp(nonce?: string): string {
   // dev: unsafe-inline нужен для hot-reload; prod: только nonce или hash
   const scriptInline = isProd ? (nonceAttr || "") : "'unsafe-inline'";
 
-  const directives: Record<string, string> = {
+  const directives: Record<string, string | undefined> = {
     "default-src": "'self'",
     "script-src": [
       "'self'",

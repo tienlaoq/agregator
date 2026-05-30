@@ -1,6 +1,9 @@
 "use client"
 
 import { useCallback, useEffect, useState } from "react"
+// React 19 pattern for "reset state when a prop changes": compare a tracked
+// value during render instead of writing state from inside useEffect.
+// See https://react.dev/reference/react/useState#storing-information-from-previous-renders
 
 export interface GallerySlide {
   id: string
@@ -18,11 +21,15 @@ export function useGallery(slides: GallerySlide[], resetKey?: string | null) {
   const [index, setIndex] = useState(0)
   const [lightboxOpen, setLightboxOpen] = useState(false)
 
-  // Сбрасываем при смене объекта
-  useEffect(() => {
+  // Сбрасываем при смене объекта.
+  // Render-time reset (вместо useEffect): React 19 заново отрендерит этот
+  // компонент со сброшенным состоянием без cascading re-render.
+  const [prevResetKey, setPrevResetKey] = useState(resetKey)
+  if (resetKey !== prevResetKey) {
+    setPrevResetKey(resetKey)
     setIndex(0)
     setLightboxOpen(false)
-  }, [resetKey])
+  }
 
   const count = slides.length
   const safeIndex = count > 0 ? Math.min(index, count - 1) : 0

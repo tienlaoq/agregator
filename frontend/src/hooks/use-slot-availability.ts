@@ -32,15 +32,22 @@ export function useSlotAvailability({
   const [availableSlots, setAvailableSlots] = useState<string[]>([])
   const [slotsLoading, setSlotsLoading] = useState(false)
 
+  // Render-time reset on input change (React 19 pattern, см. use-gallery.ts).
+  // Сбрасываем слоты и взводим загрузку синхронно при смене ключа запроса —
+  // вместо setState внутри useEffect, который запрещён правилом
+  // react-hooks/set-state-in-effect (cascading renders).
+  const fetchKey = slug && date ? `${slug}|${format(date, "yyyy-MM-dd")}|${durationMin}` : ""
+  const [prevFetchKey, setPrevFetchKey] = useState(fetchKey)
+  if (fetchKey !== prevFetchKey) {
+    setPrevFetchKey(fetchKey)
+    setAvailableSlots([])
+    setSlotsLoading(fetchKey !== "")
+  }
+
   useEffect(() => {
-    if (!slug || !date) {
-      setAvailableSlots([])
-      return
-    }
+    if (!slug || !date) return
     const iso = format(date, "yyyy-MM-dd")
     let active = true
-    setSlotsLoading(true)
-    setAvailableSlots([])
 
     getVenueAvailability(slug, iso, durationMin)
       .then((r) => {

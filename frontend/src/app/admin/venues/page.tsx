@@ -82,9 +82,14 @@ export default function AdminVenuesPage() {
     return () => window.clearTimeout(t)
   }, [nameSearch])
 
-  useEffect(() => {
+  // Render-time reset (React 19): сбрасываем пагинацию на 1 при смене фильтров
+  // без useEffect, чтобы не нарушать react-hooks/set-state-in-effect.
+  const filterKey = `${filterStatus}|${debouncedSearch}`
+  const [prevFilterKey, setPrevFilterKey] = useState(filterKey)
+  if (filterKey !== prevFilterKey) {
+    setPrevFilterKey(filterKey)
     setPage(1)
-  }, [filterStatus, debouncedSearch])
+  }
 
   const { data, isLoading } = useQuery({
     queryKey: ["admin-venues", filterStatus, debouncedSearch, page],
