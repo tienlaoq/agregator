@@ -2,6 +2,7 @@ package dbmigrate
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -19,6 +20,13 @@ const (
 	depWaitInterval = time.Second
 )
 
+// migrationLockName seeds a session-level pg_advisory_lock so that concurrent
+// migrators against the shared venue_db serialize — multiple crm replicas, or a
+// venue-service that adopts the same name. It is acquired AFTER the dependency
+// wait: locking earlier could deadlock a venue-service that holds the same lock
+// while it creates the venues table this service is waiting for.
+const migrationLockName = "banya:venue_db:schema_migrations"
+
 // dependencyTables must exist before crm migrations run. crm-service shares
 // venue_db with venue-service (strangler-fig phase B) and its migrations
 // FK-reference venues(id); venue-service owns that table. When CRM moves to its
@@ -26,7 +34,9 @@ const (
 var dependencyTables = []string{"venues"}
 
 // Up applies *.up.sql from dir in numeric-prefix order, skipping versions
-// already recorded in schema_migrations.
+// already recorded in schema_migrations. Each migration's SQL and its
+// schema_migrations record commit in a single transaction, so a mid-file
+// failure rolls back fully and is retried cleanly on the next run.
 //
 // Strangler-fig caveat: crm-service shares its Postgres database with
 // venue-service. Because crm migrations FK-reference venues(id), and each
@@ -70,6 +80,18 @@ func Up(ctx context.Context, dsn, dir string, log zerolog.Logger) error {
 		return err
 	}
 
+	if _, err := conn.Exec(ctx, `SELECT pg_advisory_lock(hashtext($1))`, migrationLockName); err != nil {
+		return fmt.Errorf("acquire migration lock: %w", err)
+	}
+	defer func() {
+		// Use an uncancellable context so the lock is released even when ctx
+		// is already done; the session lock would otherwise drop only on close.
+		if _, err := conn.Exec(context.WithoutCancel(ctx),
+			`SELECT pg_advisory_unlock(hashtext($1))`, migrationLockName); err != nil {
+			log.Warn().Err(err).Msg("release migration advisory lock failed")
+		}
+	}()
+
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return fmt.Errorf("read migrations dir: %w", err)
@@ -95,7 +117,7 @@ func Up(ctx context.Context, dsn, dir string, log zerolog.Logger) error {
 		if err == nil {
 			continue
 		}
-		if err != pgx.ErrNoRows {
+		if !errors.Is(err, pgx.ErrNoRows) {
 			return fmt.Errorf("check migration %s: %w", name, err)
 		}
 
@@ -108,12 +130,21 @@ func Up(ctx context.Context, dsn, dir string, log zerolog.Logger) error {
 			continue
 		}
 
-		if _, err := conn.Exec(ctx, sql); err != nil {
+		tx, err := conn.Begin(ctx)
+		if err != nil {
+			return fmt.Errorf("begin migration %s: %w", name, err)
+		}
+		if _, err := tx.Exec(ctx, sql); err != nil {
+			_ = tx.Rollback(ctx)
 			return fmt.Errorf("apply migration %s: %w", name, err)
 		}
-		if _, err := conn.Exec(ctx,
+		if _, err := tx.Exec(ctx,
 			`INSERT INTO schema_migrations (version) VALUES ($1)`, name); err != nil {
+			_ = tx.Rollback(ctx)
 			return fmt.Errorf("record migration %s: %w", name, err)
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return fmt.Errorf("commit migration %s: %w", name, err)
 		}
 		log.Info().Str("migration", name).Msg("applied migration")
 	}

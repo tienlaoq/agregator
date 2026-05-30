@@ -76,7 +76,7 @@ func (s *Server) GetManagementAccess(ctx context.Context, req *crmv1.GetManageme
 	}
 	access, err := s.uc.GetManagementAccess(ctx, venueID, userID)
 	if err != nil {
-		return nil, s.internalErr(err, "get management access failed")
+		return nil, s.passthroughOrInternal(err, "get management access failed")
 	}
 	return &crmv1.GetManagementAccessResponse{Access: access}, nil
 }
@@ -96,7 +96,7 @@ func (s *Server) BatchGetManagementAccess(ctx context.Context, req *crmv1.BatchG
 	}
 	access, err := s.uc.BatchGetManagementAccess(ctx, userID, ids)
 	if err != nil {
-		return nil, s.internalErr(err, "batch get management access failed")
+		return nil, s.passthroughOrInternal(err, "batch get management access failed")
 	}
 	out := &crmv1.BatchGetManagementAccessResponse{
 		Access: make(map[string]string, len(access)),
@@ -114,7 +114,7 @@ func (s *Server) ListManagedVenues(ctx context.Context, req *crmv1.ListManagedVe
 	}
 	venues, err := s.uc.ListManagedVenues(ctx, userID)
 	if err != nil {
-		return nil, s.internalErr(err, "list managed venues failed")
+		return nil, s.passthroughOrInternal(err, "list managed venues failed")
 	}
 	out := &crmv1.ListManagedVenuesResponse{Venues: make([]*crmv1.ManagedVenue, len(venues))}
 	for i, v := range venues {
