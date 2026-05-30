@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi, type Mock } from "vitest";
 import { login, register, getVenues, ApiError, formatApiErrorMessage } from "@/lib/api";
+import { useAuthStore } from "@/store/auth";
 
 const API_URL = "http://localhost:8080";
 
@@ -7,6 +8,8 @@ let fetchMock: Mock;
 
 beforeEach(() => {
   localStorage.clear();
+  // Access token lives only in memory now — reset the store between tests.
+  useAuthStore.setState({ token: null, user: null });
   fetchMock = vi.fn();
   global.fetch = fetchMock;
 });
@@ -47,10 +50,13 @@ describe("login", () => {
   });
 
   it("parses gateway code from JSON error body", async () => {
+    // Use 403 (not 401): a 401 in the browser now triggers the silent
+    // auto-refresh flow and surfaces "session_expired" instead of the
+    // upstream gateway code. Any other status passes the gateway error through.
     fetchMock.mockResolvedValueOnce(
-      mockResponse(401, {
-        code: "GATEWAY.UPSTREAM.UNAUTHENTICATED",
-        error: "rpc error: code = Unauthenticated desc = INTERNAL LEAK",
+      mockResponse(403, {
+        code: "GATEWAY.UPSTREAM.PERMISSION_DENIED",
+        error: "rpc error: code = PermissionDenied desc = INTERNAL LEAK",
       }),
     );
 
@@ -60,7 +66,7 @@ describe("login", () => {
     } catch (e) {
       expect(e).toBeInstanceOf(ApiError);
       const err = e as ApiError;
-      expect(err.code).toBe("GATEWAY.UPSTREAM.UNAUTHENTICATED");
+      expect(err.code).toBe("GATEWAY.UPSTREAM.PERMISSION_DENIED");
       expect(formatApiErrorMessage(err, "fallback")).not.toContain("rpc");
       expect(formatApiErrorMessage(err, "fallback")).not.toContain("INTERNAL");
     }
@@ -88,7 +94,8 @@ describe("register", () => {
 
 describe("fetchAPI authorization", () => {
   it("adds Authorization header when token exists", async () => {
-    localStorage.setItem("token", "my-jwt");
+    // Access token now lives in the Zustand store (memory), not localStorage.
+    useAuthStore.setState({ token: "my-jwt" });
     fetchMock.mockResolvedValueOnce(
       mockResponse(200, { venues: [], total: 0, page: 1, page_size: 10 }),
     );
@@ -113,17 +120,19 @@ describe("fetchAPI authorization", () => {
 
 describe("fetchAPI auto-refresh on 401", () => {
   it("retries request after successful token refresh", async () => {
-    localStorage.setItem("token", "expired-tok");
-    localStorage.setItem("refresh_token", "valid-refresh");
+    // Refresh flow: refresh_token is in an httpOnly cookie. The browser calls
+    // /api/auth/refresh, then setTokens() persists the new access token via
+    // /api/auth/set-refresh, then the original request is retried.
+    useAuthStore.setState({ token: "expired-tok" });
 
     fetchMock
+      // 1) original request → 401
       .mockResolvedValueOnce(mockResponse(401, "expired"))
-      .mockResolvedValueOnce(
-        mockResponse(200, {
-          access_token: "new-tok",
-          refresh_token: "new-ref",
-        }),
-      )
+      // 2) POST /api/auth/refresh → new access token
+      .mockResolvedValueOnce(mockResponse(200, { access_token: "new-tok" }))
+      // 3) POST /api/auth/set-refresh (inside setTokens) → ok
+      .mockResolvedValueOnce(mockResponse(200, { ok: true }))
+      // 4) retried original request → success
       .mockResolvedValueOnce(
         mockResponse(200, { venues: [], total: 0, page: 1, page_size: 10 }),
       );
@@ -131,22 +140,23 @@ describe("fetchAPI auto-refresh on 401", () => {
     const result = await getVenues({ page: 1 });
 
     expect(result.venues).toEqual([]);
-    expect(localStorage.getItem("token")).toBe("new-tok");
-    expect(localStorage.getItem("refresh_token")).toBe("new-ref");
+    // New access token lives in the store, never in localStorage.
+    expect(useAuthStore.getState().token).toBe("new-tok");
+    expect(localStorage.getItem("token")).toBeNull();
   });
 
   it("throws when refresh fails and original request was 401", async () => {
-    localStorage.setItem("token", "expired-tok");
-    localStorage.setItem("refresh_token", "bad-refresh");
+    useAuthStore.setState({ token: "expired-tok" });
 
-    const originalHref = window.location.href;
     Object.defineProperty(window, "location", {
       writable: true,
-      value: { href: originalHref },
+      value: { href: "" },
     });
 
     fetchMock
+      // 1) original request → 401
       .mockResolvedValueOnce(mockResponse(401, "expired"))
+      // 2) POST /api/auth/refresh → 401 (refresh rejected)
       .mockResolvedValueOnce(mockResponse(401, "refresh failed"));
 
     await expect(getVenues({ page: 1 })).rejects.toThrow();
