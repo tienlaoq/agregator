@@ -80,7 +80,7 @@ func TestCreateBooking_Success(t *testing.T) {
 			require.Equal(t, bookingID, in.BookingId)
 			require.Equal(t, int64(10000), in.Amount)
 			require.Contains(t, in.Description, bookingID)
-			require.Equal(t, bookingID, in.IdempotencyKey)
+			require.Equal(t, bookingIdempotencyKey(bookingID, "user-1"), in.IdempotencyKey)
 			return &paymentv1.PaymentResponse{Id: paymentID, PaymentUrl: paymentURL}, nil
 		},
 	}

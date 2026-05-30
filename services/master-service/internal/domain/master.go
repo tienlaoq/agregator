@@ -303,6 +303,12 @@ func innChecksum(digits string, weights []int) int {
 // without going through ValidatePayoutProfile.
 func ValidateINN(raw string) bool {
 	d := extractDigits(raw)
+	// All-zeros INN has a checksum of zero and would otherwise pass the
+	// weighted-sum check below. It is not a real assignable INN — reject it
+	// explicitly so callers do not have to.
+	if strings.Trim(d, "0") == "" {
+		return false
+	}
 	switch len(d) {
 	case 10:
 		w := []int{2, 4, 10, 3, 5, 9, 4, 6, 8}

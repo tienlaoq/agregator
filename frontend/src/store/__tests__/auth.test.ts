@@ -21,21 +21,24 @@ beforeEach(() => {
 });
 
 describe("useAuthStore", () => {
-  it("login stores token, refreshToken and user", () => {
-    useAuthStore.getState().login("access-tok", "refresh-tok", testUser);
+  it("login stores access token (memory) and user; never persists tokens", async () => {
+    await useAuthStore.getState().login("access-tok", "refresh-tok", testUser);
 
     const state = useAuthStore.getState();
     expect(state.token).toBe("access-tok");
-    expect(state.refreshToken).toBe("refresh-tok");
+    // refreshToken is deprecated — refresh token lives in an httpOnly cookie.
+    expect(state.refreshToken).toBeNull();
     expect(state.user).toEqual(testUser);
-    expect(localStorage.getItem("token")).toBe("access-tok");
-    expect(localStorage.getItem("refresh_token")).toBe("refresh-tok");
+    // Access token lives only in memory; refresh token only in httpOnly cookie.
+    expect(localStorage.getItem("token")).toBeNull();
+    expect(localStorage.getItem("refresh_token")).toBeNull();
+    // Only the non-secret user profile is persisted.
     expect(JSON.parse(localStorage.getItem("user")!)).toEqual(testUser);
   });
 
-  it("logout clears all data", () => {
-    useAuthStore.getState().login("tok", "ref", testUser);
-    useAuthStore.getState().logout();
+  it("logout clears all data", async () => {
+    await useAuthStore.getState().login("tok", "ref", testUser);
+    await useAuthStore.getState().logout();
 
     const state = useAuthStore.getState();
     expect(state.token).toBeNull();
@@ -46,18 +49,22 @@ describe("useAuthStore", () => {
     expect(localStorage.getItem("user")).toBeNull();
   });
 
-  it("hydrate reads from localStorage", () => {
+  it("hydrate migrates legacy token out of localStorage into memory", () => {
+    // Legacy sessions stored the access token in localStorage; hydrate reads it
+    // into memory and evicts it (and any stale refresh_token) from storage.
     localStorage.setItem("token", "hydrated-tok");
-    localStorage.setItem("refresh_token", "hydrated-ref");
+    localStorage.setItem("refresh_token", "stale-ref");
     localStorage.setItem("user", JSON.stringify(testUser));
 
     useAuthStore.getState().hydrate();
 
     const state = useAuthStore.getState();
     expect(state.token).toBe("hydrated-tok");
-    expect(state.refreshToken).toBe("hydrated-ref");
+    expect(state.refreshToken).toBeNull();
     expect(state.user).toEqual(testUser);
     expect(state.hydrated).toBe(true);
+    expect(localStorage.getItem("token")).toBeNull();
+    expect(localStorage.getItem("refresh_token")).toBeNull();
   });
 
   it("hydrate with empty localStorage", () => {
@@ -70,16 +77,17 @@ describe("useAuthStore", () => {
     expect(state.hydrated).toBe(true);
   });
 
-  it("setTokens updates tokens without touching user", () => {
-    useAuthStore.getState().login("old-tok", "old-ref", testUser);
-    useAuthStore.getState().setTokens("new-tok", "new-ref");
+  it("setTokens updates access token without touching user", async () => {
+    await useAuthStore.getState().login("old-tok", "old-ref", testUser);
+    await useAuthStore.getState().setTokens("new-tok", "new-ref");
 
     const state = useAuthStore.getState();
     expect(state.token).toBe("new-tok");
-    expect(state.refreshToken).toBe("new-ref");
+    expect(state.refreshToken).toBeNull();
     expect(state.user).toEqual(testUser);
-    expect(localStorage.getItem("token")).toBe("new-tok");
-    expect(localStorage.getItem("refresh_token")).toBe("new-ref");
+    // Access token stays in memory; refresh token stays in the httpOnly cookie.
+    expect(localStorage.getItem("token")).toBeNull();
+    expect(localStorage.getItem("refresh_token")).toBeNull();
   });
 
   it("setUser updates user in state and localStorage", () => {

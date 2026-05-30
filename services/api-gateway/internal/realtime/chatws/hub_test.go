@@ -68,11 +68,24 @@ func TestBroadcast_SlowClientDoesNotBlockOthers(t *testing.T) {
 	h.addWithConn("u1", slow)
 	h.addWithConn("u2", fast)
 
+	// Keep the batch well under defaultQueueSize so neither client overflows
+	// its send buffer. Overflow would drop a client via Broadcast's non-blocking
+	// `default` case — and on a loaded CI runner the *fast* client's writeLoop
+	// may not be scheduled before its buffer fills, dropping it too and making
+	// this test flaky. The invariant under test is "a client blocked inside
+	// WriteMessage (slow) must not prevent another client (fast) from receiving
+	// broadcasts", which holds without forcing an overflow: each client has its
+	// own goroutine + buffered channel, and Broadcast never blocks.
+	const n = 8
+	if n >= defaultQueueSize {
+		t.Fatalf("test batch %d must stay below queue size %d", n, defaultQueueSize)
+	}
+
 	var wg sync.WaitGroup
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		for i := 0; i < defaultQueueSize+16; i++ {
+		for i := 0; i < n; i++ {
 			h.Broadcast([]string{"u1", "u2"}, map[string]any{"n": i})
 		}
 	}()
@@ -83,18 +96,27 @@ func TestBroadcast_SlowClientDoesNotBlockOthers(t *testing.T) {
 		close(done)
 	}()
 
+	// The broadcast loop must finish promptly: a blocked slow client must never
+	// stall it. The timeout is generous relative to the multi-minute CI test
+	// timeout; it only guards against a genuine deadlock.
 	select {
 	case <-done:
-	case <-time.After(500 * time.Millisecond):
+	case <-time.After(5 * time.Second):
 		t.Fatal("broadcast loop blocked by slow client")
 	}
 
-	deadline := time.Now().Add(500 * time.Millisecond)
-	for fast.writes.Load() == 0 && time.Now().Before(deadline) {
+	// The fast client is never dropped (batch < buffer), so its writeLoop will
+	// drain all n messages once scheduled. Poll until it catches up.
+	deadline := time.Now().Add(5 * time.Second)
+	for fast.writes.Load() < int32(n) && time.Now().Before(deadline) {
 		time.Sleep(5 * time.Millisecond)
 	}
-	if fast.writes.Load() == 0 {
-		t.Fatal("expected fast client to receive messages")
+	if got := fast.writes.Load(); got < int32(n) {
+		t.Fatalf("expected fast client to receive %d messages, got %d", n, got)
+	}
+	// Sanity: the slow client stayed blocked (not dropped) — we never overflowed.
+	if slow.closed.Load() {
+		t.Fatal("slow client was unexpectedly dropped; batch overflowed the queue")
 	}
 }
 

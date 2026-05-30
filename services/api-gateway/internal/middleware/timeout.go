@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"context"
 	"net/http"
 	"time"
 )
@@ -27,6 +28,17 @@ import (
 //	r.Get("/chat/ws", chatHandler.WS)
 func RequestTimeout(d time.Duration) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
-		return http.TimeoutHandler(next, d, `{"error":"request timeout"}`)
+		timeoutHandler := http.TimeoutHandler(next, d, `{"error":"request timeout"}`)
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// http.TimeoutHandler on its own writes 503 when the timer fires but
+			// does NOT cancel the request context — the handler goroutine keeps
+			// running and any downstream gRPC call it made will not abort.
+			// Wrapping the request with a context.WithTimeout propagates the
+			// cancellation so handlers observing r.Context().Done() unblock and
+			// downstream RPCs are aborted promptly.
+			ctx, cancel := context.WithTimeout(r.Context(), d)
+			defer cancel()
+			timeoutHandler.ServeHTTP(w, r.WithContext(ctx))
+		})
 	}
 }
