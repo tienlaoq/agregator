@@ -13,4 +13,5 @@ use (
 	./services/master-service
 	./services/chat-service
 	./services/crm-service
+	./services/notification-service
 )

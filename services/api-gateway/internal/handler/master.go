@@ -69,7 +69,6 @@ func masterProtoToJSON(m *masterv1.Master) map[string]any {
 		"hourly_rate":                  m.GetHourlyRate(),
 		"availability_json":            m.GetAvailabilityJson(),
 		"payout_legal_form":            m.GetPayoutLegalForm(),
-		"yookassa_seller_account_id":   m.GetYookassaSellerAccountId(),
 		"payout_legal_name":            m.GetPayoutLegalName(),
 		"payout_inn":                   m.GetPayoutInn(),
 		"payout_kpp":                   m.GetPayoutKpp(),
@@ -121,7 +120,6 @@ func masterProtoToJSON(m *masterv1.Master) map[string]any {
 func masterProtoToJSONPublic(m *masterv1.Master) map[string]any {
 	out := masterProtoToJSON(m)
 	delete(out, "payout_legal_form")
-	delete(out, "yookassa_seller_account_id")
 	delete(out, "payout_legal_name")
 	delete(out, "payout_inn")
 	delete(out, "payout_kpp")
@@ -324,7 +322,7 @@ func (h *MasterHandler) updateReqFromRaw(uid string, raw map[string]json.RawMess
 		}
 	}
 	var dn, bio, phone, city, wf, avj, plf *string
-	var ysa, pln, pinn, pkpp, pogrn, pogrnip, pbank, pbik, psettle, pcorr, pver *string
+	var pln, pinn, pkpp, pogrn, pogrnip, pbank, pbik, psettle, pcorr, pver *string
 	var tr, ex *int32
 	var hr *int64
 	var tblat, tblon *float64
@@ -335,7 +333,6 @@ func (h *MasterHandler) updateReqFromRaw(uid string, raw map[string]json.RawMess
 	setString("work_format", &wf)
 	setString("availability_json", &avj)
 	setString("payout_legal_form", &plf)
-	setString("yookassa_seller_account_id", &ysa)
 	setString("payout_legal_name", &pln)
 	setString("payout_inn", &pinn)
 	setString("payout_kpp", &pkpp)
@@ -363,7 +360,6 @@ func (h *MasterHandler) updateReqFromRaw(uid string, raw map[string]json.RawMess
 	req.TravelBaseLatitude = tblat
 	req.TravelBaseLongitude = tblon
 	req.PayoutLegalForm = plf
-	req.YookassaSellerAccountId = ysa
 	req.PayoutLegalName = pln
 	req.PayoutInn = pinn
 	req.PayoutKpp = pkpp

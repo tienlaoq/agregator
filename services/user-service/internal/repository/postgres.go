@@ -37,7 +37,7 @@ func (r *PostgresUserRepository) Create(ctx context.Context, user *domain.User) 
 
 func (r *PostgresUserRepository) GetByID(ctx context.Context, id string) (*domain.User, error) {
 	return r.scanUser(r.pool.QueryRow(ctx,
-		`SELECT id, email, phone, name, role, avatar_url, bio, created_at, updated_at
+		`SELECT id, email, phone, name, role, avatar_url, bio, created_at, updated_at, deleted_at
 		 FROM users WHERE id = $1`, id))
 }
 
@@ -46,7 +46,7 @@ func (r *PostgresUserRepository) GetBatch(ctx context.Context, ids []string) (ma
 		return map[string]*domain.User{}, nil
 	}
 	rows, err := r.pool.Query(ctx,
-		`SELECT id, email, phone, name, role, avatar_url, bio, created_at, updated_at
+		`SELECT id, email, phone, name, role, avatar_url, bio, created_at, updated_at, deleted_at
 		 FROM users WHERE id = ANY($1)`, ids)
 	if err != nil {
 		return nil, err
@@ -57,7 +57,7 @@ func (r *PostgresUserRepository) GetBatch(ctx context.Context, ids []string) (ma
 		var u domain.User
 		if err := rows.Scan(
 			&u.ID, &u.Email, &u.Phone, &u.Name, &u.Role,
-			&u.AvatarURL, &u.Bio, &u.CreatedAt, &u.UpdatedAt,
+			&u.AvatarURL, &u.Bio, &u.CreatedAt, &u.UpdatedAt, &u.DeletedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -76,8 +76,33 @@ func (r *PostgresUserRepository) GetBatch(ctx context.Context, ids []string) (ma
 // call that would otherwise be needed.
 func (r *PostgresUserRepository) GetByEmail(ctx context.Context, email string) (*domain.User, error) {
 	return r.scanUser(r.pool.QueryRow(ctx,
-		`SELECT id, email, phone, name, role, avatar_url, bio, created_at, updated_at
+		`SELECT id, email, phone, name, role, avatar_url, bio, created_at, updated_at, deleted_at
 		 FROM users WHERE lower(trim(email)) = $1`, email))
+}
+
+// SoftDelete anonymises and deactivates the user in one UPDATE. The email is
+// rewritten to a per-id tombstone so the original address is freed for a future
+// re-registration while the functional unique index on lower(trim(email)) stays
+// satisfied. WHERE deleted_at IS NULL makes the call idempotent: a repeat on an
+// already-deleted row affects 0 rows and surfaces ErrNotFound.
+func (r *PostgresUserRepository) SoftDelete(ctx context.Context, id string) error {
+	tag, err := r.pool.Exec(ctx,
+		`UPDATE users
+		 SET email      = 'deleted+' || id::text || '@deleted.local',
+		     name       = 'Удалённый аккаунт',
+		     phone      = NULL,
+		     avatar_url = NULL,
+		     bio        = NULL,
+		     deleted_at = now(),
+		     updated_at = now()
+		 WHERE id = $1 AND deleted_at IS NULL`, id)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return domain.ErrNotFound
+	}
+	return nil
 }
 
 func (r *PostgresUserRepository) Update(ctx context.Context, user *domain.User) error {
@@ -103,7 +128,7 @@ func (r *PostgresUserRepository) scanUser(row pgx.Row) (*domain.User, error) {
 	var u domain.User
 	err := row.Scan(
 		&u.ID, &u.Email, &u.Phone, &u.Name, &u.Role,
-		&u.AvatarURL, &u.Bio, &u.CreatedAt, &u.UpdatedAt,
+		&u.AvatarURL, &u.Bio, &u.CreatedAt, &u.UpdatedAt, &u.DeletedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		// Translate the pgx sentinel into the domain sentinel so the usecase

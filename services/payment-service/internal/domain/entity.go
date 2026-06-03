@@ -40,29 +40,24 @@ func (s PaymentStatus) IsTerminal() bool {
 func (s PaymentStatus) String() string { return string(s) }
 
 type Payment struct {
-	ID                       string
-	BookingID                string
-	Amount                   int64
-	Status                   PaymentStatus
-	ProviderID               string
-	PaymentURL               string
-	IdempotencyKey           string
-	PlatformFeeKopecks       int64
-	CounterpartyNetKopecks   int64
-	CounterpartyType         string
-	CounterpartyID           string
-	ProviderSellerAccountID  string // formerly YooKassaSellerAccountID; provider-agnostic
-	ProviderName             string // e.g. "yookassa", "tbank"
-	CreatedAt                time.Time
-	UpdatedAt                time.Time
-}
-
-// UsesSplitCapture reports whether this payment requires an explicit capture
-// call after authorisation (i.e. it was created as a marketplace split payment
-// with capture=false).  Provider-agnostic: any provider that sets a seller
-// account uses deferred capture.
-func (p *Payment) UsesSplitCapture() bool {
-	return p.ProviderSellerAccountID != ""
+	ID                     string
+	BookingID              string
+	Amount                 int64
+	Status                 PaymentStatus
+	ProviderID             string
+	PaymentURL             string
+	IdempotencyKey         string
+	PlatformFeeKopecks     int64
+	CounterpartyNetKopecks int64
+	CounterpartyType       string // "venue" | "master"
+	CounterpartyID         string
+	ProviderName           string // e.g. "yookassa", "tbank"
+	// ServiceAt is the wall-clock moment the booked service begins.  Used to
+	// compute the accrual's available_at (= ServiceAt + payout hold).  Zero
+	// value means "no service date" — accrual falls back to created_at + hold.
+	ServiceAt time.Time
+	CreatedAt time.Time
+	UpdatedAt time.Time
 }
 
 // WebhookEvent is the provider-agnostic result of parsing and validating an

@@ -19,6 +19,11 @@ type MasterRepository interface {
 	GetBySlug(ctx context.Context, slug string) (*Master, error)
 	UpdateProfile(ctx context.Context, m *Master) error
 	UpdateStatus(ctx context.Context, masterID uuid.UUID, status, comment string, moderatedBy *uuid.UUID) error
+	// SuspendByUser sets the master profile owned by userID to status
+	// "suspended" (account-deletion cascade). Returns true when a row was
+	// transitioned, false when the user has no profile or it was already
+	// suspended. Never returns ErrNotFound — absence is a normal no-op.
+	SuspendByUser(ctx context.Context, userID uuid.UUID) (bool, error)
 	// SubmitForReviewAtomic atomically transitions the master's status to
 	// pending_review (only from draft / needs_revision / rejected) and records a
 	// ModerationHistoryEntry, all in a single transaction. Returns ErrSubmitNotAllowed

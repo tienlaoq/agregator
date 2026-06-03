@@ -12,6 +12,8 @@ import { Label } from "@/components/ui/label"
 import { Separator } from "@/components/ui/separator"
 import { register, userFromRegisterResponse, ApiError, formatApiErrorMessage } from "@/lib/api"
 import { useAuthStore } from "@/store/auth"
+import { PasswordStrength } from "@/components/banya/password-strength"
+import { isPasswordValid, PASSWORD_MIN_LENGTH } from "@/lib/password"
 import { Flame } from "lucide-react"
 
 function VKIcon({ className }: { className?: string }) {
@@ -51,7 +53,7 @@ export default function RegisterPage() {
       localStorage.setItem("token", res.access_token)
       localStorage.setItem("refresh_token", res.refresh_token)
       const user = userFromRegisterResponse(res, { name, email, role: "user" })
-      authLogin(res.access_token, res.refresh_token, user)
+      await authLogin(res.access_token, res.refresh_token, user)
       router.push("/")
     } catch (err) {
       if (err instanceof ApiError) {
@@ -129,15 +131,21 @@ export default function RegisterPage() {
               <Input
                 id="password"
                 type="password"
-                placeholder="Минимум 8 символов"
+                placeholder={`Минимум ${PASSWORD_MIN_LENGTH} символов`}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 required
-                minLength={8}
+                minLength={PASSWORD_MIN_LENGTH}
+                aria-invalid={password.length > 0 && !isPasswordValid(password)}
               />
+              <PasswordStrength value={password} />
             </div>
             {error && <p className="text-sm text-destructive">{error}</p>}
-            <Button type="submit" className="w-full" disabled={loading}>
+            <Button
+              type="submit"
+              className="w-full"
+              disabled={loading || !isPasswordValid(password)}
+            >
               {loading ? "Создаём аккаунт..." : "Зарегистрироваться"}
             </Button>
           </form>

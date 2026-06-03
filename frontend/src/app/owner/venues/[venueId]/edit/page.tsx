@@ -377,10 +377,15 @@ export default function EditOwnerVenuePage() {
 
   const validId = typeof venueId === "string" && uuidRe.test(venueId);
 
-  const { data: venues, isLoading } = useQuery({
+  const { data: venues, isLoading, isFetching } = useQuery({
     queryKey: ["owner-venues"],
     queryFn: getOwnerVenues,
     enabled: !!token && user?.role === "venue_owner" && validId,
+    // Всегда тянем свежий список при заходе на страницу карточки: глобальный
+    // staleTime (60с) мог отдать устаревший кэш, в котором только что созданного
+    // заведения ещё нет — и страница ложно показывала «Заведение не найдено».
+    staleTime: 0,
+    refetchOnMount: "always",
   });
 
   const venue = useMemo(
@@ -709,7 +714,12 @@ export default function EditOwnerVenuePage() {
     );
   }
 
-  if (isLoading || !venues) {
+  // Показываем скелетон пока:
+  //  - идёт первичная загрузка списка, либо
+  //  - список ещё не пришёл, либо
+  //  - список пришёл (возможно из устаревшего кэша) без нужного заведения, но
+  //    refetch ещё в процессе — иначе мелькнёт ложное «Заведение не найдено».
+  if (isLoading || !venues || (!venue && isFetching)) {
     return (
       <div className="min-h-screen bg-muted/30">
         <div className="container mx-auto px-4 py-10">
@@ -721,13 +731,28 @@ export default function EditOwnerVenuePage() {
     );
   }
 
-  if (!venue || !form) {
+  // Свежий список загружен, но заведения в нём нет — реально не найдено.
+  if (!venue) {
     return (
       <div className="mx-auto max-w-4xl px-4 py-10">
         <p className="text-sm text-muted-foreground">Заведение не найдено.</p>
         <Button asChild variant="link" className="mt-2 h-auto px-0 text-sm">
           <Link href="/owner/venues">← Мои заведения</Link>
         </Button>
+      </div>
+    );
+  }
+
+  // Заведение найдено, но форма ещё инициализируется из него (эффект ниже) —
+  // это загрузка, а не «не найдено».
+  if (!form) {
+    return (
+      <div className="min-h-screen bg-muted/30">
+        <div className="container mx-auto px-4 py-10">
+          <div className="mx-auto max-w-4xl">
+            <div className="h-40 animate-pulse rounded-lg border border-border bg-muted" />
+          </div>
+        </div>
       </div>
     );
   }

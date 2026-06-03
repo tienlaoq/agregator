@@ -131,9 +131,11 @@ func validateVenueType(t string) error {
 	}
 }
 
-// NormalizeVenuePayoutProfile trims ЮKassa seller id and validates payout_legal_form (empty allowed).
+// NormalizeVenuePayoutProfile validates payout_legal_form (empty allowed).
+//
+// Prior versions also trimmed yookassa_seller_account_id; that field is gone
+// since the escrow refactor — partner payout rails live in payment-service.
 func NormalizeVenuePayoutProfile(v *domain.Venue) error {
-	v.YooKassaSellerAccountID = strings.TrimSpace(v.YooKassaSellerAccountID)
 	plf := strings.TrimSpace(strings.ToLower(v.PayoutLegalForm))
 	if plf == "" {
 		v.PayoutLegalForm = domain.PayoutLegalFormEmpty

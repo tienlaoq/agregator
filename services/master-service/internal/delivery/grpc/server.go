@@ -134,10 +134,6 @@ func (s *Server) UpdateMyProfile(ctx context.Context, req *masterv1.UpdateMyProf
 		v := *req.PayoutLegalForm
 		in.PayoutLegalForm = &v
 	}
-	if req.YookassaSellerAccountId != nil {
-		v := *req.YookassaSellerAccountId
-		in.YookassaSellerAccountID = &v
-	}
 	if req.PayoutLegalName != nil {
 		v := *req.PayoutLegalName
 		in.PayoutLegalName = &v
@@ -294,6 +290,18 @@ func (s *Server) ModerateMaster(ctx context.Context, req *masterv1.ModerateMaste
 		return nil, err
 	}
 	return &masterv1.MasterResponse{Master: masterToProtoModerator(m)}, nil
+}
+
+func (s *Server) SuspendMasterByUser(ctx context.Context, req *masterv1.SuspendMasterByUserRequest) (*masterv1.SuspendMasterByUserResponse, error) {
+	uid, err := parseUUID(req.GetUserId(), "user_id")
+	if err != nil {
+		return nil, err
+	}
+	suspended, err := s.uc.SuspendByUser(ctx, uid)
+	if err != nil {
+		return nil, err
+	}
+	return &masterv1.SuspendMasterByUserResponse{Suspended: suspended}, nil
 }
 
 func (s *Server) ListModerationHistory(ctx context.Context, req *masterv1.ListModerationHistoryRequest) (*masterv1.ListModerationHistoryResponse, error) {
@@ -594,9 +602,8 @@ func masterToProto(m *domain.Master) *masterv1.Master {
 		Specializations:            m.Specializations,
 		HourlyRate:                 m.HourlyRate,
 		AvailabilityJson:           m.AvailabilityJSON,
-		PayoutLegalForm:            m.PayoutLegalForm,
-		YookassaSellerAccountId:    m.YookassaSellerAccountID,
-		PayoutLegalName:            m.PayoutLegalName,
+		PayoutLegalForm: m.PayoutLegalForm,
+		PayoutLegalName: m.PayoutLegalName,
 		PayoutInn:                  m.PayoutINN,
 		PayoutKpp:                  m.PayoutKPP,
 		PayoutOgrn:                 m.PayoutOGRN,
@@ -646,7 +653,6 @@ func masterToProtoPublic(m *domain.Master) *masterv1.Master {
 	p := masterToProto(m)
 	if p != nil {
 		p.PayoutLegalForm = ""
-		p.YookassaSellerAccountId = ""
 		p.PayoutLegalName = ""
 		p.PayoutInn = ""
 		p.PayoutKpp = ""
@@ -674,7 +680,6 @@ func masterToProtoModerator(m *domain.Master) *masterv1.Master {
 		// Keep: payout_legal_form, payout_verification_status, payout_ready
 		// (needed to understand payment setup completeness for moderation).
 		// Strip: all raw credentials — personal/payment data, not needed for approve/reject.
-		p.YookassaSellerAccountId = ""
 		p.PayoutLegalName = ""
 		p.PayoutInn = ""
 		p.PayoutKpp = ""

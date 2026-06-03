@@ -19,14 +19,18 @@ import (
 
 // mockAuthClient implements authv1.AuthServiceClient with nil,nil defaults and optional hooks.
 type mockAuthClient struct {
-	RegisterFn      func(ctx context.Context, in *authv1.RegisterRequest, opts ...grpc.CallOption) (*authv1.RegisterResponse, error)
-	LoginFn         func(ctx context.Context, in *authv1.LoginRequest, opts ...grpc.CallOption) (*authv1.LoginResponse, error)
-	OAuthLoginFn    func(ctx context.Context, in *authv1.OAuthLoginRequest, opts ...grpc.CallOption) (*authv1.OAuthLoginResponse, error)
-	RefreshTokenFn  func(ctx context.Context, in *authv1.RefreshTokenRequest, opts ...grpc.CallOption) (*authv1.RefreshTokenResponse, error)
-	ValidateTokenFn func(ctx context.Context, in *authv1.ValidateTokenRequest, opts ...grpc.CallOption) (*authv1.ValidateTokenResponse, error)
-	LogoutFn                 func(ctx context.Context, in *authv1.LogoutRequest, opts ...grpc.CallOption) (*authv1.LogoutResponse, error)
-	RequestPasswordResetFn   func(ctx context.Context, in *authv1.RequestPasswordResetRequest, opts ...grpc.CallOption) (*authv1.RequestPasswordResetResponse, error)
-	CompletePasswordResetFn  func(ctx context.Context, in *authv1.CompletePasswordResetRequest, opts ...grpc.CallOption) (*authv1.CompletePasswordResetResponse, error)
+	RegisterFn              func(ctx context.Context, in *authv1.RegisterRequest, opts ...grpc.CallOption) (*authv1.RegisterResponse, error)
+	LoginFn                 func(ctx context.Context, in *authv1.LoginRequest, opts ...grpc.CallOption) (*authv1.LoginResponse, error)
+	OAuthLoginFn            func(ctx context.Context, in *authv1.OAuthLoginRequest, opts ...grpc.CallOption) (*authv1.OAuthLoginResponse, error)
+	RefreshTokenFn          func(ctx context.Context, in *authv1.RefreshTokenRequest, opts ...grpc.CallOption) (*authv1.RefreshTokenResponse, error)
+	ValidateTokenFn         func(ctx context.Context, in *authv1.ValidateTokenRequest, opts ...grpc.CallOption) (*authv1.ValidateTokenResponse, error)
+	LogoutFn                func(ctx context.Context, in *authv1.LogoutRequest, opts ...grpc.CallOption) (*authv1.LogoutResponse, error)
+	RequestPasswordResetFn  func(ctx context.Context, in *authv1.RequestPasswordResetRequest, opts ...grpc.CallOption) (*authv1.RequestPasswordResetResponse, error)
+	CompletePasswordResetFn func(ctx context.Context, in *authv1.CompletePasswordResetRequest, opts ...grpc.CallOption) (*authv1.CompletePasswordResetResponse, error)
+	DeleteAccountFn         func(ctx context.Context, in *authv1.DeleteAccountRequest, opts ...grpc.CallOption) (*authv1.DeleteAccountResponse, error)
+	VerifyEmailFn           func(ctx context.Context, in *authv1.VerifyEmailRequest, opts ...grpc.CallOption) (*authv1.VerifyEmailResponse, error)
+	ResendVerificationFn    func(ctx context.Context, in *authv1.ResendVerificationRequest, opts ...grpc.CallOption) (*authv1.ResendVerificationResponse, error)
+	GetEmailVerificationFn  func(ctx context.Context, in *authv1.GetEmailVerificationRequest, opts ...grpc.CallOption) (*authv1.GetEmailVerificationResponse, error)
 }
 
 func (m *mockAuthClient) Register(ctx context.Context, in *authv1.RegisterRequest, opts ...grpc.CallOption) (*authv1.RegisterResponse, error) {
@@ -83,6 +87,34 @@ func (m *mockAuthClient) CompletePasswordReset(ctx context.Context, in *authv1.C
 		return m.CompletePasswordResetFn(ctx, in, opts...)
 	}
 	return &authv1.CompletePasswordResetResponse{}, nil
+}
+
+func (m *mockAuthClient) DeleteAccount(ctx context.Context, in *authv1.DeleteAccountRequest, opts ...grpc.CallOption) (*authv1.DeleteAccountResponse, error) {
+	if m.DeleteAccountFn != nil {
+		return m.DeleteAccountFn(ctx, in, opts...)
+	}
+	return &authv1.DeleteAccountResponse{}, nil
+}
+
+func (m *mockAuthClient) VerifyEmail(ctx context.Context, in *authv1.VerifyEmailRequest, opts ...grpc.CallOption) (*authv1.VerifyEmailResponse, error) {
+	if m.VerifyEmailFn != nil {
+		return m.VerifyEmailFn(ctx, in, opts...)
+	}
+	return &authv1.VerifyEmailResponse{}, nil
+}
+
+func (m *mockAuthClient) ResendVerification(ctx context.Context, in *authv1.ResendVerificationRequest, opts ...grpc.CallOption) (*authv1.ResendVerificationResponse, error) {
+	if m.ResendVerificationFn != nil {
+		return m.ResendVerificationFn(ctx, in, opts...)
+	}
+	return &authv1.ResendVerificationResponse{}, nil
+}
+
+func (m *mockAuthClient) GetEmailVerification(ctx context.Context, in *authv1.GetEmailVerificationRequest, opts ...grpc.CallOption) (*authv1.GetEmailVerificationResponse, error) {
+	if m.GetEmailVerificationFn != nil {
+		return m.GetEmailVerificationFn(ctx, in, opts...)
+	}
+	return &authv1.GetEmailVerificationResponse{}, nil
 }
 
 func TestRegister_Success(t *testing.T) {

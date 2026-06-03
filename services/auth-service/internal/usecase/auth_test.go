@@ -37,6 +37,8 @@ func testAuthUC(creds *mockCredRepo, tokens *mockTokenRepo, users *mockUserClien
 		creds, tokens,
 		noopPasswordResetRepo{}, noopPasswordMail{},
 		time.Hour,
+		noopEmailVerificationRepo{}, noopVerifyMail{},
+		24*time.Hour,
 		users, testPrivKey, time.Hour, 24*time.Hour,
 		nil, // partnerNotify: nil is safe — Enqueue is guarded by nil-check
 		zerolog.Nop(),
@@ -79,7 +81,7 @@ func TestRegister_Success(t *testing.T) {
 	res, err := uc.Register(ctx, RegisterInput{
 		Email:    "reg@example.com",
 		Phone:    "+1000",
-		Password: "register-pass",
+		Password: "register-pass1",
 		Name:     "Reg User",
 		Role:     "user",
 	})
@@ -107,6 +109,8 @@ func testAuthUCWithNotifier(
 		creds, tokens,
 		noopPasswordResetRepo{}, noopPasswordMail{},
 		time.Hour,
+		noopEmailVerificationRepo{}, noopVerifyMail{},
+		24*time.Hour,
 		users, testPrivKey, time.Hour, 24*time.Hour,
 		notifier,
 		zerolog.Nop(),

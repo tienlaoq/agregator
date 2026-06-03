@@ -174,6 +174,9 @@ func (noopVenueClient) DeleteVenueHallPhoto(context.Context, *venuev1.DeleteVenu
 func (noopVenueClient) SetVenueHallCoverPhoto(context.Context, *venuev1.SetVenueHallCoverPhotoRequest, ...grpc.CallOption) (*venuev1.VenueResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "not set up")
 }
+func (noopVenueClient) SuspendVenuesByOwner(context.Context, *venuev1.SuspendVenuesByOwnerRequest, ...grpc.CallOption) (*venuev1.SuspendVenuesByOwnerResponse, error) {
+	return &venuev1.SuspendVenuesByOwnerResponse{}, nil
+}
 // CRM methods removed from venue.proto (now in proto/crm/v1/crm.proto).
 
 type noopUserClient struct{}
@@ -192,6 +195,9 @@ func (noopUserClient) UpdateUser(context.Context, *userv1.UpdateUserRequest, ...
 }
 func (noopUserClient) GetUserByEmail(context.Context, *userv1.GetUserByEmailRequest, ...grpc.CallOption) (*userv1.UserResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "not set up")
+}
+func (noopUserClient) DeleteUser(context.Context, *userv1.DeleteUserRequest, ...grpc.CallOption) (*userv1.DeleteUserResponse, error) {
+	return &userv1.DeleteUserResponse{}, nil
 }
 
 // ── configurable booking mock ─────────────────────────────────────────────────

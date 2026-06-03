@@ -1,8 +1,8 @@
-import Image from "next/image"
 import Link from "next/link"
 import { Card, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { MapPin, Star, ImageIcon } from "lucide-react"
+import { FramedImage } from "@/components/banya/framed-image"
 import { venueCardImageSrc } from "@/lib/api"
 import type { Venue } from "@/lib/types"
 import { VENUE_TYPE_LABELS } from "@/lib/types"
@@ -28,12 +28,11 @@ export function VenueCard({ venue, sizes = "(max-width: 640px) 100vw, (max-width
       <Card className="group cursor-pointer overflow-hidden border-border bg-card transition-all hover:shadow-xl h-full">
         <div className="relative aspect-[4/3] overflow-hidden bg-muted flex items-center justify-center">
           {cardImg ? (
-            <Image
+            <FramedImage
               src={cardImg}
               alt={venue.name}
-              fill
               sizes={sizes}
-              className="object-cover transition-transform duration-300 group-hover:scale-105"
+              className="transition-transform duration-300 group-hover:scale-105"
             />
           ) : (
             <div className="flex flex-col items-center gap-1 text-muted-foreground/40">

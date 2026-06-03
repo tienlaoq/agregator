@@ -40,6 +40,12 @@ type VenueRepository interface {
 	Search(ctx context.Context, params SearchParams) (*ListResult, error)
 	ListByOwner(ctx context.Context, ownerID uuid.UUID) ([]Venue, error)
 
+	// SuspendByOwner sets every not-yet-suspended venue owned by ownerID to
+	// status "suspended" (is_active=false) and returns the number of rows
+	// transitioned. Used by the account-deletion cascade so a deleted owner's
+	// venues drop out of public listings.
+	SuspendByOwner(ctx context.Context, ownerID uuid.UUID) (int64, error)
+
 	// IsVenueMember returns true when userID is the venue owner or a row in
 	// venue_staff. Legacy strangler-fig bridge: crm-service owns the source of
 	// truth, but venue-service still reads the shared `venue_staff` table

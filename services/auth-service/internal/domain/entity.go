@@ -3,13 +3,14 @@ package domain
 import "time"
 
 type Credential struct {
-	ID           string
-	UserID       string
-	Email        string
-	PasswordHash string
-	Provider     string
-	ProviderID   string
-	CreatedAt    time.Time
+	ID            string
+	UserID        string
+	Email         string
+	PasswordHash  string
+	Provider      string
+	ProviderID    string
+	EmailVerified bool
+	CreatedAt     time.Time
 }
 
 type RefreshToken struct {
@@ -21,6 +22,15 @@ type RefreshToken struct {
 }
 
 type PasswordResetToken struct {
+	ID        string
+	UserID    string
+	TokenHash string
+	ExpiresAt time.Time
+	UsedAt    *time.Time
+	CreatedAt time.Time
+}
+
+type EmailVerificationToken struct {
 	ID        string
 	UserID    string
 	TokenHash string

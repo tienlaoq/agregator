@@ -57,9 +57,12 @@ type Venue struct {
 	// SocialLinks is a JSON object string, e.g. {"vk":"https://vk.com/..."}; empty → "{}".
 	SocialLinks string
 	// PayoutLegalForm: ip | ooo | self_employed | gph (empty = not set).
-	PayoutLegalForm         string
-	YooKassaSellerAccountID string
-	Services    []VenueService
+	PayoutLegalForm string
+	// NOTE: yookassa_seller_account_id was dropped when the platform moved from
+	// marketplace-split to escrow + per-partner payouts.  The DB column lives on
+	// (default '') until a follow-up migration removes it; venue-service simply
+	// stops reading/writing it.  Partner payout rails now live in payment-service.
+	Services []VenueService
 	Photos            []VenuePhoto
 	Halls             []VenueHall
 	CreatedAt time.Time

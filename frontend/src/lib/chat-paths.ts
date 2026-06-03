@@ -1,5 +1,5 @@
-/** Префикс HTTP API чата v2 под монтированием `/api/v1`. */
-export const CHAT_V2_PREFIX = "/api/v1/v2/chat" as const;
+/** Префикс HTTP API чата v2; gateway монтирует v2 под `/api/v2`. */
+export const CHAT_V2_PREFIX = "/api/v2/chat" as const;
 
 /** Путь WebSocket чата (относительно origin gateway). */
 export const CHAT_V2_WS_PATH = `${CHAT_V2_PREFIX}/ws` as const;

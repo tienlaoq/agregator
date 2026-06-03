@@ -450,6 +450,26 @@ func (uc *VenueUseCase) Moderate(ctx context.Context, venueID uuid.UUID, action,
 	return v, nil
 }
 
+// SuspendByOwner suspends every venue owned by ownerID (account-deletion
+// cascade). It reads the owner's venues first so each one's cache entry can be
+// invalidated after the bulk status update; the catalog version is bumped too,
+// dropping the suspended venues from cached public listings. Returns the number
+// of venues transitioned to suspended.
+func (uc *VenueUseCase) SuspendByOwner(ctx context.Context, ownerID uuid.UUID) (int64, error) {
+	venues, err := uc.repo.ListByOwner(ctx, ownerID)
+	if err != nil {
+		return 0, err
+	}
+	count, err := uc.repo.SuspendByOwner(ctx, ownerID)
+	if err != nil {
+		return 0, err
+	}
+	for i := range venues {
+		uc.invalidateCache(ctx, venues[i].ID, venues[i].Slug)
+	}
+	return count, nil
+}
+
 // RecipientUserIDsForVenue возвращает владельца и CRM-персонал (для уведомлений после модерации). Без проверки прав вызывающего — только из доверенного кода сервиса.
 // Strangler-fig phase B: reads venue_staff directly from the shared DB via
 // StaffUserIDsForVenue. In phase C this becomes a NATS event handed off to

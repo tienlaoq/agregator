@@ -279,7 +279,6 @@ type UpdateMasterInput struct {
 	ApplySpecializations       bool
 	Specializations            []string
 	PayoutLegalForm            *string
-	YookassaSellerAccountID    *string
 	PayoutLegalName            *string
 	PayoutINN                  *string
 	PayoutKPP                  *string
@@ -398,9 +397,6 @@ func (uc *MasterUseCase) UpdateMyProfile(ctx context.Context, userID uuid.UUID, 
 			return nil, pkgerrors.InvalidArgument("invalid payout_legal_form")
 		}
 	}
-	if in.YookassaSellerAccountID != nil {
-		m.YookassaSellerAccountID = strings.TrimSpace(*in.YookassaSellerAccountID)
-	}
 	if in.PayoutLegalName != nil {
 		m.PayoutLegalName = strings.TrimSpace(*in.PayoutLegalName)
 	}
@@ -440,7 +436,6 @@ func (uc *MasterUseCase) UpdateMyProfile(ctx context.Context, userID uuid.UUID, 
 		}
 	}
 	if in.PayoutLegalForm != nil ||
-		in.YookassaSellerAccountID != nil ||
 		in.PayoutLegalName != nil ||
 		in.PayoutINN != nil ||
 		in.PayoutKPP != nil ||
@@ -738,7 +733,6 @@ func normalizeDigits(s string) string {
 
 func hasAnyPayoutData(m *domain.Master) bool {
 	return strings.TrimSpace(m.PayoutLegalForm) != "" ||
-		strings.TrimSpace(m.YookassaSellerAccountID) != "" ||
 		strings.TrimSpace(m.PayoutLegalName) != "" ||
 		strings.TrimSpace(m.PayoutINN) != "" ||
 		strings.TrimSpace(m.PayoutKPP) != "" ||
@@ -767,6 +761,13 @@ func (uc *MasterUseCase) GetPublicBySlug(ctx context.Context, slug string) (*dom
 
 func (uc *MasterUseCase) ListForModeration(ctx context.Context, statusFilter string, limit, offset int32) ([]domain.Master, int32, error) {
 	return uc.repo.ListByStatus(ctx, statusFilter, limit, offset)
+}
+
+// SuspendByUser suspends the master profile owned by userID (account-deletion
+// cascade). Returns true when a profile was transitioned; a user with no
+// profile is a normal no-op (false, nil).
+func (uc *MasterUseCase) SuspendByUser(ctx context.Context, userID uuid.UUID) (bool, error) {
+	return uc.repo.SuspendByUser(ctx, userID)
 }
 
 func (uc *MasterUseCase) Moderate(ctx context.Context, masterID, moderatorID uuid.UUID, action, comment string) (*domain.Master, error) {
@@ -922,14 +923,18 @@ func (uc *MasterUseCase) CreateBooking(ctx context.Context, clientUserID uuid.UU
 	// Binds the key to both the booking and the authenticated user, preventing
 	// key squatting by another user who might learn the booking UUID.
 	idemKey := masterBookingIdempotencyKey(b.ID, b.ClientUserID)
+	// TODO(escrow): pass ServiceAt once MasterBooking exposes a parsed time.Time
+	// for the slot start (currently Date+TimeFrom are strings).  Payment-service
+	// falls back to now()+hold when ServiceAt is unset — acceptable while master
+	// bookings remain short-term, but the partner receives funds earlier than
+	// service date for far-future slots.
 	payResp, err := uc.paymentClient.CreatePayment(ctx, &paymentv1.CreatePaymentRequest{
-		BookingId:               b.ID.String(),
-		Amount:                  totalPrice,
-		Description:             fmt.Sprintf("Master booking %s", b.ID.String()),
-		IdempotencyKey:          idemKey,
-		CounterpartyType:        "master",
-		CounterpartyId:          m.ID.String(),
-		YookassaSellerAccountId: strings.TrimSpace(m.YookassaSellerAccountID),
+		BookingId:        b.ID.String(),
+		Amount:           totalPrice,
+		Description:      fmt.Sprintf("Master booking %s", b.ID.String()),
+		IdempotencyKey:   idemKey,
+		CounterpartyType: "master",
+		CounterpartyId:   m.ID.String(),
 	})
 	if err != nil {
 		if delErr := uc.repo.DeleteBooking(context.Background(), b.ID); delErr != nil {

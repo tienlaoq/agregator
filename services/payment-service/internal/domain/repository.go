@@ -19,14 +19,9 @@ type PaymentRepository interface {
 	GetByBookingID(ctx context.Context, bookingID string) (*Payment, error)
 	GetByProviderID(ctx context.Context, providerID string) (*Payment, error)
 	GetByIdempotencyKey(ctx context.Context, key string) (*Payment, error)
-	// UpdateStatus transitions a payment to the given status only when it is not
-	// yet in a terminal state (succeeded, cancelled, or refunded).  It returns
-	// updated=true when the row was actually changed, and updated=false when the
-	// payment was already terminal (duplicate webhook delivery).
-	UpdateStatus(ctx context.Context, id string, status PaymentStatus, providerID string) (updated bool, err error)
 
-	// UpdateStatusWithOutbox is the atomic variant of UpdateStatus: it runs the
-	// UPDATE and the outbox INSERT in a single database transaction.  Use this
+	// UpdateStatusWithOutbox runs the status UPDATE and the outbox INSERT in a
+	// single database transaction.  Use this
 	// whenever the caller needs to publish a domain event — the event row is
 	// visible to the outbox worker only after the transaction commits, so there
 	// is no window where the payment is updated but the event is lost.

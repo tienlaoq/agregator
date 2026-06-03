@@ -125,6 +125,7 @@ services:
       PG_PASSWORD: ${POSTGRES_PASSWORD}
       REDIS_ADDR: redis:6379
       NATS_URL: nats://nats:4222
+      REVIEW_SERVICE_ADDR: review-service:50055
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
       TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
       FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3000}
@@ -260,6 +261,28 @@ services:
       venue-service:
         condition: service_started
 
+  # In-app notifications ("колокольчик"): per-user inbox + realtime WS fanout.
+  notification-service:
+    build:
+      context: ..
+      dockerfile: services/notification-service/Dockerfile
+    container_name: banya-notification
+    ports:
+      - "50060:50060"
+    environment:
+      GRPC_PORT: "50060"
+      GRPC_TLS: ${GRPC_TLS:-}
+      GRPC_TLS_CERT: ${GRPC_TLS_CERT:-}
+      GRPC_TLS_KEY: ${GRPC_TLS_KEY:-}
+      PG_HOST: postgres
+      PG_DB: notification_db
+      PG_USER: banya
+      PG_PASSWORD: ${POSTGRES_PASSWORD}
+      INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN:-}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
   payment-service:
     build:
       context: ..
@@ -313,6 +336,7 @@ services:
       MASTER_SERVICE_ADDR: master-service:50057
       CHAT_SERVICE_ADDR: chat-service:50058
       CRM_SERVICE_ADDR: crm-service:50059
+      NOTIFICATION_SERVICE_ADDR: notification-service:50060
       BASE_URL: ${BASE_URL:-http://localhost:8080}
       FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3000}
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-}
@@ -369,6 +393,8 @@ services:
       chat-service:
         condition: service_started
       crm-service:
+        condition: service_started
+      notification-service:
         condition: service_started
       nats:
         condition: service_started

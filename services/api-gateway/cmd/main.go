@@ -110,6 +110,7 @@ func logConfig(log zerolog.Logger, cfg Config) {
 		Str("master_addr", cfg.MasterAddr).
 		Str("chat_addr", cfg.ChatAddr).
 		Str("crm_addr", cfg.CRMAddr).
+		Str("notification_addr", cfg.NotificationAddr).
 		Bool("redis", cfg.RedisAddr != "").
 		Bool("nats", cfg.NATSUrl != "").
 		Bool("google_oauth", cfg.GoogleClientID != "").

@@ -49,6 +49,9 @@ type Config struct {
 	PaymentReturnURL string
 	// PlatformFeeBPS is the marketplace commission in basis points (1500 = 15%).
 	PlatformFeeBPS int
+	// PayoutHoldHours is how long after the service date a successful payment
+	// stays in escrow before becoming available for payout.  24h is the default.
+	PayoutHoldHours int
 	// InternalServiceToken is the shared secret that booking-service and
 	// master-service must present in the "x-service-token" gRPC metadata header
 	// on every call to payment-service.  Empty token disables the check in local
@@ -145,6 +148,7 @@ func Load() Config {
 
 		PaymentReturnURL:     config.GetEnv("PAYMENT_RETURN_URL", "http://localhost:3000/bookings"),
 		PlatformFeeBPS:       config.GetEnvInt("PLATFORM_FEE_BPS", 1500),
+		PayoutHoldHours:      config.GetEnvInt("PAYOUT_HOLD_HOURS", 24),
 		InternalServiceToken: config.GetEnv("INTERNAL_SERVICE_TOKEN", ""),
 	}
 }

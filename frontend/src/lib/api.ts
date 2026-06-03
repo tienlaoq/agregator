@@ -27,6 +27,11 @@ import type {
 import { userMessageForGatewayError } from "./api-user-messages";
 import { packCitiesForQuery } from "./cities-http";
 import { chatV2Paths } from "./chat-paths";
+import { notificationV2Paths } from "./notification-paths";
+import type {
+  NotificationListResponse,
+  UnreadCountResponse,
+} from "@/features/notifications/types/notification";
 
 /** Base URL браузера (и публичные ссылки на медиа). */
 const PUBLIC_API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080";
@@ -102,7 +107,22 @@ async function tryRefreshToken(): Promise<boolean> {
   }
 }
 
-async function fetchAPI<T>(path: string, options?: RequestInit): Promise<T> {
+interface FetchOptions {
+  /**
+   * Пропустить глобальную обработку 401 (refresh + редирект на /auth/login).
+   * Нужно для самих auth-эндпоинтов: 401 от /auth/login означает «неверные
+   * учётные данные», а не «сессия истекла». Без этого флага неудачный вход
+   * запускал бы tryRefreshToken → logout → window.location.href = "/auth/login",
+   * что выглядит как перезагрузка страницы вместо inline-ошибки.
+   */
+  skipAuthRefresh?: boolean;
+}
+
+async function fetchAPI<T>(
+  path: string,
+  options?: RequestInit,
+  fetchOpts?: FetchOptions,
+): Promise<T> {
   // Access token живёт только в памяти Zustand — не в localStorage.
   // На сервере (SSR) токена нет — публичные запросы уходят без Authorization.
   let token: string | null = null;
@@ -133,7 +153,7 @@ async function fetchAPI<T>(path: string, options?: RequestInit): Promise<T> {
     },
   });
 
-  if (res.status === 401 && typeof window !== "undefined") {
+  if (res.status === 401 && typeof window !== "undefined" && !fetchOpts?.skipAuthRefresh) {
     if (!refreshPromise) {
       refreshPromise = tryRefreshToken().finally(() => {
         refreshPromise = null;
@@ -194,10 +214,14 @@ async function fetchAPI<T>(path: string, options?: RequestInit): Promise<T> {
 }
 
 export async function login(data: LoginRequest): Promise<AuthResponse> {
-  return fetchAPI<AuthResponse>("/api/v1/auth/login", {
-    method: "POST",
-    body: JSON.stringify(data),
-  });
+  return fetchAPI<AuthResponse>(
+    "/api/v1/auth/login",
+    {
+      method: "POST",
+      body: JSON.stringify(data),
+    },
+    { skipAuthRefresh: true },
+  );
 }
 
 export async function requestPasswordReset(email: string): Promise<{ message: string }> {
@@ -217,11 +241,59 @@ export async function completePasswordReset(
   });
 }
 
+/**
+ * Подтверждает email по одноразовому токену из письма. Публичный эндпоинт:
+ * ссылка открывается в браузере, у которого может не быть access-токена.
+ */
+export async function verifyEmail(token: string): Promise<{ status: string }> {
+  return fetchAPI<{ status: string }>(
+    "/api/v1/auth/verify-email",
+    {
+      method: "POST",
+      body: JSON.stringify({ token }),
+    },
+    { skipAuthRefresh: true },
+  );
+}
+
+/**
+ * Повторно отправляет письмо со ссылкой подтверждения. Анти-энумерация: ответ
+ * всегда одинаков, независимо от того, существует ли адрес и подтверждён ли он.
+ */
+export async function resendVerification(email: string): Promise<{ message: string }> {
+  return fetchAPI<{ message: string }>(
+    "/api/v1/auth/resend-verification",
+    {
+      method: "POST",
+      body: JSON.stringify({ email }),
+    },
+    { skipAuthRefresh: true },
+  );
+}
+
+/** Статус подтверждения email текущего пользователя (читается живьём из auth-service). */
+export async function getEmailVerificationStatus(): Promise<{ email_verified: boolean }> {
+  return fetchAPI<{ email_verified: boolean }>("/api/v1/auth/email-verification");
+}
+
+/**
+ * true, если ошибка — это 403 EMAIL_NOT_VERIFIED от шлюза: пользователь пытается
+ * создать баню / анкету мастера, но email ещё не подтверждён. Вызывающий код
+ * показывает блок с повторной отправкой письма и удерживает черновик формы.
+ */
+export function isEmailNotVerifiedError(err: unknown): boolean {
+  return err instanceof ApiError && err.code === "GATEWAY.ACCOUNT.EMAIL_NOT_VERIFIED";
+}
+
 export async function register(data: RegisterRequest): Promise<AuthResponse> {
-  return fetchAPI<AuthResponse>("/api/v1/auth/register", {
-    method: "POST",
-    body: JSON.stringify(data),
-  });
+  return fetchAPI<AuthResponse>(
+    "/api/v1/auth/register",
+    {
+      method: "POST",
+      body: JSON.stringify(data),
+    },
+    { skipAuthRefresh: true },
+  );
 }
 
 /** Собирает пользователя для стора без лишнего GET /users/me сразу после регистрации. */
@@ -462,6 +534,13 @@ export async function updateProfile(
   });
 }
 
+export async function deleteAccount(confirmation: string): Promise<void> {
+  return fetchAPI<void>("/api/v1/users/me", {
+    method: "DELETE",
+    body: JSON.stringify({ confirmation }),
+  });
+}
+
 export async function getOwnerVenues(): Promise<Venue[]> {
   const data = await fetchAPI<{ venues: Venue[]; total: number }>("/api/v1/owner/venues");
   return data.venues ?? [];
@@ -615,15 +694,23 @@ export async function submitVenueForReview(venueId: string): Promise<Venue> {
   });
 }
 
-/** Absolute URL for venue photo path from API (e.g. /api/v1/uploads/...) or full URL. */
+/**
+ * URL для фото заведения/мастера из API (например, /api/v1/uploads/...) или
+ * готовый внешний URL.
+ *
+ * Для путей API возвращаем ОТНОСИТЕЛЬНЫЙ (same-origin) путь, а не абсолютный
+ * `http://localhost:8080/...`. Причина: оптимизатор next/image выполняет
+ * server-side fetch ВНУТРИ контейнера фронтенда, где `localhost:8080` — это сам
+ * контейнер, а не gateway. Относительный путь одинаково корректен и для
+ * браузера, и для серверного fetch: rewrite в next.config.ts проксирует
+ * `/api/v1/uploads/*` на внутренний адрес gateway (INTERNAL_API_URL).
+ */
 export function venueMediaUrl(pathOrUrl: string | undefined): string {
   if (!pathOrUrl) return "";
   if (pathOrUrl.startsWith("http://") || pathOrUrl.startsWith("https://")) {
     return pathOrUrl;
   }
-  const base = PUBLIC_API_URL.replace(/\/$/, "");
-  const p = pathOrUrl.startsWith("/") ? pathOrUrl : `/${pathOrUrl}`;
-  return `${base}${p}`;
+  return pathOrUrl.startsWith("/") ? pathOrUrl : `/${pathOrUrl}`;
 }
 
 /** Превью для каталога/публичной карточки: image_url или обложка/первое фото. */
@@ -992,6 +1079,59 @@ export async function markChatThreadReadV2(
     chatV2Paths.threadRead(threadId),
     { method: "POST", body: JSON.stringify({ read_upto_message_id: read_upto_message_id ?? "" }) },
   );
+}
+
+// ── Notifications ("колокольчик") ────────────────────────────────────────────
+
+/** Список уведомлений текущего пользователя (новейшие сверху) + счётчик непрочитанных. */
+export async function listNotifications(params?: {
+  limit?: number;
+  offset?: number;
+  unreadOnly?: boolean;
+}): Promise<NotificationListResponse> {
+  const q = new URLSearchParams();
+  if (params?.limit) q.set("limit", String(params.limit));
+  if (params?.offset) q.set("offset", String(params.offset));
+  if (params?.unreadOnly) q.set("unread_only", "true");
+  const qs = q.toString();
+  return fetchAPI<NotificationListResponse>(
+    `${notificationV2Paths.list}${qs ? `?${qs}` : ""}`,
+  );
+}
+
+export async function getNotificationUnreadCount(): Promise<UnreadCountResponse> {
+  return fetchAPI<UnreadCountResponse>(notificationV2Paths.unreadCount);
+}
+
+export async function markNotificationRead(
+  notificationId: string,
+): Promise<UnreadCountResponse> {
+  return fetchAPI<UnreadCountResponse>(notificationV2Paths.read(notificationId), {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}
+
+export async function markAllNotificationsRead(): Promise<UnreadCountResponse> {
+  return fetchAPI<UnreadCountResponse>(notificationV2Paths.readAll, {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}
+
+/** Короткоживущий билет для WebSocket уведомлений; null — если Redis недоступен на gateway. */
+export async function issueNotificationWsTicket(): Promise<{
+  ticket: string;
+  expires_in_sec: number;
+} | null> {
+  try {
+    return await fetchAPI<{ ticket: string; expires_in_sec: number }>(
+      notificationV2Paths.wsTicket,
+      { method: "POST", body: JSON.stringify({}) },
+    );
+  } catch {
+    return null;
+  }
 }
 
 export async function submitSupportContact(

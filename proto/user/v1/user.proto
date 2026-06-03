@@ -11,6 +11,12 @@ service UserService {
   rpc GetUser(GetUserRequest) returns (UserResponse);
   rpc GetUsersBatch(GetUsersBatchRequest) returns (GetUsersBatchResponse);
   rpc UpdateUser(UpdateUserRequest) returns (UserResponse);
+  // DeleteUser performs a soft delete: the row is retained for referential
+  // integrity (bookings, reviews, payments keep their user_id FK) but the
+  // account is anonymised — email is rewritten to a unique tombstone value,
+  // name/phone/avatar/bio are cleared, and deleted_at is stamped. Idempotent:
+  // a second call on an already-deleted row returns NotFound.
+  rpc DeleteUser(DeleteUserRequest) returns (DeleteUserResponse);
   // GetUserByEmail is internal-only (service-to-service).
   // MUST NOT be proxied as a public HTTP endpoint without caller
   // authentication and rate-limiting — unprotected access enables
@@ -39,6 +45,12 @@ message CreateUserRequest {
 message GetUserRequest {
   string id = 1;
 }
+
+message DeleteUserRequest {
+  string id = 1;
+}
+
+message DeleteUserResponse {}
 
 message GetUserByEmailRequest {
   string email = 1;

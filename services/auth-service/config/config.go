@@ -24,6 +24,9 @@ type Config struct {
 	JWTAccessTTL     time.Duration
 	JWTRefreshTTL    time.Duration
 	PasswordResetTTL time.Duration
+	// EmailVerifyTTL is how long an email-verification link stays valid.
+	// Longer than the reset TTL because users may check email less urgently.
+	EmailVerifyTTL time.Duration
 
 	Postgres        config.PostgresConfig
 	UserServiceAddr string
@@ -74,6 +77,14 @@ func Load() (Config, error) {
 		return Config{}, fmt.Errorf("PASSWORD_RESET_TTL must be positive, got %q", config.GetEnv("PASSWORD_RESET_TTL", ""))
 	}
 
+	verifyTTL, err := parseDurationEnv("EMAIL_VERIFY_TTL", 24*time.Hour)
+	if err != nil {
+		return Config{}, err
+	}
+	if verifyTTL <= 0 {
+		return Config{}, fmt.Errorf("EMAIL_VERIFY_TTL must be positive, got %q", config.GetEnv("EMAIL_VERIFY_TTL", ""))
+	}
+
 	pg := config.NewPostgresConfig("PG")
 	pg.DBName = config.GetEnv("PG_DB", "auth_db")
 
@@ -83,6 +94,7 @@ func Load() (Config, error) {
 		JWTAccessTTL:       accessTTL,
 		JWTRefreshTTL:      refreshTTL,
 		PasswordResetTTL:   resetTTL,
+		EmailVerifyTTL:     verifyTTL,
 		Postgres:           pg,
 		UserServiceAddr:    config.GetEnv("USER_SERVICE_ADDR", "localhost:50052"),
 		FrontendURL:        normaliseFrontendURL(config.GetEnv("FRONTEND_URL", "")),

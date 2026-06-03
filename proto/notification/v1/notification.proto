@@ -1,0 +1,97 @@
+syntax = "proto3";
+
+package notification.v1;
+
+option go_package = "github.com/tienlao/agregator/gen/go/notification/v1;notificationv1";
+
+import "google/protobuf/timestamp.proto";
+
+// NotificationService stores and serves per-user in-app notifications — the
+// "bell" inbox shown in the web header.  Notifications are produced by other
+// services through Create (today the api-gateway calls it after a CRM staff
+// invitation; future triggers: bookings, moderation) and read back by the
+// owning user.  Realtime delivery to the browser is handled separately by the
+// gateway WebSocket fan-out; this service owns persistence and the read model.
+service NotificationService {
+  // Create persists a notification for a single user and returns it.
+  rpc Create(CreateRequest) returns (CreateResponse);
+
+  // List returns a user's notifications newest-first, with the total and the
+  // current unread count so the bell can render the badge in one round-trip.
+  rpc List(ListRequest) returns (ListResponse);
+
+  // GetUnreadCount returns only the unread badge number — cheap enough to poll.
+  rpc GetUnreadCount(GetUnreadCountRequest) returns (GetUnreadCountResponse);
+
+  // MarkRead marks one notification read (idempotent) and returns the new count.
+  rpc MarkRead(MarkReadRequest) returns (MarkReadResponse);
+
+  // MarkAllRead marks every unread notification read; returns the new count (0).
+  rpc MarkAllRead(MarkAllReadRequest) returns (MarkAllReadResponse);
+}
+
+message Notification {
+  string id = 1;
+  string user_id = 2;
+  // Machine-readable category, e.g. "crm_staff_invited". Drives client routing
+  // and icon selection.
+  string type = 3;
+  string title = 4;
+  string body = 5;
+  // Optional JSON object (as a string) with structured fields the client can
+  // use to build a link, e.g. {"venue_id":"...","role":"staff"}. Empty when none.
+  string data = 6;
+  bool read = 7;
+  google.protobuf.Timestamp created_at = 8;
+  google.protobuf.Timestamp read_at = 9;
+}
+
+message CreateRequest {
+  string user_id = 1;
+  string type = 2;
+  string title = 3;
+  string body = 4;
+  string data = 5;
+}
+
+message CreateResponse {
+  Notification notification = 1;
+}
+
+message ListRequest {
+  string user_id = 1;
+  int32 limit = 2;
+  int32 offset = 3;
+  bool unread_only = 4;
+}
+
+message ListResponse {
+  repeated Notification notifications = 1;
+  int32 total = 2;
+  int32 unread_count = 3;
+}
+
+message GetUnreadCountRequest {
+  string user_id = 1;
+}
+
+message GetUnreadCountResponse {
+  int32 unread_count = 1;
+}
+
+message MarkReadRequest {
+  string user_id = 1;
+  string notification_id = 2;
+}
+
+message MarkReadResponse {
+  int32 unread_count = 1;
+}
+
+message MarkAllReadRequest {
+  string user_id = 1;
+}
+
+message MarkAllReadResponse {
+  int32 unread_count = 1;
+}

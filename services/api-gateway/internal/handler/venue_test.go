@@ -135,6 +135,10 @@ func (m *mockVenueClient) ListPendingVenues(ctx context.Context, in *venuev1.Lis
 	return nil, nil
 }
 
+func (m *mockVenueClient) SuspendVenuesByOwner(ctx context.Context, in *venuev1.SuspendVenuesByOwnerRequest, opts ...grpc.CallOption) (*venuev1.SuspendVenuesByOwnerResponse, error) {
+	return &venuev1.SuspendVenuesByOwnerResponse{}, nil
+}
+
 func (m *mockVenueClient) CreateManualSlotBlock(ctx context.Context, in *venuev1.CreateManualSlotBlockRequest, opts ...grpc.CallOption) (*venuev1.CreateManualSlotBlockResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "CreateManualSlotBlock")
 }

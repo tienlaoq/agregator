@@ -34,6 +34,7 @@ import {
   Check,
 } from "lucide-react"
 import Link from "next/link"
+import { FramedImg } from "@/components/banya/framed-image"
 import {
   getVenueBySlug,
   getVenueReviews,
@@ -257,10 +258,9 @@ export function VenuePublicPageClient({
                     }}
                   >
                     <div className="relative aspect-[16/9] overflow-hidden rounded-xl bg-muted">
-                      <img
+                      <FramedImg
                         src={gallery.current.src}
                         alt={`${venue.name} — фото ${gallery.index + 1} из ${gallery.count}`}
-                        className="h-full w-full object-cover"
                       />
                     </div>
                     {gallery.count > 1 ? (

@@ -9,7 +9,15 @@ import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
-import { getProfile, updateProfile } from "@/lib/api";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { getProfile, updateProfile, deleteAccount, ApiError } from "@/lib/api";
 import { useAuthStore } from "@/store/auth";
 import { PhoneInput } from "@/components/banya/phone-input";
 
@@ -17,6 +25,8 @@ export default function ProfilePage() {
   const router = useRouter();
   const { token, hydrated, setUser, logout } = useAuthStore();
   const [saved, setSaved] = useState(false);
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [confirmation, setConfirmation] = useState("");
 
   useEffect(() => {
     if (hydrated && !token) router.push("/auth/login");
@@ -48,6 +58,34 @@ export default function ProfilePage() {
     e.preventDefault();
     mutation.mutate({ name: nameValue, phone: phoneValue });
   };
+
+  const deleteMutation = useMutation({
+    mutationFn: (conf: string) => deleteAccount(conf),
+    onSuccess: () => {
+      logout();
+      router.push("/");
+    },
+  });
+
+  const isAdmin = profile?.role === "admin";
+
+  const deleteErrorMessage = (() => {
+    const err = deleteMutation.error;
+    if (!err) return null;
+    if (err instanceof ApiError) {
+      switch (err.code) {
+        case "GATEWAY.ACCOUNT.CONFIRMATION_MISMATCH":
+          return "Подтверждение не совпадает с email вашего аккаунта";
+        case "GATEWAY.ACCOUNT.CONFIRMATION_REQUIRED":
+          return "Введите email для подтверждения";
+        case "GATEWAY.ACCOUNT.ADMIN_SELF_DELETE_FORBIDDEN":
+          return "Аккаунт администратора нельзя удалить через профиль";
+        default:
+          return err.gatewayDetail || "Не удалось удалить аккаунт";
+      }
+    }
+    return "Не удалось удалить аккаунт";
+  })();
 
   const handleLogout = () => {
     logout();
@@ -136,15 +174,95 @@ export default function ProfilePage() {
             <Separator className="my-6" />
 
             <Button
-              variant="destructive"
+              variant="outline"
               className="w-full"
               onClick={handleLogout}
             >
               Выйти из аккаунта
             </Button>
+
+            {!isAdmin && (
+              <>
+                <Separator className="my-6" />
+                <div className="space-y-2">
+                  <h2 className="text-sm font-semibold text-destructive">
+                    Удаление аккаунта
+                  </h2>
+                  <p className="text-sm text-muted-foreground">
+                    Аккаунт будет деактивирован без возможности восстановления.
+                    {profile?.role === "venue_owner" &&
+                      " Ваши заведения будут сняты с публикации."}
+                    {profile?.role === "master" &&
+                      " Ваш профиль мастера будет скрыт."}
+                  </p>
+                  <Button
+                    variant="destructive"
+                    className="w-full"
+                    onClick={() => {
+                      setConfirmation("");
+                      deleteMutation.reset();
+                      setDeleteOpen(true);
+                    }}
+                  >
+                    Удалить аккаунт
+                  </Button>
+                </div>
+              </>
+            )}
           </CardContent>
         </Card>
       )}
+
+      <Dialog open={deleteOpen} onOpenChange={setDeleteOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Удалить аккаунт?</DialogTitle>
+            <DialogDescription>
+              Это действие необратимо. Для подтверждения введите email вашего
+              аккаунта:{" "}
+              <span className="font-medium text-foreground">
+                {profile?.email}
+              </span>
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-2">
+            <Label htmlFor="delete-confirmation">Email для подтверждения</Label>
+            <Input
+              id="delete-confirmation"
+              type="email"
+              autoComplete="off"
+              value={confirmation}
+              onChange={(e) => setConfirmation(e.target.value)}
+              placeholder={profile?.email ?? ""}
+            />
+            {deleteErrorMessage && (
+              <p className="text-sm text-destructive">{deleteErrorMessage}</p>
+            )}
+          </div>
+
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setDeleteOpen(false)}
+              disabled={deleteMutation.isPending}
+            >
+              Отмена
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => deleteMutation.mutate(confirmation)}
+              disabled={
+                deleteMutation.isPending ||
+                confirmation.trim().toLowerCase() !==
+                  (profile?.email ?? "").trim().toLowerCase()
+              }
+            >
+              {deleteMutation.isPending ? "Удаление..." : "Удалить навсегда"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

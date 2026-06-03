@@ -25,15 +25,16 @@ type Config struct {
 	JWTECPublicKey *ecdsa.PublicKey // parsed at startup from JWT_EC_PUBLIC_KEY / JWT_EC_PUBLIC_KEY_FILE
 
 	// Service addresses
-	AuthAddr    string
-	UserAddr    string
-	VenueAddr   string
-	BookingAddr string
-	ReviewAddr  string
-	PaymentAddr string
-	MasterAddr  string
-	ChatAddr    string
-	CRMAddr     string
+	AuthAddr         string
+	UserAddr         string
+	VenueAddr        string
+	BookingAddr      string
+	ReviewAddr       string
+	PaymentAddr      string
+	MasterAddr       string
+	ChatAddr         string
+	CRMAddr          string
+	NotificationAddr string
 
 	// Internal service-to-service token (gateway → chat-service)
 	InternalServiceToken string
@@ -73,16 +74,16 @@ type Config struct {
 	SupportModeratorEmails []string
 
 	// Rate limits
-	RateLimitLoginMax       int
-	RateLimitLoginWindow    time.Duration
-	RateLimitRegisterMax    int
-	RateLimitRegisterWindow time.Duration
-	RateLimitAnalyticsMax   int
-	RateLimitAnalyticsWindow time.Duration
-	RateLimitSupportMax     int
-	RateLimitSupportWindow  time.Duration
-	RateLimitWebhookMax     int
-	RateLimitWebhookWindow  time.Duration
+	RateLimitLoginMax            int
+	RateLimitLoginWindow         time.Duration
+	RateLimitRegisterMax         int
+	RateLimitRegisterWindow      time.Duration
+	RateLimitAnalyticsMax        int
+	RateLimitAnalyticsWindow     time.Duration
+	RateLimitSupportMax          int
+	RateLimitSupportWindow       time.Duration
+	RateLimitWebhookMax          int
+	RateLimitWebhookWindow       time.Duration
 	RateLimitAdminMax            int
 	RateLimitAdminWindow         time.Duration
 	RateLimitResetPasswordMax    int
@@ -120,15 +121,16 @@ func LoadConfig() (Config, error) {
 		HTTPPort:   config.GetEnv("HTTP_PORT", "8080"),
 		UploadRoot: config.GetEnv("UPLOAD_ROOT", "./data/uploads"),
 
-		AuthAddr:    config.GetEnv("AUTH_SERVICE_ADDR", "localhost:50051"),
-		UserAddr:    config.GetEnv("USER_SERVICE_ADDR", "localhost:50052"),
-		VenueAddr:   config.GetEnv("VENUE_SERVICE_ADDR", "localhost:50053"),
-		BookingAddr: config.GetEnv("BOOKING_SERVICE_ADDR", "localhost:50054"),
-		ReviewAddr:  config.GetEnv("REVIEW_SERVICE_ADDR", "localhost:50055"),
-		PaymentAddr: config.GetEnv("PAYMENT_SERVICE_ADDR", "localhost:50056"),
-		MasterAddr:  config.GetEnv("MASTER_SERVICE_ADDR", "localhost:50057"),
-		ChatAddr:    config.GetEnv("CHAT_SERVICE_ADDR", "localhost:50058"),
-		CRMAddr:     config.GetEnv("CRM_SERVICE_ADDR", "localhost:50059"),
+		AuthAddr:         config.GetEnv("AUTH_SERVICE_ADDR", "localhost:50051"),
+		UserAddr:         config.GetEnv("USER_SERVICE_ADDR", "localhost:50052"),
+		VenueAddr:        config.GetEnv("VENUE_SERVICE_ADDR", "localhost:50053"),
+		BookingAddr:      config.GetEnv("BOOKING_SERVICE_ADDR", "localhost:50054"),
+		ReviewAddr:       config.GetEnv("REVIEW_SERVICE_ADDR", "localhost:50055"),
+		PaymentAddr:      config.GetEnv("PAYMENT_SERVICE_ADDR", "localhost:50056"),
+		MasterAddr:       config.GetEnv("MASTER_SERVICE_ADDR", "localhost:50057"),
+		ChatAddr:         config.GetEnv("CHAT_SERVICE_ADDR", "localhost:50058"),
+		CRMAddr:          config.GetEnv("CRM_SERVICE_ADDR", "localhost:50059"),
+		NotificationAddr: config.GetEnv("NOTIFICATION_SERVICE_ADDR", "localhost:50060"),
 
 		InternalServiceToken: strings.TrimSpace(config.GetEnv("INTERNAL_SERVICE_TOKEN", "")),
 
@@ -155,16 +157,16 @@ func LoadConfig() (Config, error) {
 		SupportWebhookToken:    strings.TrimSpace(config.GetEnv("SUPPORT_HELPDESK_WEBHOOK_TOKEN", "")),
 		SupportModeratorEmails: parseCSV(config.GetEnv("SUPPORT_MODERATOR_EMAILS", "")),
 
-		RateLimitLoginMax:        config.GetEnvInt("RATE_LIMIT_LOGIN_MAX", 10),
-		RateLimitLoginWindow:     config.GetEnvDuration("RATE_LIMIT_LOGIN_WINDOW", 5*time.Minute),
-		RateLimitRegisterMax:     config.GetEnvInt("RATE_LIMIT_REGISTER_MAX", 5),
-		RateLimitRegisterWindow:  config.GetEnvDuration("RATE_LIMIT_REGISTER_WINDOW", 15*time.Minute),
-		RateLimitAnalyticsMax:    config.GetEnvInt("RATE_LIMIT_ANALYTICS_MAX", 60),
-		RateLimitAnalyticsWindow: config.GetEnvDuration("RATE_LIMIT_ANALYTICS_WINDOW", 1*time.Minute),
-		RateLimitSupportMax:      config.GetEnvInt("RATE_LIMIT_SUPPORT_MAX", 5),
-		RateLimitSupportWindow:   config.GetEnvDuration("RATE_LIMIT_SUPPORT_WINDOW", 1*time.Hour),
-		RateLimitWebhookMax:      config.GetEnvInt("RATE_LIMIT_WEBHOOK_MAX", 30),
-		RateLimitWebhookWindow:   config.GetEnvDuration("RATE_LIMIT_WEBHOOK_WINDOW", 1*time.Minute),
+		RateLimitLoginMax:            config.GetEnvInt("RATE_LIMIT_LOGIN_MAX", 10),
+		RateLimitLoginWindow:         config.GetEnvDuration("RATE_LIMIT_LOGIN_WINDOW", 5*time.Minute),
+		RateLimitRegisterMax:         config.GetEnvInt("RATE_LIMIT_REGISTER_MAX", 5),
+		RateLimitRegisterWindow:      config.GetEnvDuration("RATE_LIMIT_REGISTER_WINDOW", 15*time.Minute),
+		RateLimitAnalyticsMax:        config.GetEnvInt("RATE_LIMIT_ANALYTICS_MAX", 60),
+		RateLimitAnalyticsWindow:     config.GetEnvDuration("RATE_LIMIT_ANALYTICS_WINDOW", 1*time.Minute),
+		RateLimitSupportMax:          config.GetEnvInt("RATE_LIMIT_SUPPORT_MAX", 5),
+		RateLimitSupportWindow:       config.GetEnvDuration("RATE_LIMIT_SUPPORT_WINDOW", 1*time.Hour),
+		RateLimitWebhookMax:          config.GetEnvInt("RATE_LIMIT_WEBHOOK_MAX", 30),
+		RateLimitWebhookWindow:       config.GetEnvDuration("RATE_LIMIT_WEBHOOK_WINDOW", 1*time.Minute),
 		RateLimitAdminMax:            config.GetEnvInt("RATE_LIMIT_ADMIN_MAX", 60),
 		RateLimitAdminWindow:         config.GetEnvDuration("RATE_LIMIT_ADMIN_WINDOW", 1*time.Minute),
 		RateLimitResetPasswordMax:    config.GetEnvInt("RATE_LIMIT_RESET_PASSWORD_MAX", 10),
@@ -197,7 +199,6 @@ func LoadConfig() (Config, error) {
 	}
 	return cfg, nil
 }
-
 
 // Validate returns an error for any configuration that would cause a
 // guaranteed runtime failure or security problem.

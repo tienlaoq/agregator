@@ -46,4 +46,8 @@ type User struct {
 	Bio       string
 	CreatedAt time.Time
 	UpdatedAt time.Time
+	// DeletedAt is non-nil for soft-deleted (anonymised) accounts. Read paths
+	// surface it so callers can treat a deactivated account as gone without a
+	// second query.
+	DeletedAt *time.Time
 }

@@ -92,19 +92,22 @@ func (r *venueRepo) Create(ctx context.Context, venue *domain.Venue) error {
 		venue.SocialLinks = "{}"
 	}
 
+	// yookassa_seller_account_id is intentionally NOT included in INSERT —
+	// the column still exists in the DB (default '') but the new escrow flow
+	// owns all payout rails through payment-service.
 	err = tx.QueryRow(ctx, `
 		INSERT INTO venues (owner_id, slug, name, type, description, address, city, location, price_from, capacity, amenities, working_hours, phone, status,
 			legal_entity_name, inn, ogrn, public_listing_url, verification_note, social_links,
-			payout_legal_form, yookassa_seller_account_id)
+			payout_legal_form)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, ST_SetSRID(ST_MakePoint($8, $9), 4326)::geography, $10, $11, $12, $13, $14, $15,
-			$16, $17, $18, $19, $20, $21::jsonb, $22, $23)
+			$16, $17, $18, $19, $20, $21::jsonb, $22)
 		RETURNING id, created_at, updated_at`,
 		venue.OwnerID, venue.Slug, venue.Name, venue.Type, venue.Description,
 		venue.Address, venue.City, venue.Longitude, venue.Latitude,
 		venue.PriceFrom, venue.Capacity, venue.Amenities, venue.WorkingHours, venue.Phone,
 		venue.Status,
 		venue.LegalEntityName, venue.INN, venue.OGRN, venue.PublicListingURL, venue.VerificationNote, venue.SocialLinks,
-		venue.PayoutLegalForm, venue.YooKassaSellerAccountID,
+		venue.PayoutLegalForm,
 	).Scan(&venue.ID, &venue.CreatedAt, &venue.UpdatedAt)
 	if err != nil {
 		return fmt.Errorf("insert venue: %w", err)
@@ -176,7 +179,7 @@ func (r *venueRepo) Update(ctx context.Context, venue *domain.Venue) error {
 			working_hours = $11, phone = $12,
 			legal_entity_name = $13, inn = $14, ogrn = $15,
 			public_listing_url = $16, social_links = $17::jsonb, verification_note = $18,
-			payout_legal_form = $19, yookassa_seller_account_id = $20,
+			payout_legal_form = $19,
 			updated_at = now()
 		WHERE id = $1`,
 		venue.ID, venue.Name, venue.Description, venue.Address, venue.City,
@@ -184,7 +187,7 @@ func (r *venueRepo) Update(ctx context.Context, venue *domain.Venue) error {
 		venue.PriceFrom, venue.Capacity, venue.Amenities,
 		venue.WorkingHours, venue.Phone,
 		venue.LegalEntityName, venue.INN, venue.OGRN, venue.PublicListingURL, venue.SocialLinks, venue.VerificationNote,
-		venue.PayoutLegalForm, venue.YooKassaSellerAccountID,
+		venue.PayoutLegalForm,
 	)
 	if err != nil {
 		return fmt.Errorf("update venue: %w", err)
@@ -208,7 +211,7 @@ func (r *venueRepo) GetByIDs(ctx context.Context, ids []uuid.UUID) ([]domain.Ven
 			v.moderated_at, v.moderated_by,
 			v.legal_entity_name, v.inn, v.ogrn, v.public_listing_url, v.verification_note,
 			v.social_links::text,
-			COALESCE(v.payout_legal_form, ''), COALESCE(v.yookassa_seller_account_id, ''),
+			COALESCE(v.payout_legal_form, ''),
 			v.created_at, v.updated_at
 		FROM venues v WHERE v.id = ANY($1::uuid[])`, ids)
 	if err != nil {
@@ -226,7 +229,7 @@ func (r *venueRepo) GetByIDs(ctx context.Context, ids []uuid.UUID) ([]domain.Ven
 			&v.ModeratedAt, &v.ModeratedBy,
 			&v.LegalEntityName, &v.INN, &v.OGRN, &v.PublicListingURL, &v.VerificationNote,
 			&v.SocialLinks,
-			&v.PayoutLegalForm, &v.YooKassaSellerAccountID,
+			&v.PayoutLegalForm,
 			&v.CreatedAt, &v.UpdatedAt,
 		); err != nil {
 			return nil, fmt.Errorf("scan venue batch: %w", err)
@@ -256,7 +259,7 @@ func (r *venueRepo) getVenue(ctx context.Context, where string, arg any) (*domai
 			v.moderated_at, v.moderated_by,
 			v.legal_entity_name, v.inn, v.ogrn, v.public_listing_url, v.verification_note,
 			v.social_links::text,
-			COALESCE(v.payout_legal_form, ''), COALESCE(v.yookassa_seller_account_id, ''),
+			COALESCE(v.payout_legal_form, ''),
 			v.created_at, v.updated_at
 		FROM venues v `+where, arg,
 	).Scan(
@@ -267,7 +270,7 @@ func (r *venueRepo) getVenue(ctx context.Context, where string, arg any) (*domai
 		&v.ModeratedAt, &v.ModeratedBy,
 		&v.LegalEntityName, &v.INN, &v.OGRN, &v.PublicListingURL, &v.VerificationNote,
 		&v.SocialLinks,
-		&v.PayoutLegalForm, &v.YooKassaSellerAccountID,
+		&v.PayoutLegalForm,
 		&v.CreatedAt, &v.UpdatedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -576,7 +579,7 @@ func (r *venueRepo) List(ctx context.Context, page, pageSize int32, venueType, s
 			moderated_at, moderated_by,
 			legal_entity_name, inn, ogrn, public_listing_url, verification_note,
 			social_links::text,
-			COALESCE(payout_legal_form, ''), COALESCE(yookassa_seller_account_id, ''),
+			COALESCE(payout_legal_form, ''),
 			created_at, updated_at,
 			(COUNT(*) OVER())::bigint AS __total
 		FROM venues %s %s LIMIT $%d OFFSET $%d`, where, orderBy, argIdx, argIdx+1)
@@ -682,7 +685,7 @@ func (r *venueRepo) Search(ctx context.Context, params domain.SearchParams) (*do
 			moderated_at, moderated_by,
 			legal_entity_name, inn, ogrn, public_listing_url, verification_note,
 			social_links::text,
-			COALESCE(payout_legal_form, ''), COALESCE(yookassa_seller_account_id, ''),
+			COALESCE(payout_legal_form, ''),
 			created_at, updated_at,
 			(COUNT(*) OVER())::bigint AS __total
 		FROM venues %s ORDER BY avg_rating DESC LIMIT $%d OFFSET $%d`, where, argIdx, argIdx+1)
@@ -713,7 +716,7 @@ func (r *venueRepo) ListByOwner(ctx context.Context, ownerID uuid.UUID) ([]domai
 			moderated_at, moderated_by,
 			legal_entity_name, inn, ogrn, public_listing_url, verification_note,
 			social_links::text,
-			COALESCE(payout_legal_form, ''), COALESCE(yookassa_seller_account_id, ''),
+			COALESCE(payout_legal_form, ''),
 			created_at, updated_at
 		FROM venues WHERE owner_id = $1 ORDER BY created_at DESC`, ownerID)
 	if err != nil {
@@ -808,7 +811,7 @@ func (r *venueRepo) ListByStatus(ctx context.Context, status string, page, pageS
 			moderated_at, moderated_by,
 			legal_entity_name, inn, ogrn, public_listing_url, verification_note,
 			social_links::text,
-			COALESCE(payout_legal_form, ''), COALESCE(yookassa_seller_account_id, ''),
+			COALESCE(payout_legal_form, ''),
 			created_at, updated_at
 		FROM venues`
 
@@ -865,6 +868,18 @@ func (r *venueRepo) UpdateStatus(ctx context.Context, venueID uuid.UUID, status,
 		return fmt.Errorf("update status: %w", err)
 	}
 	return nil
+}
+
+func (r *venueRepo) SuspendByOwner(ctx context.Context, ownerID uuid.UUID) (int64, error) {
+	tag, err := r.pool.Exec(ctx, `
+		UPDATE venues
+		SET status = $2, is_active = false, updated_at = now()
+		WHERE owner_id = $1 AND status <> $2`,
+		ownerID, domain.StatusSuspended)
+	if err != nil {
+		return 0, fmt.Errorf("suspend venues by owner: %w", err)
+	}
+	return tag.RowsAffected(), nil
 }
 
 func (r *venueRepo) ResetToPendingReview(ctx context.Context, venueID uuid.UUID) error {
@@ -1500,7 +1515,7 @@ func (r *venueRepo) scanVenuesWithTotal(rows pgx.Rows) ([]domain.Venue, int32, e
 			&v.ModeratedAt, &v.ModeratedBy,
 			&v.LegalEntityName, &v.INN, &v.OGRN, &v.PublicListingURL, &v.VerificationNote,
 			&v.SocialLinks,
-			&v.PayoutLegalForm, &v.YooKassaSellerAccountID,
+			&v.PayoutLegalForm,
 			&v.CreatedAt, &v.UpdatedAt,
 			&totalRaw,
 		); err != nil {
@@ -1534,7 +1549,7 @@ func (r *venueRepo) scanVenues(rows pgx.Rows) ([]domain.Venue, error) {
 			&v.ModeratedAt, &v.ModeratedBy,
 			&v.LegalEntityName, &v.INN, &v.OGRN, &v.PublicListingURL, &v.VerificationNote,
 			&v.SocialLinks,
-			&v.PayoutLegalForm, &v.YooKassaSellerAccountID,
+			&v.PayoutLegalForm,
 			&v.CreatedAt, &v.UpdatedAt,
 		); err != nil {
 			return nil, fmt.Errorf("scan venue: %w", err)

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"time"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -26,42 +27,62 @@ import (
 type PaymentUseCase struct {
 	repo           domain.PaymentRepository
 	outbox         domain.OutboxRepository
+	ledger         domain.LedgerRepository
 	provider       provider.PaymentProvider
 	activeProvider string // e.g. "yookassa" — must match Payment.ProviderName on webhook
 	returnURL      string
 	feeBPS         int64
+	holdDuration   time.Duration // accrual hold = ServiceAt + holdDuration
 }
 
+// NewPaymentUseCase wires the dependencies.
+//
+// holdDuration is how long after the service date a successful payment is
+// held in escrow before becoming available for payout. 24h is a sensible
+// default; configurable via env to widen during ramp-up or chargeback storms.
 func NewPaymentUseCase(
 	repo domain.PaymentRepository,
 	outbox domain.OutboxRepository,
+	ledger domain.LedgerRepository,
 	prov provider.PaymentProvider,
 	activeProvider string,
 	returnURL string,
 	platformFeeBPS int,
+	holdDuration time.Duration,
 ) *PaymentUseCase {
 	if platformFeeBPS <= 0 {
 		platformFeeBPS = 1500
 	}
+	if holdDuration <= 0 {
+		holdDuration = 24 * time.Hour
+	}
 	return &PaymentUseCase{
 		repo:           repo,
 		outbox:         outbox,
+		ledger:         ledger,
 		provider:       prov,
 		activeProvider: activeProvider,
 		returnURL:      returnURL,
 		feeBPS:         int64(platformFeeBPS),
+		holdDuration:   holdDuration,
 	}
 }
 
 // CreatePaymentInput is the provider-agnostic input for creating a payment.
+//
+// ServiceAt is the wall-clock moment the booked service begins. The usecase
+// passes it to the provider as informational metadata and stores it on the
+// payments row so the accrual produced on webhook success can compute its
+// own available_at = ServiceAt + payout hold. Optional — when zero the
+// accrual falls back to created_at + hold.
 type CreatePaymentInput struct {
-	BookingID               string
-	Amount                  int64
-	Description             string
-	IdempotencyKey          string
-	CounterpartyType        string
-	CounterpartyID          string
-	ProviderSellerAccountID string // marketplace seller account; empty = simple charge
+	BookingID        string
+	Amount           int64
+	Description      string
+	IdempotencyKey   string
+	CounterpartyType string
+	CounterpartyID   string
+	ServiceAt        time.Time
 }
 
 // CreatePayment creates a new payment or returns an existing one for the same
@@ -87,25 +108,24 @@ func (uc *PaymentUseCase) CreatePayment(ctx context.Context, in CreatePaymentInp
 	if in.Amount <= 0 {
 		return nil, status.Error(codes.InvalidArgument, "amount must be positive")
 	}
-	sellerID := strings.TrimSpace(in.ProviderSellerAccountID)
-	if !uc.provider.IsMockMode() && sellerID == "" {
-		return nil, status.Error(codes.InvalidArgument, "provider_seller_account_id is required for live split payment")
-	}
 
+	// PlatformFee + CounterpartyNet are frozen on the payments row even though
+	// they don't drive the provider call any more — they remain the source of
+	// truth for the accrual amount written to partner_ledger on webhook success.
 	platformFee := PlatformFeeKopecks(in.Amount, uc.feeBPS)
 	net := CounterpartyNetKopecks(in.Amount, platformFee)
 
 	// ── Phase 1: claim the idempotency slot ───────────────────────────────
 	p := &domain.Payment{
-		BookingID:               in.BookingID,
-		Amount:                  in.Amount,
-		Status:                  domain.StatusPending,
-		IdempotencyKey:          in.IdempotencyKey,
-		PlatformFeeKopecks:      platformFee,
-		CounterpartyNetKopecks:  net,
-		CounterpartyType:        strings.TrimSpace(in.CounterpartyType),
-		CounterpartyID:          strings.TrimSpace(in.CounterpartyID),
-		ProviderSellerAccountID: sellerID,
+		BookingID:              in.BookingID,
+		Amount:                 in.Amount,
+		Status:                 domain.StatusPending,
+		IdempotencyKey:         in.IdempotencyKey,
+		PlatformFeeKopecks:     platformFee,
+		CounterpartyNetKopecks: net,
+		CounterpartyType:       strings.TrimSpace(in.CounterpartyType),
+		CounterpartyID:         strings.TrimSpace(in.CounterpartyID),
+		ServiceAt:              in.ServiceAt,
 	}
 
 	isNew, err := uc.repo.CreateIdempotent(ctx, p)
@@ -129,21 +149,15 @@ func (uc *PaymentUseCase) CreatePayment(ctx context.Context, in CreatePaymentInp
 		// Slow path: ProviderID is empty — the original request crashed between
 		// Phase 1 and Phase 3.  Multiple concurrent retries may reach this point
 		// simultaneously.  DriveProviderWithLock serialises them with a PostgreSQL
-		// advisory lock so the provider is called exactly once:
-		//   - The requester that acquires the lock calls the provider and writes
-		//     the result atomically inside the transaction.
-		//   - Any requester that was waiting sees ProviderID != "" after the lock
-		//     is released and returns the already-written row without another call.
+		// advisory lock so the provider is called exactly once.
 		return uc.repo.DriveProviderWithLock(ctx, in.IdempotencyKey, func(p *domain.Payment) (string, string, error) {
 			result, err := uc.provider.CreatePayment(ctx, provider.CreateRequest{
-				AmountKopecks:      in.Amount,
-				PlatformFeeKopecks: platformFee,
-				Description:        in.Description,
-				ReturnURL:          uc.returnURL,
-				IdempotencyKey:     in.IdempotencyKey,
-				SellerAccountID:    sellerID,
-				CounterpartyID:     strings.TrimSpace(in.CounterpartyID),
-				BookingID:          in.BookingID,
+				AmountKopecks:  in.Amount,
+				Description:    in.Description,
+				ReturnURL:      uc.returnURL,
+				IdempotencyKey: in.IdempotencyKey,
+				CounterpartyID: strings.TrimSpace(in.CounterpartyID),
+				BookingID:      in.BookingID,
 			})
 			if err != nil {
 				return "", "", fmt.Errorf("provider create payment (recovery): %w", err)
@@ -156,14 +170,12 @@ func (uc *PaymentUseCase) CreatePayment(ctx context.Context, in CreatePaymentInp
 	// isNew=true means we are the sole owner of this idempotency slot —
 	// no lock needed, no concurrent retries are possible yet.
 	result, err := uc.provider.CreatePayment(ctx, provider.CreateRequest{
-		AmountKopecks:      in.Amount,
-		PlatformFeeKopecks: platformFee,
-		Description:        in.Description,
-		ReturnURL:          uc.returnURL,
-		IdempotencyKey:     in.IdempotencyKey,
-		SellerAccountID:    sellerID,
-		CounterpartyID:     strings.TrimSpace(in.CounterpartyID),
-		BookingID:          in.BookingID,
+		AmountKopecks:  in.Amount,
+		Description:    in.Description,
+		ReturnURL:      uc.returnURL,
+		IdempotencyKey: in.IdempotencyKey,
+		CounterpartyID: strings.TrimSpace(in.CounterpartyID),
+		BookingID:      in.BookingID,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("provider create payment: %w", err)
@@ -283,7 +295,59 @@ func (uc *PaymentUseCase) HandleWebhook(ctx context.Context, rawBody []byte) (*d
 		return event, nil
 	}
 
+	// On terminal-success: credit the partner's ledger with their net share.
+	// Idempotent — the partial unique index on (payment_id) WHERE entry_type=accrual
+	// means a retried successful webhook collapses to one accrual.
+	if event.Status == domain.StatusSucceeded {
+		if err := uc.writeAccrual(ctx, p); err != nil {
+			// Failing here would leave the payment terminal-succeeded but the
+			// partner uncredited. Return the error so the webhook caller Naks
+			// and ЮKassa retries; the UpdateStatus guard absorbs the duplicate
+			// status flip, and the ledger guard absorbs the duplicate accrual.
+			return event, fmt.Errorf("write accrual: %w", err)
+		}
+	}
+
 	return event, nil
+}
+
+// writeAccrual records the partner's share of a successful payment in the
+// append-only ledger.  No-op when the payment has no counterparty (e.g. a
+// future direct platform fee) — the accrual would be ambiguous with no
+// partner to credit.
+//
+// available_at = ServiceAt + holdDuration when ServiceAt is set; otherwise
+// falls back to now + holdDuration so the entry still respects the hold
+// window for service-less charges.
+func (uc *PaymentUseCase) writeAccrual(ctx context.Context, p *domain.Payment) error {
+	if p.CounterpartyID == "" || p.CounterpartyType == "" {
+		return nil
+	}
+	if p.CounterpartyNetKopecks <= 0 {
+		return nil
+	}
+
+	baseAt := p.ServiceAt
+	if baseAt.IsZero() {
+		baseAt = time.Now()
+	}
+
+	entry := &domain.LedgerEntry{
+		PartnerType:   domain.PartnerType(p.CounterpartyType),
+		PartnerID:     p.CounterpartyID,
+		EntryType:     domain.LedgerAccrual,
+		AmountKopecks: p.CounterpartyNetKopecks,
+		PaymentID:     p.ID,
+		AvailableAt:   baseAt.Add(uc.holdDuration),
+	}
+	if err := uc.ledger.AppendAccrual(ctx, entry); err != nil {
+		// AlreadyExists is the idempotent retry path — absorb silently.
+		if status.Code(err) == codes.AlreadyExists {
+			return nil
+		}
+		return err
+	}
+	return nil
 }
 
 // knownProviderStatuses is the set of raw provider status strings that the
@@ -295,10 +359,10 @@ func (uc *PaymentUseCase) HandleWebhook(ctx context.Context, rawBody []byte) (*d
 // It is intentionally kept as a usecase-layer constant (not imported from the
 // provider package) to avoid coupling the usecase to the ЮKassa wire format.
 var knownProviderStatuses = map[string]struct{}{
-	"pending":              {}, // payment created, awaiting user action
-	"waiting_for_capture":  {}, // authorised, usecase calls Capture
-	"succeeded":            {}, // terminal: funds moved
-	"canceled":             {}, // terminal: payment cancelled (ЮKassa spelling)
+	"pending":             {}, // payment created, awaiting user action
+	"waiting_for_capture": {}, // authorised, usecase calls Capture
+	"succeeded":           {}, // terminal: funds moved
+	"canceled":            {}, // terminal: payment cancelled (ЮKassa spelling)
 }
 
 // RefundByBooking issues a full refund for the payment associated with
@@ -344,6 +408,42 @@ func (uc *PaymentUseCase) RefundByBooking(ctx context.Context, bookingID string)
 		return fmt.Errorf("update payment status to refunded: %w", err)
 	}
 
+	// Reverse the partner's accrual.  Idempotent on (payment_id) via the
+	// partial unique index — retried refunds collapse to one reversal.
+	if err := uc.writeReversal(ctx, p); err != nil {
+		return fmt.Errorf("write reversal: %w", err)
+	}
+
+	return nil
+}
+
+// writeReversal records a refund reversal in the ledger, undoing the original
+// accrual.  No-op when no accrual exists (refund of a payment that never
+// reached succeeded — shouldn't happen given the p.Status check above, but
+// kept defensive).
+func (uc *PaymentUseCase) writeReversal(ctx context.Context, p *domain.Payment) error {
+	accrual, err := uc.ledger.FindAccrualByPayment(ctx, p.ID)
+	if err != nil {
+		if status.Code(err) == codes.NotFound {
+			return nil
+		}
+		return fmt.Errorf("find accrual: %w", err)
+	}
+	entry := &domain.LedgerEntry{
+		PartnerType:     accrual.PartnerType,
+		PartnerID:       accrual.PartnerID,
+		EntryType:       domain.LedgerReversal,
+		AmountKopecks:   -accrual.AmountKopecks,
+		PaymentID:       p.ID,
+		ReversesEntryID: accrual.ID,
+		Reason:          "refund",
+	}
+	if err := uc.ledger.AppendReversal(ctx, entry); err != nil {
+		if status.Code(err) == codes.AlreadyExists {
+			return nil
+		}
+		return err
+	}
 	return nil
 }
 

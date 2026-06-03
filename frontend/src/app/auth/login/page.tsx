@@ -57,7 +57,8 @@ export default function LoginPage() {
 function LoginForm() {
   const router = useRouter()
   const searchParams = useSearchParams()
-  const authLogin = useAuthStore((s) => s.login)
+  const setTokens = useAuthStore((s) => s.setTokens)
+  const setUser = useAuthStore((s) => s.setUser)
   const [emailOrPhone, setEmailOrPhone] = useState("")
   const [password, setPassword] = useState("")
   const [error, setError] = useState("")
@@ -76,10 +77,13 @@ function LoginForm() {
     setLoading(true)
     try {
       const res = await login({ email: emailOrPhone, password })
-      localStorage.setItem("token", res.access_token)
-      localStorage.setItem("refresh_token", res.refresh_token)
+      // Сначала кладём access-токен в стор (fetchAPI читает его только из памяти
+      // Zustand) и ставим refresh-cookie — иначе getProfile() уйдёт без
+      // Authorization, получит 401 и обработчик 401 в fetchAPI сделает
+      // window.location.href = "/auth/login" (та самая «перезагрузка»).
+      await setTokens(res.access_token, res.refresh_token)
       const user = await getProfile()
-      authLogin(res.access_token, res.refresh_token, user)
+      setUser(user)
       router.push("/")
     } catch (err) {
       if (err instanceof ApiError) {
@@ -87,6 +91,8 @@ function LoginForm() {
       } else {
         setError(formatApiErrorMessage(err, "Не удалось подключиться к серверу"))
       }
+      // Сбрасываем только пароль — email/телефон оставляем, чтобы не вводить заново.
+      setPassword("")
     } finally {
       setLoading(false)
     }

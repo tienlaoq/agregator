@@ -81,3 +81,9 @@ func (uc *UserUseCase) Update(ctx context.Context, id string, name, phone, avata
 	}
 	return user, nil
 }
+
+// Delete soft-deletes (anonymises + deactivates) the user. Returns
+// domain.ErrNotFound when no active account matches the id.
+func (uc *UserUseCase) Delete(ctx context.Context, id string) error {
+	return uc.repo.SoftDelete(ctx, id)
+}

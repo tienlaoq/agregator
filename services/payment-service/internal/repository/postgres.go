@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -11,6 +12,17 @@ import (
 	pkgerr "github.com/tienlao/agregator/pkg/errors"
 	"github.com/tienlao/agregator/services/payment-service/internal/domain"
 )
+
+// nullableTime maps Go's time.Time zero value to a SQL NULL.
+// pgx serialises a non-nil *time.Time as TIMESTAMPTZ and nil as NULL,
+// so this is the idiomatic way to keep "unset" columns NULL rather
+// than inserting the year-0001 sentinel that a zero time.Time would yield.
+func nullableTime(t time.Time) any {
+	if t.IsZero() {
+		return nil
+	}
+	return t
+}
 
 type PaymentRepo struct {
 	pool *pgxpool.Pool
@@ -34,7 +46,7 @@ func (r *PaymentRepo) CreateIdempotent(ctx context.Context, p *domain.Payment) (
 	const q = `
 		INSERT INTO payments (booking_id, amount, status, provider_id, payment_url, idempotency_key,
 			platform_fee_kopecks, counterparty_net_kopecks, counterparty_type, counterparty_id,
-			provider_seller_account_id, provider_name)
+			provider_name, service_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 		ON CONFLICT (idempotency_key) DO NOTHING
 		RETURNING id, created_at, updated_at`
@@ -46,7 +58,7 @@ func (r *PaymentRepo) CreateIdempotent(ctx context.Context, p *domain.Payment) (
 		p.BookingID, p.Amount, p.Status.String(),
 		p.ProviderID, p.PaymentURL, p.IdempotencyKey,
 		p.PlatformFeeKopecks, p.CounterpartyNetKopecks, p.CounterpartyType, p.CounterpartyID,
-		p.ProviderSellerAccountID, providerName,
+		providerName, nullableTime(p.ServiceAt),
 	).Scan(&p.ID, &p.CreatedAt, &p.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		// Conflict: a row with this idempotency_key already exists.
@@ -74,99 +86,31 @@ func (r *PaymentRepo) UpdateProviderInfo(ctx context.Context, id, providerID, pa
 	return nil
 }
 
+// paymentSelectCols is the column list shared by every payments SELECT.
+// Keeping a single copy guarantees the scan order in scanOne stays consistent
+// across all lookup methods — adding a new column requires touching one place.
+const paymentSelectCols = `
+	id, booking_id, amount, status, COALESCE(provider_id, ''),
+	COALESCE(payment_url, ''), COALESCE(idempotency_key, ''),
+	COALESCE(platform_fee_kopecks, 0), COALESCE(counterparty_net_kopecks, 0),
+	COALESCE(counterparty_type, ''), COALESCE(counterparty_id, ''),
+	COALESCE(provider_name, 'yookassa'), service_at,
+	created_at, updated_at`
+
 func (r *PaymentRepo) GetByID(ctx context.Context, id string) (*domain.Payment, error) {
-	const q = `
-		SELECT id, booking_id, amount, status, COALESCE(provider_id, ''),
-		       COALESCE(payment_url, ''), COALESCE(idempotency_key, ''),
-		       COALESCE(platform_fee_kopecks, 0), COALESCE(counterparty_net_kopecks, 0),
-		       COALESCE(counterparty_type, ''), COALESCE(counterparty_id, ''),
-		       COALESCE(provider_seller_account_id, ''), COALESCE(provider_name, 'yookassa'),
-		       created_at, updated_at
-		FROM payments WHERE id = $1`
-	return r.scanOne(ctx, q, id)
+	return r.scanOne(ctx, `SELECT `+paymentSelectCols+` FROM payments WHERE id = $1`, id)
 }
 
 func (r *PaymentRepo) GetByBookingID(ctx context.Context, bookingID string) (*domain.Payment, error) {
-	const q = `
-		SELECT id, booking_id, amount, status, COALESCE(provider_id, ''),
-		       COALESCE(payment_url, ''), COALESCE(idempotency_key, ''),
-		       COALESCE(platform_fee_kopecks, 0), COALESCE(counterparty_net_kopecks, 0),
-		       COALESCE(counterparty_type, ''), COALESCE(counterparty_id, ''),
-		       COALESCE(provider_seller_account_id, ''), COALESCE(provider_name, 'yookassa'),
-		       created_at, updated_at
-		FROM payments WHERE booking_id = $1`
-	return r.scanOne(ctx, q, bookingID)
+	return r.scanOne(ctx, `SELECT `+paymentSelectCols+` FROM payments WHERE booking_id = $1`, bookingID)
 }
 
 func (r *PaymentRepo) GetByProviderID(ctx context.Context, providerID string) (*domain.Payment, error) {
-	const q = `
-		SELECT id, booking_id, amount, status, COALESCE(provider_id, ''),
-		       COALESCE(payment_url, ''), COALESCE(idempotency_key, ''),
-		       COALESCE(platform_fee_kopecks, 0), COALESCE(counterparty_net_kopecks, 0),
-		       COALESCE(counterparty_type, ''), COALESCE(counterparty_id, ''),
-		       COALESCE(provider_seller_account_id, ''), COALESCE(provider_name, 'yookassa'),
-		       created_at, updated_at
-		FROM payments WHERE provider_id = $1`
-	return r.scanOne(ctx, q, providerID)
+	return r.scanOne(ctx, `SELECT `+paymentSelectCols+` FROM payments WHERE provider_id = $1`, providerID)
 }
 
 func (r *PaymentRepo) GetByIdempotencyKey(ctx context.Context, key string) (*domain.Payment, error) {
-	const q = `
-		SELECT id, booking_id, amount, status, COALESCE(provider_id, ''),
-		       COALESCE(payment_url, ''), COALESCE(idempotency_key, ''),
-		       COALESCE(platform_fee_kopecks, 0), COALESCE(counterparty_net_kopecks, 0),
-		       COALESCE(counterparty_type, ''), COALESCE(counterparty_id, ''),
-		       COALESCE(provider_seller_account_id, ''), COALESCE(provider_name, 'yookassa'),
-		       created_at, updated_at
-		FROM payments WHERE idempotency_key = $1`
-	return r.scanOne(ctx, q, key)
-}
-
-// UpdateStatus transitions a payment to the given status only when it is not
-// already in a terminal state.
-//
-// The WHERE clause mirrors domain.PaymentStatus.IsTerminal(): status NOT IN
-// ('succeeded', 'cancelled', 'refunded').  This is the idempotency guard
-// against duplicate webhook delivery: if the same event arrives a second time
-// the row simply won't be updated and RowsAffected will be 0, returned as
-// updated=false.  The caller must treat updated=false as a no-op and skip event
-// publication.
-//
-// A genuine "not found" (no row for the given id) is also reported as
-// updated=false with a NotFound sentinel so the caller can distinguish the two
-// cases if needed.
-func (r *PaymentRepo) UpdateStatus(ctx context.Context, id string, newStatus domain.PaymentStatus, providerID string) (bool, error) {
-	const q = `
-		UPDATE payments
-		   SET status = $2, provider_id = $3, updated_at = now()
-		 WHERE id = $1
-		   AND status NOT IN ('succeeded', 'cancelled', 'refunded')`
-	ct, err := r.pool.Exec(ctx, q, id, newStatus.String(), providerID)
-	if err != nil {
-		return false, err
-	}
-	if ct.RowsAffected() == 0 {
-		exists, chkErr := r.paymentExists(ctx, id)
-		if chkErr != nil {
-			return false, chkErr
-		}
-		if !exists {
-			return false, pkgerr.NotFound("payment not found")
-		}
-		// Already terminal — duplicate delivery, safe to skip.
-		return false, nil
-	}
-	return true, nil
-}
-
-func (r *PaymentRepo) paymentExists(ctx context.Context, id string) (bool, error) {
-	const q = `SELECT 1 FROM payments WHERE id = $1`
-	var dummy int
-	err := r.pool.QueryRow(ctx, q, id).Scan(&dummy)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return false, nil
-	}
-	return err == nil, err
+	return r.scanOne(ctx, `SELECT `+paymentSelectCols+` FROM payments WHERE idempotency_key = $1`, key)
 }
 
 // DriveProviderWithLock serialises concurrent crash-recovery attempts for the
@@ -182,10 +126,10 @@ func (r *PaymentRepo) paymentExists(ctx context.Context, id string) (bool, error
 //  2. Acquire pg_advisory_xact_lock(hashtext(idempotencyKey)).
 //  3. Re-read the payments row.
 //     a. ProviderID already set → commit (no-op) and return the row.
-//        The first requester finished while we were waiting — no provider call.
+//     The first requester finished while we were waiting — no provider call.
 //     b. ProviderID empty → call fn(p).
-//        On success: write providerID+paymentURL, commit, return updated row.
-//        On fn error: rollback, return error so caller can propagate.
+//     On success: write providerID+paymentURL, commit, return updated row.
+//     On fn error: rollback, return error so caller can propagate.
 func (r *PaymentRepo) DriveProviderWithLock(
 	ctx context.Context,
 	idempotencyKey string,
@@ -209,24 +153,21 @@ func (r *PaymentRepo) DriveProviderWithLock(
 	}
 
 	// Re-read the row now that we hold the lock.
-	const q = `
-		SELECT id, booking_id, amount, status, COALESCE(provider_id, ''),
-		       COALESCE(payment_url, ''), COALESCE(idempotency_key, ''),
-		       COALESCE(platform_fee_kopecks, 0), COALESCE(counterparty_net_kopecks, 0),
-		       COALESCE(counterparty_type, ''), COALESCE(counterparty_id, ''),
-		       COALESCE(provider_seller_account_id, ''), COALESCE(provider_name, 'yookassa'),
-		       created_at, updated_at
-		FROM payments WHERE idempotency_key = $1`
+	q := `SELECT ` + paymentSelectCols + ` FROM payments WHERE idempotency_key = $1`
 
 	p := &domain.Payment{}
 	var rawStatus string
+	var serviceAt *time.Time
 	scanErr := tx.QueryRow(ctx, q, idempotencyKey).Scan(
 		&p.ID, &p.BookingID, &p.Amount, &rawStatus,
 		&p.ProviderID, &p.PaymentURL, &p.IdempotencyKey,
 		&p.PlatformFeeKopecks, &p.CounterpartyNetKopecks, &p.CounterpartyType, &p.CounterpartyID,
-		&p.ProviderSellerAccountID, &p.ProviderName,
+		&p.ProviderName, &serviceAt,
 		&p.CreatedAt, &p.UpdatedAt,
 	)
+	if serviceAt != nil {
+		p.ServiceAt = *serviceAt
+	}
 	if errors.Is(scanErr, pgx.ErrNoRows) {
 		err = pkgerr.NotFound("payment not found for idempotency key")
 		return nil, err
@@ -279,11 +220,12 @@ func (r *PaymentRepo) DriveProviderWithLock(
 func (r *PaymentRepo) scanOne(ctx context.Context, q string, args ...any) (*domain.Payment, error) {
 	p := &domain.Payment{}
 	var rawStatus string
+	var serviceAt *time.Time
 	err := r.pool.QueryRow(ctx, q, args...).Scan(
 		&p.ID, &p.BookingID, &p.Amount, &rawStatus,
 		&p.ProviderID, &p.PaymentURL, &p.IdempotencyKey,
 		&p.PlatformFeeKopecks, &p.CounterpartyNetKopecks, &p.CounterpartyType, &p.CounterpartyID,
-		&p.ProviderSellerAccountID, &p.ProviderName,
+		&p.ProviderName, &serviceAt,
 		&p.CreatedAt, &p.UpdatedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -293,5 +235,8 @@ func (r *PaymentRepo) scanOne(ctx context.Context, q string, args ...any) (*doma
 		return nil, err
 	}
 	p.Status = domain.PaymentStatus(rawStatus)
+	if serviceAt != nil {
+		p.ServiceAt = *serviceAt
+	}
 	return p, nil
 }

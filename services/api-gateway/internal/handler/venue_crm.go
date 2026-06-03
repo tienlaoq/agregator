@@ -162,6 +162,11 @@ func (h *VenueHandler) AddVenueStaffByEmail(w http.ResponseWriter, r *http.Reque
 		grpcErrorToHTTP(w, err)
 		return
 	}
+	// Bell notification for the invited worker (best-effort, never fails the
+	// invite). Fired before the response is written so r.Context() is still live.
+	if h.staffNotifier != nil {
+		h.staffNotifier.NotifyStaffInvited(r.Context(), u.GetId(), venueID, req.Role)
+	}
 	writeJSON(w, http.StatusCreated, map[string]any{"user_id": u.GetId(), "email": u.GetEmail(), "role": req.Role})
 }
 

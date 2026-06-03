@@ -189,7 +189,6 @@ func Test_ValidatePayoutProfile(t *testing.T) {
 		PayoutBIK:                  "044525974",
 		PayoutSettlementAccount:    "40702810123456789012",
 		PayoutCorrespondentAccount: "30101810400000000974",
-		YookassaSellerAccountID:    "12345",
 	}
 	tests := []struct {
 		name      string

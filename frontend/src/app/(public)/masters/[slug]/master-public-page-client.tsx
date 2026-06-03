@@ -34,6 +34,7 @@ import {
   venueMediaUrl,
 } from "@/lib/api";
 import { ReviewList } from "@/components/review-list";
+import { FramedImage } from "@/components/banya/framed-image";
 import type { MasterPhoto, MasterProfile, MasterTravelExcludeZone, Review } from "@/lib/types";
 import { MasterTravelBaseMap } from "@/components/banya/master-travel-base-map";
 import {
@@ -390,11 +391,9 @@ export function MasterPublicPageClient({
                   onClick={() => photoGallery.openAt(photoGallery.index)}
                   aria-label="Открыть фото в полном размере"
                 >
-                  <Image
+                  <FramedImage
                     src={photoGallery.current.src}
                     alt=""
-                    fill
-                    className="object-cover"
                     sizes="(max-width: 1024px) 100vw, 66vw"
                     priority
                     unoptimized

@@ -8,6 +8,7 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	"google.golang.org/grpc"
 
@@ -85,8 +86,24 @@ func main() {
 
 	paymentRepo := repository.NewPaymentRepo(pgPool)
 	outboxRepo := repository.NewOutboxRepo(pgPool)
+	ledgerRepo := repository.NewLedgerRepo(pgPool)
+	payoutRepo := repository.NewPayoutRepo(pgPool)
+	payoutMethodRepo := repository.NewPayoutMethodRepo(pgPool)
 
-	uc := usecase.NewPaymentUseCase(paymentRepo, outboxRepo, paymentProvider, string(cfg.ActiveProvider), cfg.PaymentReturnURL, cfg.PlatformFeeBPS)
+	holdDuration := time.Duration(cfg.PayoutHoldHours) * time.Hour
+	uc := usecase.NewPaymentUseCase(
+		paymentRepo, outboxRepo, ledgerRepo,
+		paymentProvider, string(cfg.ActiveProvider),
+		cfg.PaymentReturnURL, cfg.PlatformFeeBPS, holdDuration,
+	)
+	payoutUC := usecase.NewPayoutUseCase(
+		payoutRepo, payoutMethodRepo, ledgerRepo,
+		paymentProvider, string(cfg.ActiveProvider),
+		usecase.PayoutSchedulerConfig{},
+	)
+	stopScheduler := payoutUC.StartSchedulerInBackground(ctx)
+	defer stopScheduler()
+	log.Info().Msg("payout scheduler started")
 
 	// Outbox worker relays pending events from payment_outbox to NATS.
 	// It runs asynchronously and is stopped via context cancellation on shutdown.
@@ -115,7 +132,7 @@ func main() {
 		grpcutil.ServiceTokenServerInterceptor(cfg.InternalServiceToken),
 	))
 	grpcServer := grpc.NewServer(srvOpts...)
-	paymentv1.RegisterPaymentServiceServer(grpcServer, delivery.NewServer(uc))
+	paymentv1.RegisterPaymentServiceServer(grpcServer, delivery.NewServer(uc, payoutUC))
 
 	lis, err := net.Listen("tcp", ":"+cfg.GRPCPort)
 	if err != nil {

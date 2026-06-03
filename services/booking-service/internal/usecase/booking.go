@@ -12,6 +12,7 @@ import (
 	"github.com/rs/zerolog"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	crmv1 "github.com/tienlao/agregator/gen/go/crm/v1"
 	paymentv1 "github.com/tienlao/agregator/gen/go/payment/v1"
@@ -231,14 +232,18 @@ func (uc *BookingUseCase) CreateBooking(ctx context.Context, in CreateBookingInp
 	// this payment.  The booking_id is a server-generated UUID (unguessable from
 	// outside) so the combined hash is unpredictable even without a separate nonce.
 	idemKey := bookingIdempotencyKey(b.ID, b.UserID)
+	// ServiceAt = absolute visit-start moment in the venue's timezone.
+	// payment-service uses it to compute the payout hold window
+	// (available_at = service_at + PAYOUT_HOLD_HOURS).
+	serviceAt := b.TimeFrom.ToTimeIn(b.Date, loc)
 	payResp, err := uc.paymentClient.CreatePayment(ctx, &paymentv1.CreatePaymentRequest{
-		BookingId:               b.ID,
-		Amount:                  b.TotalPrice,
-		Description:             fmt.Sprintf("Booking %s", b.ID),
-		IdempotencyKey:          idemKey,
-		CounterpartyType:        "venue",
-		CounterpartyId:          in.VenueID,
-		YookassaSellerAccountId: strings.TrimSpace(vResp.GetYookassaSellerAccountId()),
+		BookingId:        b.ID,
+		Amount:           b.TotalPrice,
+		Description:      fmt.Sprintf("Booking %s", b.ID),
+		IdempotencyKey:   idemKey,
+		CounterpartyType: "venue",
+		CounterpartyId:   in.VenueID,
+		ServiceAt:        timestamppb.New(serviceAt),
 	})
 	if err != nil {
 		_, _ = uc.venueClient.ReleaseSlot(ctx, &venuev1.ReleaseSlotRequest{

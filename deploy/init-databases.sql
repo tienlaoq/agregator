@@ -6,6 +6,7 @@ CREATE DATABASE review_db;
 CREATE DATABASE payment_db;
 CREATE DATABASE master_db;
 CREATE DATABASE chat_db;
+CREATE DATABASE notification_db;
 CREATE DATABASE support_db;
 
 \c venue_db

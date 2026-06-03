@@ -114,6 +114,9 @@ func (m *mockVenueClient) DeleteVenueHallPhoto(ctx context.Context, in *venuev1.
 func (m *mockVenueClient) SetVenueHallCoverPhoto(ctx context.Context, in *venuev1.SetVenueHallCoverPhotoRequest, opts ...grpc.CallOption) (*venuev1.VenueResponse, error) {
 	return nil, nil
 }
+func (m *mockVenueClient) SuspendVenuesByOwner(ctx context.Context, in *venuev1.SuspendVenuesByOwnerRequest, opts ...grpc.CallOption) (*venuev1.SuspendVenuesByOwnerResponse, error) {
+	return nil, nil
+}
 
 // mockCRMClient implements crmv1.CRMServiceClient.
 // GetManagementAccessFunc is overridable; default returns "owner" so existing
@@ -170,6 +173,21 @@ func (m *mockPaymentClient) GetPaymentByBooking(ctx context.Context, in *payment
 	return nil, nil
 }
 func (m *mockPaymentClient) HandleWebhook(ctx context.Context, in *paymentv1.WebhookRequest, opts ...grpc.CallOption) (*paymentv1.WebhookResponse, error) {
+	return nil, nil
+}
+func (m *mockPaymentClient) SetPayoutMethod(ctx context.Context, in *paymentv1.SetPayoutMethodRequest, opts ...grpc.CallOption) (*paymentv1.PayoutMethodResponse, error) {
+	return nil, nil
+}
+func (m *mockPaymentClient) GetPayoutMethod(ctx context.Context, in *paymentv1.GetPayoutMethodRequest, opts ...grpc.CallOption) (*paymentv1.PayoutMethodResponse, error) {
+	return nil, nil
+}
+func (m *mockPaymentClient) GetPartnerBalance(ctx context.Context, in *paymentv1.GetPartnerBalanceRequest, opts ...grpc.CallOption) (*paymentv1.PartnerBalanceResponse, error) {
+	return nil, nil
+}
+func (m *mockPaymentClient) ListPartnerLedger(ctx context.Context, in *paymentv1.ListPartnerLedgerRequest, opts ...grpc.CallOption) (*paymentv1.ListPartnerLedgerResponse, error) {
+	return nil, nil
+}
+func (m *mockPaymentClient) ListPartnerPayouts(ctx context.Context, in *paymentv1.ListPartnerPayoutsRequest, opts ...grpc.CallOption) (*paymentv1.ListPartnerPayoutsResponse, error) {
 	return nil, nil
 }
 

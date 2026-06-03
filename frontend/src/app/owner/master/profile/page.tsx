@@ -28,8 +28,10 @@ import {
   submitMasterForReview,
   uploadMasterPhoto,
   formatApiErrorMessage,
+  isEmailNotVerifiedError,
   venueMediaUrl,
 } from "@/lib/api";
+import { EmailVerificationNotice } from "@/components/banya/email-verification-notice";
 import type {
   MasterPhoto,
   MasterProfile,
@@ -260,6 +262,7 @@ export default function MasterProfilePage() {
   const { token, user, hydrated } = useAuthStore();
   const [createName, setCreateName] = useState("");
   const [error, setError] = useState("");
+  const [emailNotVerified, setEmailNotVerified] = useState(false);
   const [submitWarning, setSubmitWarning] = useState("");
   const [photoError, setPhotoError] = useState("");
 
@@ -444,8 +447,19 @@ export default function MasterProfilePage() {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["my-master-profile"] });
       setError("");
+      setEmailNotVerified(false);
     },
-    onError: (e) => setError(formatApiErrorMessage(e, "Не удалось создать профиль")),
+    onError: (e) => {
+      // Email-gate: show the resend block instead of the generic error; the
+      // typed name is preserved so the partner can retry after verifying.
+      if (isEmailNotVerifiedError(e)) {
+        setEmailNotVerified(true);
+        setError("");
+      } else {
+        setEmailNotVerified(false);
+        setError(formatApiErrorMessage(e, "Не удалось создать профиль"));
+      }
+    },
   });
 
   const buildMasterPatchBody = (): Record<string, unknown> => {
@@ -627,6 +641,9 @@ export default function MasterProfilePage() {
             <CardDescription>Как к вам обращаться на платформе</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
+            {emailNotVerified && user?.email ? (
+              <EmailVerificationNotice email={user.email} />
+            ) : null}
             <div className="space-y-2">
               <Label htmlFor="createName">Отображаемое имя</Label>
               <Input

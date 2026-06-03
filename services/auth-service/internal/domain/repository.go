@@ -16,6 +16,12 @@ type CredentialRepository interface {
 	CreateOAuth(ctx context.Context, cred *Credential) error
 	UpdatePasswordHash(ctx context.Context, userID, passwordHash string) error
 
+	// SetEmailVerified flips the email_verified flag for a credential row.
+	// Used by VerifyEmail (true) once a verification token is consumed and by
+	// OAuthLogin (true) since the provider already vouched for the address.
+	// Returns pkgerr.NotFound when no row matched.
+	SetEmailVerified(ctx context.Context, userID string, verified bool) error
+
 	// PromoteOAuthEmail sets the email on a credential row that was created with
 	// an empty email (EmailVerified=false path in OAuthLogin). Called when the
 	// same provider later returns EmailVerified=true, allowing the orphan account
@@ -66,6 +72,23 @@ type RefreshTokenRepository interface {
 type PasswordResetRepository interface {
 	InvalidateUnusedByUserID(ctx context.Context, userID string) error
 	Create(ctx context.Context, userID, tokenHash string, expiresAt time.Time) error
+	ConsumeByTokenHash(ctx context.Context, tokenHash string) (userID string, err error)
+	// DeleteExpired removes rows that have expired or been used.
+	// Called periodically by the cleanup goroutine in cmd/main.go.
+	DeleteExpired(ctx context.Context) (deleted int64, err error)
+}
+
+// EmailVerificationRepository manages single-use email-verification tokens.
+// It mirrors PasswordResetRepository: tokens are stored hashed, expire via a
+// TTL, and are consumed exactly once. Anti-enumeration is handled in the
+// usecase layer, not here.
+type EmailVerificationRepository interface {
+	// InvalidateUnusedByUserID removes any outstanding (unused) tokens for the
+	// user before a fresh one is issued, so only the latest link is ever valid.
+	InvalidateUnusedByUserID(ctx context.Context, userID string) error
+	Create(ctx context.Context, userID, tokenHash string, expiresAt time.Time) error
+	// ConsumeByTokenHash atomically marks the token used and returns its user_id.
+	// Returns pkgerr.NotFound when the token is absent, expired, or already used.
 	ConsumeByTokenHash(ctx context.Context, tokenHash string) (userID string, err error)
 	// DeleteExpired removes rows that have expired or been used.
 	// Called periodically by the cleanup goroutine in cmd/main.go.

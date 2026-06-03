@@ -41,9 +41,11 @@ interface HeaderProps {
   userName?: string
   userAvatar?: string
   userRole?: string
+  /** True when the user manages ≥1 venue via CRM (owner or invited staff). */
+  hasManagedVenues?: boolean
 }
 
-export function Header({ isLoggedIn = false, userName = "Иван", userAvatar, userRole }: HeaderProps) {
+export function Header({ isLoggedIn = false, userName = "Иван", userAvatar, userRole, hasManagedVenues = false }: HeaderProps) {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
   const router = useRouter()
   const logout = useAuthStore((s) => s.logout)
@@ -133,6 +135,14 @@ export function Header({ isLoggedIn = false, userName = "Иван", userAvatar, 
                     <Link href="/owner/venues" className="flex items-center gap-2">
                       <Building2 className="h-4 w-4" />
                       Мои заведения
+                    </Link>
+                  </DropdownMenuItem>
+                ) : null}
+                {hasManagedVenues && userRole !== "venue_owner" ? (
+                  <DropdownMenuItem asChild>
+                    <Link href="/owner/venues" className="flex items-center gap-2">
+                      <Building2 className="h-4 w-4" />
+                      Заведения команды
                     </Link>
                   </DropdownMenuItem>
                 ) : null}
@@ -276,6 +286,16 @@ export function Header({ isLoggedIn = false, userName = "Иван", userAvatar, 
                       >
                         <Building2 className="h-4 w-4 shrink-0" />
                         Мои заведения
+                      </Link>
+                    ) : null}
+                    {hasManagedVenues && userRole !== "venue_owner" ? (
+                      <Link
+                        href="/owner/venues"
+                        className="flex items-center gap-2 text-muted-foreground"
+                        onClick={() => setMobileMenuOpen(false)}
+                      >
+                        <Building2 className="h-4 w-4 shrink-0" />
+                        Заведения команды
                       </Link>
                     ) : null}
                     <Link href="/my/bookings" className="text-muted-foreground" onClick={() => setMobileMenuOpen(false)}>

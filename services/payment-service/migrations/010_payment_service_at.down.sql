@@ -1,0 +1,5 @@
+BEGIN;
+
+ALTER TABLE payments DROP COLUMN IF EXISTS service_at;
+
+COMMIT;

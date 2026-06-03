@@ -150,8 +150,8 @@ func (uc *AuthUseCase) CompletePasswordReset(ctx context.Context, rawToken, newP
 	if rawToken == "" || newPassword == "" {
 		return pkgerr.InvalidArgument("token and new_password are required")
 	}
-	if len(newPassword) < minAccountPasswordLen {
-		return pkgerr.InvalidArgument(fmt.Sprintf("password must be at least %d characters", minAccountPasswordLen))
+	if err := validateAccountPassword(newPassword); err != nil {
+		return err
 	}
 	if uc.resetTokens == nil {
 		return pkgerr.Internal("reset not configured")

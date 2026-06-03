@@ -31,12 +31,6 @@ type OutboxEvent struct {
 
 // OutboxRepository provides atomic write + reliable read for the outbox table.
 type OutboxRepository interface {
-	// AppendTx inserts an outbox row using tx — a *pgx.Tx or any value whose
-	// Exec method has the same signature.  Called inside the same transaction as
-	// UpdateStatus so that the DB write and the event record are committed
-	// atomically.  tx is typed as any to avoid importing pgx in the domain layer.
-	AppendTx(ctx context.Context, tx any, event *OutboxEvent) error
-
 	// RelayBatch selects up to limit pending rows with FOR UPDATE SKIP LOCKED
 	// inside a single transaction, calls publish for each row, marks it sent or
 	// failed based on the error returned by publish, then commits.

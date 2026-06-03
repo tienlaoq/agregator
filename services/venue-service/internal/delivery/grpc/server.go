@@ -69,8 +69,7 @@ func (s *Server) CreateVenue(ctx context.Context, req *venuev1.CreateVenueReques
 		PublicListingURL:        req.GetPublicListingUrl(),
 		VerificationNote:        req.GetVerificationNote(),
 		SocialLinks:             req.GetSocialLinks(),
-		PayoutLegalForm:         req.GetPayoutLegalForm(),
-		YooKassaSellerAccountID: req.GetYookassaSellerAccountId(),
+		PayoutLegalForm: req.GetPayoutLegalForm(),
 	}
 	if req.GetStartAsDraft() {
 		venue.Status = domain.StatusDraft
@@ -220,9 +219,6 @@ func (s *Server) UpdateVenue(ctx context.Context, req *venuev1.UpdateVenueReques
 	}
 	if req.PayoutLegalForm != nil {
 		existing.PayoutLegalForm = *req.PayoutLegalForm
-	}
-	if req.YookassaSellerAccountId != nil {
-		existing.YooKassaSellerAccountID = *req.YookassaSellerAccountId
 	}
 
 	if err := s.uc.Update(ctx, existing); err != nil {
@@ -626,6 +622,23 @@ func (s *Server) ModerateVenue(ctx context.Context, req *venuev1.ModerateVenueRe
 	return venueToProto(v), nil
 }
 
+func (s *Server) SuspendVenuesByOwner(ctx context.Context, req *venuev1.SuspendVenuesByOwnerRequest) (*venuev1.SuspendVenuesByOwnerResponse, error) {
+	ownerID, err := uuid.Parse(req.GetOwnerId())
+	if err != nil {
+		return nil, pkgerrors.InvalidArgument("invalid owner_id")
+	}
+
+	count, err := s.uc.SuspendByOwner(ctx, ownerID)
+	if err != nil {
+		if _, ok := status.FromError(err); ok {
+			return nil, err
+		}
+		return nil, s.internalErr(err, "suspend venues by owner failed")
+	}
+
+	return &venuev1.SuspendVenuesByOwnerResponse{SuspendedCount: int32(count)}, nil
+}
+
 func (s *Server) ListPendingVenues(ctx context.Context, req *venuev1.ListPendingVenuesRequest) (*venuev1.ListVenuesResponse, error) {
 	status := req.GetStatus()
 	if status == "" {
@@ -862,8 +875,7 @@ func venueToProto(v *domain.Venue) *venuev1.VenueResponse {
 		PublicListingUrl:        v.PublicListingURL,
 		VerificationNote:        v.VerificationNote,
 		SocialLinks:             v.SocialLinks,
-		PayoutLegalForm:         v.PayoutLegalForm,
-		YookassaSellerAccountId: v.YooKassaSellerAccountID,
+		PayoutLegalForm: v.PayoutLegalForm,
 	}
 
 	if v.ModeratedAt != nil {

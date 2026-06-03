@@ -64,6 +64,9 @@ func (m *mockMasterClient) ModerateMaster(context.Context, *masterv1.ModerateMas
 func (m *mockMasterClient) ListModerationHistory(context.Context, *masterv1.ListModerationHistoryRequest, ...grpc.CallOption) (*masterv1.ListModerationHistoryResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "ListModerationHistory")
 }
+func (m *mockMasterClient) SuspendMasterByUser(context.Context, *masterv1.SuspendMasterByUserRequest, ...grpc.CallOption) (*masterv1.SuspendMasterByUserResponse, error) {
+	return &masterv1.SuspendMasterByUserResponse{}, nil
+}
 func (m *mockMasterClient) CreateMasterBooking(context.Context, *masterv1.CreateMasterBookingRequest, ...grpc.CallOption) (*masterv1.MasterBookingResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "CreateMasterBooking")
 }

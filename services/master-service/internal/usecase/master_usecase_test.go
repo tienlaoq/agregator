@@ -101,6 +101,16 @@ func (r *stubRepo) UpdateStatus(_ context.Context, masterID uuid.UUID, status, c
 	return nil
 }
 
+func (r *stubRepo) SuspendByUser(_ context.Context, userID uuid.UUID) (bool, error) {
+	for _, m := range r.masters {
+		if m.UserID == userID && m.Status != domain.StatusSuspended {
+			m.Status = domain.StatusSuspended
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 func (r *stubRepo) UpdateStatusWithHistory(_ context.Context, masterID uuid.UUID, status, comment string, moderatedBy *uuid.UUID, _ *domain.ModerationHistoryEntry) error {
 	// Delegate to UpdateStatus — history recording is a no-op in tests.
 	return r.UpdateStatus(context.Background(), masterID, status, comment, moderatedBy)
@@ -301,7 +311,6 @@ func activeMaster() *domain.Master {
 		// the mod-11 INN checksum added in refactor 3.18).
 		// validINN12 = "500100732259" — verified checksum, see master_test.go.
 		PayoutLegalForm:            domain.PayoutLegalFormSelfEmployed,
-		YookassaSellerAccountID:    "acc-123",
 		PayoutLegalName:            "Тест Тестов",
 		PayoutBankName:             "Т-Банк",
 		PayoutBIK:                  "044525974",

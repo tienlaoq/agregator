@@ -14,6 +14,7 @@ import (
 	"google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/reflection"
 
+	reviewv1 "github.com/tienlao/agregator/gen/go/review/v1"
 	venuev1 "github.com/tienlao/agregator/gen/go/venue/v1"
 	"github.com/tienlao/agregator/pkg/grpcutil"
 	"github.com/tienlao/agregator/pkg/logger"
@@ -70,6 +71,12 @@ func main() {
 	if err := natsutil.EnsureStream(js, "VENUES", []string{"venue.>"}); err != nil {
 		log.Fatal().Err(err).Msg("failed to ensure VENUES stream")
 	}
+	// REVIEWS принадлежит review-service; здесь гарантируем его существование на
+	// случай, если venue-service стартует раньше — иначе durable-консьюмер не
+	// сможет привязаться. EnsureStream идемпотентен.
+	if err := natsutil.EnsureStream(js, "REVIEWS", []string{"review.>"}); err != nil {
+		log.Fatal().Err(err).Msg("failed to ensure REVIEWS stream")
+	}
 
 	if os.Getenv("FRONTEND_URL") == "" {
 		log.Warn().Msg("FRONTEND_URL not set: generated links (notifications, admin) will be broken")
@@ -81,6 +88,27 @@ func main() {
 		SearchCacheTTL: cfg.SearchCacheTTL,
 	})
 	publisher := events.NewPublisher(js)
+
+	// review-service client + подписчик на review.created: пересчитываем
+	// denormalized-рейтинг площадок при появлении новых отзывов.
+	dialOpts, err := grpcutil.DialOptions()
+	if err != nil {
+		log.Fatal().Err(err).Msg("gRPC client transport config error")
+	}
+	reviewConn, err := grpc.NewClient(cfg.ReviewServiceAddr, dialOpts...)
+	if err != nil {
+		log.Fatal().Err(err).Msg("failed to dial review-service")
+	}
+	defer reviewConn.Close()
+	reviewClient := reviewv1.NewReviewServiceClient(reviewConn)
+	log.Info().Str("addr", cfg.ReviewServiceAddr).Msg("review-service client ready")
+
+	reviewSub := events.NewSubscriber(js, reviewClient, uc, log)
+	if err := reviewSub.SubscribeReviewEvents(); err != nil {
+		log.Fatal().Err(err).Msg("failed to subscribe to review events")
+	}
+	log.Info().Msg("subscribed to review.created events")
+
 	tgNotifier := telegram.NewNotifier(
 		os.Getenv("TELEGRAM_BOT_TOKEN"),
 		os.Getenv("TELEGRAM_CHAT_ID"),

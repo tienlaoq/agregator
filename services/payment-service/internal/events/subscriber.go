@@ -35,19 +35,31 @@ const (
 	// ackWait is how long the server waits for an Ack before redelivering.
 	// 60 s gives the payment provider enough room for a slow HTTP response plus
 	// our internal retry backoff without triggering a spurious redelivery.
+	//
+	// MUST equal backOffPolicy[0]: when a consumer is created with both AckWait
+	// and BackOff, NATS JetStream silently overrides the consumer's AckWait with
+	// BackOff[0]. If the two disagree, the first Subscribe creates the consumer
+	// with AckWait=BackOff[0], and every subsequent Subscribe requests this
+	// ackWait value, sees the stored BackOff[0], and fails with a config-mismatch
+	// error ("ack wait to be ..., but consumer's value is ...") — crashing the
+	// service on restart. Keep these in sync.
 	ackWait = 60 * time.Second
 )
 
-// backOffPolicy is an exponential schedule passed to NATS as the consumer
+// backOffPolicy is the redelivery schedule passed to NATS as the consumer
 // BackOff field.  Durations are server-side — the server waits this long
 // before the next redelivery attempt after a Nak.
 //
-// Attempts: 1→2s, 2→10s, 3→30s, 4→60s, 5–10→120s (capped).
+// backOffPolicy[0] also becomes the consumer's effective AckWait (see ackWait
+// above), so the first interval is pinned to 60 s to match. The schedule then
+// climbs to the 120 s cap.
+//
+// Attempts: 1→60s, 2→90s, 3–10→120s (capped).
 var backOffPolicy = []time.Duration{
-	2 * time.Second,
-	10 * time.Second,
-	30 * time.Second,
 	60 * time.Second,
+	90 * time.Second,
+	120 * time.Second,
+	120 * time.Second,
 	120 * time.Second,
 	120 * time.Second,
 	120 * time.Second,

@@ -7,7 +7,10 @@ import { AnalyticsPageView } from "./analytics-pageview";
 
 function AuthHydrator({ children }: { children: React.ReactNode }) {
   useEffect(() => {
-    useAuthStore.getState().hydrate();
+    // bootstrap() мигрирует legacy-сессию, делает тихий refresh через
+    // httpOnly cookie и восстанавливает профиль — чтобы перезагрузка страницы
+    // не выкидывала залогиненного пользователя.
+    void useAuthStore.getState().bootstrap();
   }, []);
 
   return children;

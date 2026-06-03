@@ -13,6 +13,9 @@ export const USER_FACING_MESSAGE_BY_GATEWAY_CODE: Record<string, string> = {
   "GATEWAY.REQUEST.EMAIL_REQUIRED": "Укажите email.",
   "GATEWAY.VENUE.NOT_FOUND": "Такого заведения нет или оно скрыто.",
   "GATEWAY.DEPENDENCY.USER_SERVICE_UNAVAILABLE": "Сервис сейчас недоступен. Попробуйте позже.",
+  "GATEWAY.DEPENDENCY.AUTH_SERVICE_UNAVAILABLE": "Сервис авторизации сейчас недоступен. Попробуйте позже.",
+  "GATEWAY.ACCOUNT.EMAIL_NOT_VERIFIED":
+    "Подтвердите email, чтобы продолжить. Мы отправили ссылку на вашу почту.",
   "GATEWAY.REQUEST.INVALID_VENUE_ID": "Неверная ссылка на заведение.",
   "GATEWAY.REQUEST.INVALID_HALL_ID": "Неверная ссылка на зал.",
   "GATEWAY.REQUEST.INVALID_PHOTO_ID": "Фото не найдено или ссылка устарела.",

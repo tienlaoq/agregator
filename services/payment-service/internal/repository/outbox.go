@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/tienlao/agregator/services/payment-service/internal/domain"
@@ -17,20 +16,6 @@ type OutboxRepo struct {
 
 func NewOutboxRepo(pool *pgxpool.Pool) *OutboxRepo {
 	return &OutboxRepo{pool: pool}
-}
-
-// AppendTx inserts an outbox row inside the given transaction.
-// tx must be a pgx.Tx — it is passed as any to avoid a pgx import in domain.
-func (r *OutboxRepo) AppendTx(ctx context.Context, tx any, event *domain.OutboxEvent) error {
-	pgxTx, ok := tx.(pgx.Tx)
-	if !ok {
-		return fmt.Errorf("outbox AppendTx: tx must be pgx.Tx, got %T", tx)
-	}
-	const q = `
-		INSERT INTO payment_outbox (subject, payload, payment_id)
-		VALUES ($1, $2, $3)`
-	_, err := pgxTx.Exec(ctx, q, string(event.Subject), event.Payload, event.PaymentID)
-	return err
 }
 
 // RelayBatch selects up to limit pending rows with FOR UPDATE SKIP LOCKED,
@@ -138,7 +123,7 @@ func (r *OutboxRepo) MarkFailed(ctx context.Context, id int64, errMsg string) er
 // single transaction, guaranteeing that either both writes land or neither does.
 //
 // It is implemented on PaymentRepo (not OutboxRepo) because it needs to UPDATE
-// the payments table; the outbox insert is delegated to OutboxRepo.AppendTx.
+// the payments table; the outbox INSERT runs on the same transaction.
 func (r *PaymentRepo) UpdateStatusWithOutbox(
 	ctx context.Context,
 	id string,

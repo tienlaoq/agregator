@@ -19,6 +19,7 @@ type mockVenueRepo struct {
 	ListFn                    func(ctx context.Context, page, pageSize int32, venueType, sortBy string) (*domain.ListResult, error)
 	SearchFn                  func(ctx context.Context, params domain.SearchParams) (*domain.ListResult, error)
 	ListByOwnerFn             func(ctx context.Context, ownerID uuid.UUID) ([]domain.Venue, error)
+	SuspendByOwnerFn          func(ctx context.Context, ownerID uuid.UUID) (int64, error)
 	ListByStatusFn            func(ctx context.Context, status string, page, pageSize int32, nameQuery string) (*domain.ListResult, error)
 	UpdateStatusFn            func(ctx context.Context, venueID uuid.UUID, status, comment string, moderatedBy uuid.UUID) error
 	ResetToPendingReviewFn    func(ctx context.Context, venueID uuid.UUID) error
@@ -113,6 +114,13 @@ func (m *mockVenueRepo) ListByStatus(ctx context.Context, status string, page, p
 		return m.ListByStatusFn(ctx, status, page, pageSize, nameQuery)
 	}
 	return nil, nil
+}
+
+func (m *mockVenueRepo) SuspendByOwner(ctx context.Context, ownerID uuid.UUID) (int64, error) {
+	if m.SuspendByOwnerFn != nil {
+		return m.SuspendByOwnerFn(ctx, ownerID)
+	}
+	return 0, nil
 }
 
 func (m *mockVenueRepo) UpdateStatus(ctx context.Context, venueID uuid.UUID, status, comment string, moderatedBy uuid.UUID) error {

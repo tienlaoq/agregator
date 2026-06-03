@@ -13,6 +13,7 @@ type mockUserRepo struct {
 	GetBatchFunc   func(ctx context.Context, ids []string) (map[string]*domain.User, error)
 	GetByEmailFunc func(ctx context.Context, email string) (*domain.User, error)
 	UpdateFunc     func(ctx context.Context, user *domain.User) error
+	SoftDeleteFunc func(ctx context.Context, id string) error
 }
 
 func (m *mockUserRepo) Create(ctx context.Context, user *domain.User) error {
@@ -51,6 +52,13 @@ func (m *mockUserRepo) GetByEmail(ctx context.Context, email string) (*domain.Us
 func (m *mockUserRepo) Update(ctx context.Context, user *domain.User) error {
 	if m.UpdateFunc != nil {
 		return m.UpdateFunc(ctx, user)
+	}
+	return nil
+}
+
+func (m *mockUserRepo) SoftDelete(ctx context.Context, id string) error {
+	if m.SoftDeleteFunc != nil {
+		return m.SoftDeleteFunc(ctx, id)
 	}
 	return nil
 }

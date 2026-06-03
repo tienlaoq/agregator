@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi, type Mock } from "vitest";
 import { useAuthStore } from "@/store/auth";
 import type { User } from "@/lib/types";
 
@@ -10,6 +10,17 @@ const testUser: User = {
   role: "user",
 };
 
+let fetchMock: Mock;
+
+function mockResponse(status: number, body: unknown) {
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    json: () => Promise.resolve(body),
+    text: () => Promise.resolve(JSON.stringify(body)),
+  };
+}
+
 beforeEach(() => {
   localStorage.clear();
   useAuthStore.setState({
@@ -18,6 +29,8 @@ beforeEach(() => {
     refreshToken: null,
     hydrated: false,
   });
+  fetchMock = vi.fn();
+  global.fetch = fetchMock;
 });
 
 describe("useAuthStore", () => {
@@ -88,6 +101,87 @@ describe("useAuthStore", () => {
     // Access token stays in memory; refresh token stays in the httpOnly cookie.
     expect(localStorage.getItem("token")).toBeNull();
     expect(localStorage.getItem("refresh_token")).toBeNull();
+  });
+
+  it("bootstrap restores session via silent refresh when no token in memory", async () => {
+    // No access token in memory (simulates a page refresh). The httpOnly
+    // refresh cookie is valid → /api/auth/refresh returns a fresh access token,
+    // then GET /users/me restores the profile.
+    fetchMock.mockImplementation((url: string) => {
+      if (url === "/api/auth/refresh") {
+        return Promise.resolve(mockResponse(200, { access_token: "fresh-tok" }));
+      }
+      if (url.endsWith("/api/v1/users/me")) {
+        return Promise.resolve(mockResponse(200, testUser));
+      }
+      return Promise.resolve(mockResponse(404, {}));
+    });
+
+    await useAuthStore.getState().bootstrap();
+
+    const state = useAuthStore.getState();
+    expect(state.token).toBe("fresh-tok");
+    expect(state.user).toEqual(testUser);
+    expect(state.hydrated).toBe(true);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/auth/refresh",
+      expect.objectContaining({ method: "POST" }),
+    );
+  });
+
+  it("bootstrap stays anonymous (no redirect) when refresh cookie is absent", async () => {
+    // Refresh cookie missing/expired → /api/auth/refresh returns 401. The user
+    // is simply anonymous; bootstrap must not call /users/me nor blow up.
+    fetchMock.mockImplementation((url: string) => {
+      if (url === "/api/auth/refresh") {
+        return Promise.resolve(mockResponse(401, { error: "no_refresh_token" }));
+      }
+      return Promise.resolve(mockResponse(404, {}));
+    });
+
+    await useAuthStore.getState().bootstrap();
+
+    const state = useAuthStore.getState();
+    expect(state.token).toBeNull();
+    expect(state.user).toBeNull();
+    expect(state.hydrated).toBe(true);
+    // Only the refresh probe should have been attempted — no profile fetch.
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("bootstrap does not clobber a token already set in memory (OAuth callback)", async () => {
+    // OAuth callback sets the access token synchronously before bootstrap runs.
+    // bootstrap must NOT reset it to null from empty localStorage, and must NOT
+    // hit /api/auth/refresh (which would rotate the single-use refresh cookie).
+    useAuthStore.setState({ token: "oauth-tok", user: testUser });
+
+    await useAuthStore.getState().bootstrap();
+
+    const state = useAuthStore.getState();
+    expect(state.token).toBe("oauth-tok");
+    expect(state.user).toEqual(testUser);
+    expect(state.hydrated).toBe(true);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("bootstrap skips silent refresh on the /auth/callback route", async () => {
+    // The callback handler owns session establishment there; a parallel refresh
+    // would consume the rotating refresh token out from under it.
+    const original = window.location.pathname;
+    Object.defineProperty(window, "location", {
+      value: { ...window.location, pathname: "/auth/callback" },
+      writable: true,
+    });
+
+    await useAuthStore.getState().bootstrap();
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(useAuthStore.getState().hydrated).toBe(true);
+
+    Object.defineProperty(window, "location", {
+      value: { ...window.location, pathname: original },
+      writable: true,
+    });
   });
 
   it("setUser updates user in state and localStorage", () => {

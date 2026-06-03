@@ -46,6 +46,10 @@ errors:
     code: GATEWAY.DEPENDENCY.USER_SERVICE_UNAVAILABLE
     message: "Сервис пользователей недоступен"
 
+  - http_status: 503
+    code: GATEWAY.DEPENDENCY.AUTH_SERVICE_UNAVAILABLE
+    message: "Сервис авторизации недоступен"
+
   - http_status: 400
     code: GATEWAY.REQUEST.INVALID_VENUE_ID
     message: "Некорректный идентификатор заведения"
@@ -77,6 +81,22 @@ errors:
   - http_status: 400
     code: GATEWAY.REQUEST.INVALID_IMAGE_TYPE
     message: "Допустимы только JPEG, PNG и WebP"
+
+  - http_status: 400
+    code: GATEWAY.ACCOUNT.CONFIRMATION_REQUIRED
+    message: "Для удаления аккаунта введите подтверждение"
+
+  - http_status: 400
+    code: GATEWAY.ACCOUNT.CONFIRMATION_MISMATCH
+    message: "Подтверждение не совпадает с email вашего аккаунта"
+
+  - http_status: 403
+    code: GATEWAY.ACCOUNT.ADMIN_SELF_DELETE_FORBIDDEN
+    message: "Аккаунт администратора нельзя удалить через профиль"
+
+  - http_status: 403
+    code: GATEWAY.ACCOUNT.EMAIL_NOT_VERIFIED
+    message: "Подтвердите email, чтобы продолжить. Мы отправили ссылку на вашу почту."
 
   - http_status: 400
     code: GATEWAY.MASTER.NOT_CREATED
@@ -137,6 +157,14 @@ errors:
   - http_status: 403
     code: GATEWAY.PAYMENT.WEBHOOK_FORBIDDEN
     message: "Webhook отклонён: не пройдена верификация источника"
+
+  - http_status: 403
+    code: GATEWAY.PAYOUT.FORBIDDEN
+    message: "Управление выплатами доступно только владельцу"
+
+  - http_status: 400
+    code: GATEWAY.PAYOUT.INVALID_KIND
+    message: "Укажите способ выплаты: card, bank_account или sbp"
 
   # gRPC status → default HTTP + code (message replaced by handler with gRPC text)
   - http_status: 400

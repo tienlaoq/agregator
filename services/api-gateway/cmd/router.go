@@ -39,10 +39,18 @@ func buildRouter(ctx context.Context, log zerolog.Logger, cfg Config, d *deps) (
 		return nil, err
 	}
 
-	userHandler := handler.NewUserHandler(d.User)
+	userHandler := handler.NewUserHandler(d.User, d.Auth, d.Venue, d.Master)
 
 	suspendMail := suspendnotify.NewSender(log, d.CRM, d.User)
-	venueHandler := handler.NewVenueHandler(d.Venue, d.User, d.CRM, d.Storage, handler.WithSuspendNotifier(suspendMail))
+
+	// Notification handler must be built before the venue handler so it can be
+	// wired as the staff-invite notifier (bell notification on AddStaff).
+	notificationHandler := handler.NewNotificationHandler(log, d.Notification, d.Redis, d.NATS)
+
+	venueHandler := handler.NewVenueHandler(d.Venue, d.User, d.CRM, d.Storage,
+		handler.WithSuspendNotifier(suspendMail),
+		handler.WithStaffInviteNotifier(notificationHandler),
+	)
 	if suspendMail.Enabled() {
 		log.Info().Msg("SMTP configured: при приостановке и возобновлении заведения владельцу и персоналу уйдут письма")
 	}
@@ -52,6 +60,7 @@ func buildRouter(ctx context.Context, log zerolog.Logger, cfg Config, d *deps) (
 	paymentHandler := handler.NewPaymentHandler(log, d.Payment,
 		handler.ParseWebhookSecurityConfig(cfg.PaymentWebhookSecret, cfg.PaymentWebhookIPAllowlist))
 	masterHandler := handler.NewMasterHandler(d.Master, d.Storage)
+	payoutHandler := handler.NewPayoutHandler(log, d.Payment, d.Venue, d.Master)
 	analyticsHandler := handler.NewAnalyticsHandler(log, d.NATS)
 
 	chatHandler := handler.NewChatHandler(
@@ -64,6 +73,11 @@ func buildRouter(ctx context.Context, log zerolog.Logger, cfg Config, d *deps) (
 			chatHandler.HandleFanoutMessage(msg.Data)
 		}); err != nil {
 			log.Warn().Err(err).Msg("chat NATS fanout subscribe failed")
+		}
+		if _, err := d.NATS.Subscribe("notification.fanout", func(msg *nats.Msg) {
+			notificationHandler.HandleFanoutMessage(msg.Data)
+		}); err != nil {
+			log.Warn().Err(err).Msg("notification NATS fanout subscribe failed")
 		}
 	}
 
@@ -120,6 +134,25 @@ func buildRouter(ctx context.Context, log zerolog.Logger, cfg Config, d *deps) (
 	// Limits mirror forgot-password: 10 req / 15 min per IP, fail-closed.
 	resetPasswordRL := middleware.RateLimit(log, d.RateLimiter, middleware.RateLimitConfig{
 		KeyPrefix: "rl:reset-password:",
+		Max:       cfg.RateLimitResetPasswordMax,
+		Window:    cfg.RateLimitResetPasswordWindow,
+		FailOpen:  false,
+		Mode:      middleware.KeyModeIP,
+	})
+	// resend-verification sends an email on every hit, so it is rate-limited
+	// like forgot-password (10 req / 15 min per IP, fail-closed) to prevent an
+	// attacker from using it as an email-amplification vector. verify-email
+	// consumes a SHA-256(32-byte) token and is infeasible to brute-force, but is
+	// limited too to cap argon2id-free DB churn under a flood.
+	resendVerificationRL := middleware.RateLimit(log, d.RateLimiter, middleware.RateLimitConfig{
+		KeyPrefix: "rl:resend-verification:",
+		Max:       cfg.RateLimitResetPasswordMax,
+		Window:    cfg.RateLimitResetPasswordWindow,
+		FailOpen:  false,
+		Mode:      middleware.KeyModeIP,
+	})
+	verifyEmailRL := middleware.RateLimit(log, d.RateLimiter, middleware.RateLimitConfig{
+		KeyPrefix: "rl:verify-email:",
 		Max:       cfg.RateLimitResetPasswordMax,
 		Window:    cfg.RateLimitResetPasswordWindow,
 		FailOpen:  false,
@@ -196,6 +229,8 @@ func buildRouter(ctx context.Context, log zerolog.Logger, cfg Config, d *deps) (
 			r.Post("/auth/logout", authHandler.Logout)
 			r.With(forgotPasswordRL).Post("/auth/forgot-password", authHandler.ForgotPassword)
 			r.With(resetPasswordRL).Post("/auth/reset-password", authHandler.ResetPassword)
+			r.With(verifyEmailRL).Post("/auth/verify-email", authHandler.VerifyEmail)
+			r.With(resendVerificationRL).Post("/auth/resend-verification", authHandler.ResendVerification)
 
 			// OAuth (public)
 			r.Get("/auth/google", oauthHandler.GoogleRedirect)
@@ -228,13 +263,23 @@ func buildRouter(ctx context.Context, log zerolog.Logger, cfg Config, d *deps) (
 			r.Group(func(r chi.Router) {
 				r.Use(middleware.Auth(log, cfg.JWTECPublicKey, d.Redis))
 
+				// Email verification status — polled by the partner flow to
+				// advance past the "check your inbox" screen once the user clicks
+				// the link. Reads live from auth-service, not the (possibly stale) JWT.
+				r.Get("/auth/email-verification", authHandler.GetEmailVerificationStatus)
+
 				// User profile
 				r.Get("/users/me", userHandler.GetMe)
 				r.Patch("/users/me", userHandler.UpdateMe)
+				r.Delete("/users/me", userHandler.DeleteMe)
 
 				// Venues (write)
+				// emailVerified gates the two actions that create moderation load —
+				// venue creation here and master-profile creation below — so an
+				// unverified throwaway email cannot flood the moderation queue.
+				emailVerified := middleware.RequireEmailVerified(log, d.Auth)
 				ownerOrMaster := middleware.RequireRole(roles.RoleVenueOwner, roles.RoleMaster)
-				r.With(ownerOrMaster).Post("/venues", venueHandler.Create)
+				r.With(ownerOrMaster, emailVerified).Post("/venues", venueHandler.Create)
 				r.With(ownerOrMaster).Post("/venues/{id}/submit-for-review", venueHandler.SubmitForReview)
 				r.With(ownerOrMaster).Patch("/venues/{id}", venueHandler.Update)
 				r.With(ownerOrMaster).Post("/venues/{id}/photos", venueHandler.UploadVenuePhoto)
@@ -260,6 +305,15 @@ func buildRouter(ctx context.Context, log zerolog.Logger, cfg Config, d *deps) (
 				r.With(ownerCabinet).Get("/owner/venues/{venueId}/bookings/{bookingId}/staff-notes", bookingHandler.ListBookingStaffNotes)
 				r.With(ownerCabinet).Post("/owner/venues/{venueId}/bookings/{bookingId}/staff-notes", bookingHandler.AddBookingStaffNote)
 
+				// Venue payout cabinet (escrow). The handler enforces the real
+				// gate — caller must be the venue's legal owner (OwnerId match) —
+				// so the role middleware here only narrows the candidate set.
+				r.With(ownerCabinet).Get("/owner/venues/{venueId}/payout-method", payoutHandler.GetVenuePayoutMethod)
+				r.With(ownerCabinet).Put("/owner/venues/{venueId}/payout-method", payoutHandler.SetVenuePayoutMethod)
+				r.With(ownerCabinet).Get("/owner/venues/{venueId}/balance", payoutHandler.GetVenueBalance)
+				r.With(ownerCabinet).Get("/owner/venues/{venueId}/ledger", payoutHandler.ListVenueLedger)
+				r.With(ownerCabinet).Get("/owner/venues/{venueId}/payouts", payoutHandler.ListVenuePayouts)
+
 				// Chat v1 REST (non-WS) — covered by RequestTimeout above.
 				chatCabinet := middleware.RequireRole(roles.RoleUser, roles.RoleVenueOwner, roles.RoleMaster, roles.RoleAdmin)
 				r.With(chatCabinet).Post("/chat/threads", chatHandler.EnsureThread)
@@ -280,9 +334,20 @@ func buildRouter(ctx context.Context, log zerolog.Logger, cfg Config, d *deps) (
 					r.Delete("/profile/photos/{photoId}", masterHandler.DeleteMasterPhoto)
 					r.Post("/profile/photos", masterHandler.UploadMasterPhoto)
 					r.Get("/profile", masterHandler.GetMyProfile)
-					r.Post("/profile", masterHandler.CreateMyProfile)
+					// emailVerified (defined above in this protected group) gates
+					// master-profile creation — the second moderation-load action.
+					r.With(emailVerified).Post("/profile", masterHandler.CreateMyProfile)
 					r.Patch("/profile", masterHandler.PatchMyProfile)
 					r.Get("/bookings", masterHandler.ListMyBookings)
+
+					// Master payout cabinet (escrow). partner_id is resolved from
+					// the caller's own master profile, so no extra ownership check
+					// is needed beyond the RoleMaster gate on this group.
+					r.Get("/payout-method", payoutHandler.GetMasterPayoutMethod)
+					r.Put("/payout-method", payoutHandler.SetMasterPayoutMethod)
+					r.Get("/balance", payoutHandler.GetMasterBalance)
+					r.Get("/ledger", payoutHandler.ListMasterLedger)
+					r.Get("/payouts", payoutHandler.ListMasterPayouts)
 				})
 
 				r.With(allAuth).Post("/masters/{slug}/bookings", masterHandler.CreateBooking)
@@ -350,6 +415,13 @@ func buildRouter(ctx context.Context, log zerolog.Logger, cfg Config, d *deps) (
 			r.With(chatCabinet).Post("/chat/threads/{threadId}/messages", chatHandler.SendMessage)
 			r.With(chatCabinet).Post("/chat/threads/{threadId}:read", chatHandler.MarkRead)
 			r.With(chatCabinet).Post("/chat/ws-ticket", chatHandler.IssueWSTicket)
+
+			// Notifications ("колокольчик") — per-user in-app inbox.
+			r.With(chatCabinet).Get("/notifications", notificationHandler.List)
+			r.With(chatCabinet).Get("/notifications/unread-count", notificationHandler.UnreadCount)
+			r.With(chatCabinet).Post("/notifications/read-all", notificationHandler.MarkAllRead)
+			r.With(chatCabinet).Post("/notifications/{notificationId}/read", notificationHandler.MarkRead)
+			r.With(chatCabinet).Post("/notifications/ws-ticket", notificationHandler.IssueWSTicket)
 		})
 
 		// WebSocket upgrade — no RequestTimeout (same rationale as v1).
@@ -357,6 +429,7 @@ func buildRouter(ctx context.Context, log zerolog.Logger, cfg Config, d *deps) (
 			r.Use(middleware.Auth(log, cfg.JWTECPublicKey, d.Redis))
 			chatCabinet := middleware.RequireRole(roles.RoleUser, roles.RoleVenueOwner, roles.RoleMaster, roles.RoleAdmin)
 			r.With(chatCabinet).Get("/chat/ws", chatHandler.WS)
+			r.With(chatCabinet).Get("/notifications/ws", notificationHandler.WS)
 		})
 	})
 

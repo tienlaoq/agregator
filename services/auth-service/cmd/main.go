@@ -27,6 +27,7 @@ import (
 	"github.com/tienlao/agregator/services/auth-service/internal/passwordmail"
 	"github.com/tienlao/agregator/services/auth-service/internal/repository"
 	"github.com/tienlao/agregator/services/auth-service/internal/usecase"
+	"github.com/tienlao/agregator/services/auth-service/internal/verifymail"
 )
 
 func main() {
@@ -88,11 +89,13 @@ func main() {
 	credRepo := repository.NewCredentialRepo(pgPool)
 	tokenRepo := repository.NewRefreshTokenRepo(pgPool)
 	resetRepo := repository.NewPasswordResetRepo(pgPool)
+	verifyRepo := repository.NewEmailVerificationRepo(pgPool)
 
 	smtpSender := pkgmail.NewSenderFromEnv()
 	resetMail := passwordmail.New(smtpSender, cfg.FrontendURL)
+	verifyMail := verifymail.New(smtpSender, cfg.FrontendURL)
 	if !smtpSender.Enabled() {
-		log.Warn().Msg("SMTP not configured: password reset emails will not be sent (set SMTP_HOST, SMTP_FROM, SMTP_USER, SMTP_PASSWORD)")
+		log.Warn().Msg("SMTP not configured: password reset and email verification emails will not be sent (set SMTP_HOST, SMTP_FROM, SMTP_USER, SMTP_PASSWORD)")
 	}
 
 	tgClient := pkgtelegram.NewClient(cfg.TelegramBotToken, cfg.TelegramChatID)
@@ -111,6 +114,7 @@ func main() {
 	uc := usecase.NewAuthUseCase(
 		credRepo, tokenRepo,
 		resetRepo, resetMail, cfg.PasswordResetTTL,
+		verifyRepo, verifyMail, cfg.EmailVerifyTTL,
 		userClient,
 		jwtPrivKey, cfg.JWTAccessTTL, cfg.JWTRefreshTTL,
 		notifyWorker, log,
@@ -138,7 +142,7 @@ func main() {
 		}
 	}()
 
-	go runTokenCleanup(ctx, credRepo, tokenRepo, resetRepo, log)
+	go runTokenCleanup(ctx, credRepo, tokenRepo, resetRepo, verifyRepo, log)
 
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
@@ -168,6 +172,7 @@ func runTokenCleanup(
 	creds *repository.CredentialRepo,
 	tokens *repository.RefreshTokenRepo,
 	resets *repository.PasswordResetRepo,
+	verifies *repository.EmailVerificationRepo,
 	appLog zerolog.Logger,
 ) {
 	interval := time.Hour
@@ -198,6 +203,7 @@ func runTokenCleanup(
 			n1, err1 := tokens.DeleteExpired(cleanupCtx)
 			n2, err2 := resets.DeleteExpired(cleanupCtx)
 			n3, err3 := creds.DeleteOrphanOAuthAccounts(cleanupCtx, orphanMinAge)
+			n4, err4 := verifies.DeleteExpired(cleanupCtx)
 			cancel()
 
 			// Log each failure independently so that a double-failure on the same
@@ -211,10 +217,14 @@ func runTokenCleanup(
 			if err3 != nil {
 				appLog.Warn().Err(err3).Msg("token cleanup: DeleteOrphanOAuthAccounts failed")
 			}
+			if err4 != nil {
+				appLog.Warn().Err(err4).Msg("token cleanup: DeleteExpired(email_verification_tokens) failed")
+			}
 			appLog.Debug().
 				Int64("refresh_tokens", n1).
 				Int64("reset_tokens", n2).
 				Int64("orphan_oauth_creds", n3).
+				Int64("verification_tokens", n4).
 				Msg("token cleanup complete")
 		}
 	}

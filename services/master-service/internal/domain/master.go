@@ -144,15 +144,19 @@ type Master struct {
 	WorkFormat     string
 	TravelRadiusKm int32
 	// Точка отсчёта радиуса выезда (если WorkFormat mobile/both).
-	TravelBaseLatitude         *float64
-	TravelBaseLongitude        *float64
-	TravelExcludeZones         []MasterTravelExcludeZone
-	ExperienceYears            int32
-	Specializations            []string
-	HourlyRate                 int64
-	AvailabilityJSON           string
+	TravelBaseLatitude  *float64
+	TravelBaseLongitude *float64
+	TravelExcludeZones  []MasterTravelExcludeZone
+	ExperienceYears     int32
+	Specializations     []string
+	HourlyRate          int64
+	AvailabilityJSON    string
+	// NOTE: yookassa_seller_account_id was dropped when the platform moved from
+	// marketplace-split to escrow + per-partner payouts. The DB column lives on
+	// (NOT NULL DEFAULT '') until a follow-up migration removes it; master-service
+	// simply stops reading/writing it. Partner payout rails now live in
+	// payment-service (partner_payout_methods + partner_ledger + payouts).
 	PayoutLegalForm            string
-	YookassaSellerAccountID    string
 	PayoutLegalName            string
 	PayoutINN                  string
 	PayoutKPP                  string
@@ -353,9 +357,6 @@ func (m *Master) ValidatePayoutProfile() error {
 	case PayoutLegalFormIP, PayoutLegalFormOOO, PayoutLegalFormIndividual, PayoutLegalFormSelfEmployed:
 	default:
 		return payoutErr("legal_form", "укажите форму получения выплат: ИП, ООО, физическое лицо или самозанятость")
-	}
-	if strings.TrimSpace(m.YookassaSellerAccountID) == "" {
-		return payoutErr("yookassa_seller_account_id", "укажите аккаунт получателя выплат ЮKassa")
 	}
 	if strings.TrimSpace(m.PayoutLegalName) == "" {
 		return payoutErr("legal_name", "укажите ФИО или наименование получателя выплат")

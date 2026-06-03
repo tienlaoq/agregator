@@ -10,29 +10,16 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 import {
-  VENUE_SERVICE_DURATION_OPTIONS,
   newVenueServiceLine,
   type VenueServiceFormLine,
 } from "@/lib/types";
 import { GripVertical, Plus, Trash2 } from "lucide-react";
 
-function durationOptionsFor(currentMin: number) {
-  const base = [...VENUE_SERVICE_DURATION_OPTIONS];
-  if (currentMin > 0 && !base.some((o) => o.value === currentMin)) {
-    base.push({ value: currentMin, label: `${currentMin} мин` });
-    base.sort((a, b) => a.value - b.value);
-  }
-  return base;
-}
+// Должно совпадать с пределом валидации в venue-service
+// (maxServiceDurationMin = 10080 = 7 дней).
+const MAX_SERVICE_DURATION_MIN = 10080;
 
 export function VenueServicesFields({
   value,
@@ -100,7 +87,6 @@ export function VenueServicesFields({
           </p>
         ) : null}
         {value.map((line, i) => {
-          const opts = durationOptionsFor(line.duration_min);
           return (
             <div
               key={line.key}
@@ -158,24 +144,35 @@ export function VenueServicesFields({
                     });
                   }}
                 />
-                <Select
-                  value={String(line.duration_min)}
-                  disabled={disabled}
-                  onValueChange={(v) =>
-                    updateRow(i, { duration_min: Number(v) || 0 })
-                  }
-                >
-                  <SelectTrigger className="w-full sm:w-[140px]">
-                    <SelectValue placeholder="Длительность" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {opts.map((o) => (
-                      <SelectItem key={o.value} value={String(o.value)}>
-                        {o.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                <div className="relative w-full sm:w-[140px]">
+                  <Input
+                    type="number"
+                    min={1}
+                    max={MAX_SERVICE_DURATION_MIN}
+                    step={1}
+                    inputMode="numeric"
+                    className="w-full pr-12"
+                    placeholder="Длительность"
+                    aria-label="Длительность услуги, минут"
+                    value={line.duration_min === 0 ? "" : line.duration_min}
+                    disabled={disabled}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      updateRow(i, {
+                        duration_min:
+                          v === ""
+                            ? 0
+                            : Math.min(
+                                MAX_SERVICE_DURATION_MIN,
+                                Math.max(0, Math.round(Number(v) || 0)),
+                              ),
+                      });
+                    }}
+                  />
+                  <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-sm text-muted-foreground">
+                    мин
+                  </span>
+                </div>
                 <Button
                   type="button"
                   variant="ghost"

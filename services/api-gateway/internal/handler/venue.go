@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -27,6 +28,14 @@ type VenueHandler struct {
 	crm             crmv1.CRMServiceClient   // staff & CRM tasks (extracted from venue-service)
 	storage         storage.Uploader
 	suspendNotifier *suspendnotify.Sender // optional; письма владельцу и персоналу при приостановке (SMTP)
+	staffNotifier   staffInviteNotifier   // optional; in-app "колокольчик" при добавлении в персонал
+}
+
+// staffInviteNotifier delivers the in-app "added to a venue's team" bell
+// notification to a newly-invited staff member. Defined at the consumer site;
+// implemented by *NotificationHandler.
+type staffInviteNotifier interface {
+	NotifyStaffInvited(ctx context.Context, userID, venueID, role string)
 }
 
 type VenueHandlerOption func(*VenueHandler)
@@ -34,6 +43,14 @@ type VenueHandlerOption func(*VenueHandler)
 func WithSuspendNotifier(n *suspendnotify.Sender) VenueHandlerOption {
 	return func(h *VenueHandler) {
 		h.suspendNotifier = n
+	}
+}
+
+// WithStaffInviteNotifier wires the bell notification sent when an owner adds a
+// user to a venue's staff. Optional: when unset, invites still succeed silently.
+func WithStaffInviteNotifier(n staffInviteNotifier) VenueHandlerOption {
+	return func(h *VenueHandler) {
+		h.staffNotifier = n
 	}
 }
 
@@ -319,9 +336,10 @@ func (h *VenueHandler) Create(w http.ResponseWriter, r *http.Request) {
 		Halls                   []venueHallItemReq    `json:"halls"`
 		StartAsDraft            bool                  `json:"start_as_draft"`
 		PayoutLegalForm         string                `json:"payout_legal_form"`
-		YookassaSellerAccountID string                `json:"yookassa_seller_account_id"`
 	}
-	if !readJSONOrRespond(w, r, &req) { return }
+	if !readJSONOrRespond(w, r, &req) {
+		return
+	}
 
 	grpcServices := make([]*venuev1.VenueServiceItem, len(req.Services))
 	for i, s := range req.Services {
@@ -367,7 +385,6 @@ func (h *VenueHandler) Create(w http.ResponseWriter, r *http.Request) {
 		Halls:                   grpcHalls,
 		StartAsDraft:            req.StartAsDraft,
 		PayoutLegalForm:         req.PayoutLegalForm,
-		YookassaSellerAccountId: req.YookassaSellerAccountID,
 	})
 	if err != nil {
 		grpcErrorToHTTP(w, err)
@@ -424,9 +441,10 @@ func (h *VenueHandler) Update(w http.ResponseWriter, r *http.Request) {
 		Services                *[]venueServiceItemReq `json:"services"`
 		Halls                   *[]venueHallItemReq    `json:"halls"`
 		PayoutLegalForm         *string                `json:"payout_legal_form"`
-		YookassaSellerAccountID *string                `json:"yookassa_seller_account_id"`
 	}
-	if !readJSONOrRespond(w, r, &req) { return }
+	if !readJSONOrRespond(w, r, &req) {
+		return
+	}
 
 	grpcReq := &venuev1.UpdateVenueRequest{
 		Id:      venueID,
@@ -501,9 +519,6 @@ func (h *VenueHandler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.PayoutLegalForm != nil {
 		grpcReq.PayoutLegalForm = req.PayoutLegalForm
-	}
-	if req.YookassaSellerAccountID != nil {
-		grpcReq.YookassaSellerAccountId = req.YookassaSellerAccountID
 	}
 
 	resp, err := h.client.UpdateVenue(r.Context(), grpcReq)
@@ -632,7 +647,9 @@ func (h *VenueHandler) CreateOwnerSlotBlock(w http.ResponseWriter, r *http.Reque
 		TimeTo   string `json:"time_to"`
 		Note     string `json:"note"`
 	}
-	if !readJSONOrRespond(w, r, &req) { return }
+	if !readJSONOrRespond(w, r, &req) {
+		return
+	}
 
 	resp, err := h.client.CreateManualSlotBlock(r.Context(), &venuev1.CreateManualSlotBlockRequest{
 		OwnerId:  ownerID,
@@ -771,7 +788,9 @@ func (h *VenueHandler) Moderate(w http.ResponseWriter, r *http.Request) {
 		Action  string `json:"action"`
 		Comment string `json:"comment"`
 	}
-	if !readJSONOrRespond(w, r, &req) { return }
+	if !readJSONOrRespond(w, r, &req) {
+		return
+	}
 
 	resp, err := h.client.ModerateVenue(r.Context(), &venuev1.ModerateVenueRequest{
 		VenueId:     venueID,
@@ -913,7 +932,6 @@ func venueToJSON(v *venuev1.VenueResponse, includeVerification bool) map[string]
 		result["public_listing_url"] = v.GetPublicListingUrl()
 		result["verification_note"] = v.GetVerificationNote()
 		result["payout_legal_form"] = v.GetPayoutLegalForm()
-		result["yookassa_seller_account_id"] = v.GetYookassaSellerAccountId()
 	}
 
 	// management_access is no longer carried inside the Venue proto: it is a

@@ -4,10 +4,11 @@ import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
-import { createVenue } from "@/lib/api";
+import { createVenue, isEmailNotVerifiedError } from "@/lib/api";
 import { useAuthStore } from "@/store/auth";
 import { getRawPhone } from "@/components/banya/phone-input";
 import { PartnerVenueRegistrationCard } from "@/components/banya/partner-venue-registration-card";
+import { EmailVerificationNotice } from "@/components/banya/email-verification-notice";
 import {
   buildPartnerStyleCreateVenueRequest,
   emptyPartnerVenueForm,
@@ -22,6 +23,7 @@ export default function CreateVenuePage() {
   const { token, user, hydrated } = useAuthStore();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [emailNotVerified, setEmailNotVerified] = useState(false);
   const [venueFields, setVenueFields] = useState<PartnerVenueFormValues>(() =>
     emptyPartnerVenueForm(),
   );
@@ -55,6 +57,7 @@ export default function CreateVenuePage() {
     if (submittingRef.current || !canSubmit) return;
     submittingRef.current = true;
     setError("");
+    setEmailNotVerified(false);
     setLoading(true);
     try {
       const venue = await createVenue(
@@ -67,8 +70,14 @@ export default function CreateVenuePage() {
       });
       void queryClient.invalidateQueries({ queryKey: ["owner-venues"] });
       router.push("/owner/venues");
-    } catch {
-      setError("Не удалось создать заведение. Попробуйте позже.");
+    } catch (err) {
+      // Email-gate: keep the draft (no navigation) and surface the resend block
+      // instead of the generic error so the partner can finish verification.
+      if (isEmailNotVerifiedError(err)) {
+        setEmailNotVerified(true);
+      } else {
+        setError("Не удалось создать заведение. Попробуйте позже.");
+      }
     } finally {
       setLoading(false);
       submittingRef.current = false;
@@ -84,6 +93,11 @@ export default function CreateVenuePage() {
         Та же форма, что при регистрации партнёра: черновик создаётся сразу, модератор увидит
         карточку после отправки на проверку из редактирования.
       </p>
+      {emailNotVerified && user?.email ? (
+        <div className="mb-4">
+          <EmailVerificationNotice email={user.email} />
+        </div>
+      ) : null}
       {error ? (
         <p className="mb-4 text-sm text-destructive">{error}</p>
       ) : null}

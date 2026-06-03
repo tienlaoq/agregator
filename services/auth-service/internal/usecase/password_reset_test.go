@@ -34,6 +34,8 @@ func testAuthUCWithReset(
 	return NewAuthUseCase(
 		creds, tokens,
 		reset, mail, time.Hour,
+		noopEmailVerificationRepo{}, noopVerifyMail{},
+		24*time.Hour,
 		users, testPrivKey, time.Hour, 24*time.Hour,
 		nil, // partnerNotify: nil is safe — Enqueue is guarded by nil-check
 		zerolog.Nop(),

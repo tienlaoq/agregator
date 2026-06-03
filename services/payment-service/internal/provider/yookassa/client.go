@@ -95,20 +95,11 @@ type confirmation struct {
 	ReturnURL string `json:"return_url"`
 }
 
-type transfer struct {
-	AccountID         string            `json:"account_id"`
-	Amount            amount            `json:"amount"`
-	PlatformFeeAmount amount            `json:"platform_fee_amount"`
-	Description       string            `json:"description,omitempty"`
-	Metadata          map[string]string `json:"metadata,omitempty"`
-}
-
 type paymentRequest struct {
 	Amount       amount       `json:"amount"`
 	Confirmation confirmation `json:"confirmation"`
 	Description  string       `json:"description"`
 	Capture      bool         `json:"capture"`
-	Transfers    []transfer   `json:"transfers,omitempty"`
 }
 
 type paymentResponse struct {
@@ -257,9 +248,12 @@ func asAPIError(err error, target **apiError) bool {
 
 // ── PaymentProvider implementation ──────────────────────────────────────────
 
-// CreatePayment creates a ЮKassa payment.  When req.SellerAccountID is set a
-// marketplace split payment with capture=false is created; otherwise a simple
-// immediate-capture charge is issued.
+// CreatePayment creates a ЮKassa payment.
+//
+// All charges land on the single platform shop account (escrow model).
+// We always use capture=true (immediate capture) — there is no marketplace
+// split at the provider, and partner payouts are issued separately through
+// CreatePayout.
 //
 // CreatePayment is idempotent by Idempotence-Key but is NOT retried here —
 // the usecase crash-recovery loop handles retries at a higher level to avoid
@@ -272,47 +266,19 @@ func (c *Client) CreatePayment(ctx context.Context, req provider.CreateRequest) 
 			ConfirmationURL:   fmt.Sprintf("https://mock.yookassa.ru/pay/%s", mockID),
 		}, nil
 	}
+	if req.AmountKopecks <= 0 {
+		return nil, &apiError{statusCode: 400, op: "CreatePayment", body: "non-positive gross amount"}
+	}
 
-	key := providerKey(req.IdempotencyKey)
-
-	var body paymentRequest
-	if req.SellerAccountID != "" {
-		if req.AmountKopecks <= 0 {
-			return nil, &apiError{statusCode: 400, op: "CreatePayment", body: "non-positive gross amount"}
-		}
-		if req.PlatformFeeKopecks < 0 || req.PlatformFeeKopecks > req.AmountKopecks {
-			return nil, &apiError{statusCode: 400, op: "CreatePayment", body: "invalid platform fee"}
-		}
-		meta := map[string]string{"booking_id": req.BookingID}
-		if req.CounterpartyID != "" {
-			meta["counterparty_id"] = req.CounterpartyID
-		}
-		body = paymentRequest{
-			Amount:       amount{Value: kopecksToStr(req.AmountKopecks), Currency: "RUB"},
-			Confirmation: confirmation{Type: "redirect", ReturnURL: req.ReturnURL},
-			Description:  req.Description,
-			Capture:      false,
-			Transfers: []transfer{
-				{
-					AccountID:         req.SellerAccountID,
-					Amount:            amount{Value: kopecksToStr(req.AmountKopecks), Currency: "RUB"},
-					PlatformFeeAmount: amount{Value: kopecksToStr(req.PlatformFeeKopecks), Currency: "RUB"},
-					Description:       req.Description,
-					Metadata:          meta,
-				},
-			},
-		}
-	} else {
-		body = paymentRequest{
-			Amount:       amount{Value: kopecksToStr(req.AmountKopecks), Currency: "RUB"},
-			Confirmation: confirmation{Type: "redirect", ReturnURL: req.ReturnURL},
-			Description:  req.Description,
-			Capture:      true,
-		}
+	body := paymentRequest{
+		Amount:       amount{Value: kopecksToStr(req.AmountKopecks), Currency: "RUB"},
+		Confirmation: confirmation{Type: "redirect", ReturnURL: req.ReturnURL},
+		Description:  req.Description,
+		Capture:      true,
 	}
 
 	// CreatePayment is called once; ctx deadline enforces the total call budget.
-	resp, err := c.postPayment(ctx, body, key)
+	resp, err := c.postPayment(ctx, body, providerKey(req.IdempotencyKey))
 	if err != nil {
 		return nil, err
 	}

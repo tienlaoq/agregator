@@ -17,6 +17,7 @@ type mockCredRepo struct {
 	GetByProviderFunc             func(ctx context.Context, provider, providerID string) (*domain.Credential, error)
 	CreateOAuthFunc               func(ctx context.Context, cred *domain.Credential) error
 	UpdatePasswordHashFunc        func(ctx context.Context, userID, passwordHash string) error
+	SetEmailVerifiedFunc          func(ctx context.Context, userID string, verified bool) error
 	PromoteOAuthEmailFunc         func(ctx context.Context, userID, email string) error
 	DeleteOrphanOAuthAccountsFunc func(ctx context.Context, minAge time.Duration) (int64, error)
 }
@@ -66,6 +67,13 @@ func (m *mockCredRepo) CreateOAuth(ctx context.Context, cred *domain.Credential)
 func (m *mockCredRepo) UpdatePasswordHash(ctx context.Context, userID, passwordHash string) error {
 	if m.UpdatePasswordHashFunc != nil {
 		return m.UpdatePasswordHashFunc(ctx, userID, passwordHash)
+	}
+	return nil
+}
+
+func (m *mockCredRepo) SetEmailVerified(ctx context.Context, userID string, verified bool) error {
+	if m.SetEmailVerifiedFunc != nil {
+		return m.SetEmailVerifiedFunc(ctx, userID, verified)
 	}
 	return nil
 }
@@ -217,6 +225,71 @@ func (noopPasswordMail) Enabled() bool { return false }
 func (noopPasswordMail) SendPasswordReset(context.Context, string, string) error {
 	return nil
 }
+
+type mockEmailVerificationRepo struct {
+	InvalidateUnusedByUserIDFunc func(ctx context.Context, userID string) error
+	CreateFunc                   func(ctx context.Context, userID, tokenHash string, expiresAt time.Time) error
+	ConsumeByTokenHashFunc       func(ctx context.Context, tokenHash string) (string, error)
+}
+
+func (m *mockEmailVerificationRepo) InvalidateUnusedByUserID(ctx context.Context, userID string) error {
+	if m.InvalidateUnusedByUserIDFunc != nil {
+		return m.InvalidateUnusedByUserIDFunc(ctx, userID)
+	}
+	return nil
+}
+
+func (m *mockEmailVerificationRepo) Create(ctx context.Context, userID, tokenHash string, expiresAt time.Time) error {
+	if m.CreateFunc != nil {
+		return m.CreateFunc(ctx, userID, tokenHash, expiresAt)
+	}
+	return nil
+}
+
+func (m *mockEmailVerificationRepo) ConsumeByTokenHash(ctx context.Context, tokenHash string) (string, error) {
+	if m.ConsumeByTokenHashFunc != nil {
+		return m.ConsumeByTokenHashFunc(ctx, tokenHash)
+	}
+	return "", errors.New("consume not stubbed")
+}
+
+func (m *mockEmailVerificationRepo) DeleteExpired(_ context.Context) (int64, error) { return 0, nil }
+
+type mockVerifyMail struct {
+	enabled    bool
+	sendErr    error
+	lastTo     string
+	lastToken  string
+	sendCalled int
+}
+
+func (m *mockVerifyMail) Enabled() bool { return m != nil && m.enabled }
+
+func (m *mockVerifyMail) SendVerification(_ context.Context, toEmail, rawToken string) error {
+	if m == nil {
+		return nil
+	}
+	m.sendCalled++
+	m.lastTo = toEmail
+	m.lastToken = rawToken
+	return m.sendErr
+}
+
+type noopEmailVerificationRepo struct{}
+
+func (noopEmailVerificationRepo) InvalidateUnusedByUserID(context.Context, string) error { return nil }
+func (noopEmailVerificationRepo) Create(context.Context, string, string, time.Time) error {
+	return nil
+}
+func (noopEmailVerificationRepo) ConsumeByTokenHash(context.Context, string) (string, error) {
+	return "", errors.New("noop verification repo")
+}
+func (noopEmailVerificationRepo) DeleteExpired(context.Context) (int64, error) { return 0, nil }
+
+type noopVerifyMail struct{}
+
+func (noopVerifyMail) Enabled() bool                                       { return false }
+func (noopVerifyMail) SendVerification(context.Context, string, string) error { return nil }
 
 // mockPartnerNotifier records Enqueue calls for assertions in tests.
 type mockPartnerNotifier struct {

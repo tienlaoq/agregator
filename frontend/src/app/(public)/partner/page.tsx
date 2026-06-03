@@ -13,9 +13,13 @@ import {
   userFromRegisterResponse,
   ApiError,
   formatApiErrorMessage,
+  isEmailNotVerifiedError,
 } from "@/lib/api"
+import { EmailVerificationNotice } from "@/components/banya/email-verification-notice"
 import { useAuthStore } from "@/store/auth"
 import { PhoneInput, getRawPhone } from "@/components/banya/phone-input"
+import { PasswordStrength } from "@/components/banya/password-strength"
+import { isPasswordValid, PASSWORD_MIN_LENGTH } from "@/lib/password"
 import { PartnerVenueRegistrationCard } from "@/components/banya/partner-venue-registration-card"
 import {
   buildPartnerStyleCreateVenueRequest,
@@ -40,7 +44,11 @@ import {
   Settings,
 } from "lucide-react"
 
-type Step = 1 | 2 | 3 | 4
+// Step 5 is the email-verification hold for the venue track: the account is
+// already created and logged in, but createVenue was rejected by the email gate
+// (EMAIL_NOT_VERIFIED). The draft is held in venueFields until the user clicks
+// the link in the verification email and retries.
+type Step = 1 | 2 | 3 | 4 | 5
 
 export default function PartnerPage() {
   const router = useRouter()
@@ -65,6 +73,7 @@ export default function PartnerPage() {
   const [contactEmail, setContactEmail] = useState("")
   const [contactPhone, setContactPhone] = useState("")
   const [contactPassword, setContactPassword] = useState("")
+  const passwordValid = isPasswordValid(contactPassword)
 
   const [createdVenueId, setCreatedVenueId] = useState("")
   const submittingRef = useRef(false)
@@ -91,7 +100,12 @@ export default function PartnerPage() {
         phone: rawPhone,
         role: partnerRole,
       })
-      authLogin(res.access_token, res.refresh_token, user)
+      // ВАЖНО: дожидаемся authLogin до createVenue. login() кладёт токен в стор
+      // только после await fetch(/api/auth/set-refresh); без await createVenue
+      // ушёл бы со СТАРЫМ токеном из памяти (предыдущая сессия), и заведение
+      // создавалось бы на прошлый аккаунт — а нового владельца перебрасывало на
+      // «Заведение не найдено». См. гонку identity при повторных регистрациях.
+      await authLogin(res.access_token, res.refresh_token, user)
 
       if (partnerRole === "master") {
         router.push("/owner/master/profile")
@@ -102,8 +116,41 @@ export default function PartnerPage() {
       setCreatedVenueId(venue.id)
       setStep(4)
     } catch (err) {
-      if (err instanceof ApiError) {
+      // Account was created and we are logged in, but the email gate rejected
+      // venue creation. Hold the draft and move to the verify-email step rather
+      // than surfacing a scary error.
+      if (isEmailNotVerifiedError(err)) {
+        setError("")
+        setStep(5)
+      } else if (err instanceof ApiError) {
         setError(formatApiErrorMessage(err, "Не удалось создать аккаунт"))
+      } else {
+        setError(formatApiErrorMessage(err, "Не удалось подключиться к серверу"))
+      }
+    } finally {
+      setLoading(false)
+      submittingRef.current = false
+    }
+  }
+
+  // Retry venue creation after the user confirms they clicked the verification
+  // link. The account/session already exist, so we only re-run createVenue with
+  // the held draft. Still gated → stay on step 5 with a hint.
+  const handleVenueRetryAfterVerify = async () => {
+    if (submittingRef.current) return
+    submittingRef.current = true
+    setError("")
+    setLoading(true)
+    try {
+      const rawPhone = getRawPhone(contactPhone)
+      const venue = await createVenue(buildPartnerStyleCreateVenueRequest(venueFields, rawPhone))
+      setCreatedVenueId(venue.id)
+      setStep(4)
+    } catch (err) {
+      if (isEmailNotVerifiedError(err)) {
+        setError("Email пока не подтверждён. Откройте ссылку из письма и попробуйте снова.")
+      } else if (err instanceof ApiError) {
+        setError(formatApiErrorMessage(err, "Не удалось создать заведение"))
       } else {
         setError(formatApiErrorMessage(err, "Не удалось подключиться к серверу"))
       }
@@ -116,7 +163,7 @@ export default function PartnerPage() {
   return (
     <div className="min-h-[80vh] py-12">
       {/* Progress indicator */}
-      {step !== 4 && (
+      {step !== 4 && step !== 5 && (
         <div className="container mx-auto mb-8 px-4">
           <div className="mx-auto flex max-w-2xl items-center justify-center gap-2">
             {(isMasterTrack ? [1, 3] : [1, 2, 3]).map((s, idx, arr) => (
@@ -138,8 +185,8 @@ export default function PartnerPage() {
                     : isMasterTrack
                       ? "Контакты"
                       : s === 2
-                        ? "О заведении"
-                        : "Контакты"}
+                        ? "Контакты"
+                        : "О заведении"}
                 </span>
                 {idx < arr.length - 1 && (
                   <div
@@ -268,32 +315,35 @@ export default function PartnerPage() {
           </div>
         )}
 
-        {step === 2 && !isMasterTrack && (
+        {step === 3 && !isMasterTrack && (
           <PartnerVenueRegistrationCard
             values={venueFields}
             onChange={patchVenue}
             footer={
-              <div className="flex gap-3 pt-2">
-                <Button variant="outline" className="gap-2" onClick={() => setStep(1)}>
-                  <ArrowLeft className="h-4 w-4" />
-                  Назад
-                </Button>
-                <Button
-                  className="flex-1 gap-2"
-                  onClick={() => setStep(3)}
-                  disabled={!partnerVenueStepCanProceed(venueFields)}
-                >
-                  Далее
-                  <ArrowRight className="h-4 w-4" />
-                </Button>
-              </div>
+              <>
+                {error && <p className="text-sm text-destructive">{error}</p>}
+                <div className="flex gap-3 pt-2">
+                  <Button variant="outline" className="gap-2" onClick={() => setStep(2)}>
+                    <ArrowLeft className="h-4 w-4" />
+                    Назад
+                  </Button>
+                  <Button
+                    className="flex-1 gap-2"
+                    onClick={handleSubmit}
+                    disabled={loading || !partnerVenueStepCanProceed(venueFields)}
+                  >
+                    {loading ? "Создаём аккаунт и заведение..." : "Завершить регистрацию"}
+                    {!loading && <CheckCircle2 className="h-4 w-4" />}
+                  </Button>
+                </div>
+              </>
             }
-            caption="Шаг 2 из 3 · Все данные можно изменить позже"
+            caption="Шаг 3 из 3 · Карточка будет создана как черновик; на модерацию вы отправите её после заполнения"
           />
         )}
 
-        {/* Step 3: Contact Information & Account */}
-        {step === 3 && (
+        {/* Contacts & Account — step 2 for venue track, step 3 for master track */}
+        {((!isMasterTrack && step === 2) || (isMasterTrack && step === 3)) && (
           <div className="mx-auto max-w-lg">
             <Card className="border-border">
               <CardHeader className="text-center">
@@ -308,21 +358,6 @@ export default function PartnerPage() {
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
-                {!isMasterTrack && (
-                  <div className="rounded-lg bg-secondary/50 p-3">
-                    <div className="flex items-center gap-2">
-                      <Building2 className="h-4 w-4 text-primary" />
-                      <span className="font-medium text-card-foreground">{venueFields.venueName}</span>
-                      <Badge variant="secondary" className="text-xs">
-                        {venueTypeBadgeLabel(venueFields.venueType)}
-                      </Badge>
-                    </div>
-                    <p className="mt-1 text-sm text-muted-foreground">
-                      {venueFields.venueCity}, {venueFields.venueAddress}
-                    </p>
-                  </div>
-                )}
-
                 <div className="space-y-2">
                   <Label htmlFor="contactName">Ваше имя</Label>
                   <Input
@@ -363,12 +398,14 @@ export default function PartnerPage() {
                   <Input
                     id="contactPassword"
                     type="password"
-                    placeholder="Минимум 8 символов"
+                    placeholder={`Минимум ${PASSWORD_MIN_LENGTH} символов`}
                     value={contactPassword}
                     onChange={(e) => setContactPassword(e.target.value)}
                     required
-                    minLength={8}
+                    minLength={PASSWORD_MIN_LENGTH}
+                    aria-invalid={contactPassword.length > 0 && !passwordValid}
                   />
+                  <PasswordStrength value={contactPassword} />
                 </div>
 
                 {error && <p className="text-sm text-destructive">{error}</p>}
@@ -377,31 +414,35 @@ export default function PartnerPage() {
                   <Button
                     variant="outline"
                     className="gap-2"
-                    onClick={() => setStep(isMasterTrack ? 1 : 2)}
+                    onClick={() => setStep(1)}
                   >
                     <ArrowLeft className="h-4 w-4" />
                     Назад
                   </Button>
-                  <Button
-                    className="flex-1 gap-2"
-                    onClick={handleSubmit}
-                    disabled={
-                      loading ||
-                      !contactName ||
-                      !contactEmail ||
-                      !contactPassword ||
-                      (!isMasterTrack && !getRawPhone(contactPhone).trim())
-                    }
-                  >
-                    {loading
-                      ? isMasterTrack
-                        ? "Регистрация..."
-                        : "Создаём аккаунт и заведение..."
-                      : isMasterTrack
-                        ? "Зарегистрироваться"
-                        : "Завершить регистрацию"}
-                    {!loading && <CheckCircle2 className="h-4 w-4" />}
-                  </Button>
+                  {isMasterTrack ? (
+                    <Button
+                      className="flex-1 gap-2"
+                      onClick={handleSubmit}
+                      disabled={loading || !contactName || !contactEmail || !passwordValid}
+                    >
+                      {loading ? "Регистрация..." : "Зарегистрироваться"}
+                      {!loading && <CheckCircle2 className="h-4 w-4" />}
+                    </Button>
+                  ) : (
+                    <Button
+                      className="flex-1 gap-2"
+                      onClick={() => setStep(3)}
+                      disabled={
+                        !contactName ||
+                        !contactEmail ||
+                        !passwordValid ||
+                        !getRawPhone(contactPhone).trim()
+                      }
+                    >
+                      Далее
+                      <ArrowRight className="h-4 w-4" />
+                    </Button>
+                  )}
                 </div>
               </CardContent>
             </Card>
@@ -409,7 +450,7 @@ export default function PartnerPage() {
             <p className="mt-4 text-center text-sm text-muted-foreground">
               {isMasterTrack
                 ? "Шаг 2 из 2 · Далее откроется кабинет для заполнения профиля мастера"
-                : "Шаг 3 из 3 · Карточка будет создана как черновик; на модерацию вы отправите её после заполнения"}
+                : "Шаг 2 из 3 · Все данные можно изменить позже"}
             </p>
           </div>
         )}
@@ -468,6 +509,37 @@ export default function PartnerPage() {
                 <p className="mt-4 text-center text-xs text-muted-foreground">
                   Публичная страница появится после публикации; в черновике она
                   недоступна по ссылке для гостей.
+                </p>
+              </CardContent>
+            </Card>
+          </div>
+        )}
+
+        {/* Step 5: Confirm email before the venue draft can be created */}
+        {step === 5 && (
+          <div className="mx-auto max-w-lg">
+            <Card className="border-border">
+              <CardHeader className="text-center">
+                <CardTitle className="text-2xl">Остался один шаг</CardTitle>
+                <CardDescription>
+                  Аккаунт создан. Чтобы сохранить карточку «{venueFields.venueName}»,
+                  подтвердите email — так мы защищаем каталог от поддельных заявок.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <EmailVerificationNotice email={contactEmail} />
+                {error ? <p className="text-sm text-destructive">{error}</p> : null}
+                <Button
+                  className="w-full gap-2"
+                  size="lg"
+                  disabled={loading}
+                  onClick={handleVenueRetryAfterVerify}
+                >
+                  {loading ? "Проверяем…" : "Я подтвердил email — продолжить"}
+                </Button>
+                <p className="text-center text-xs text-muted-foreground">
+                  Откройте письмо в другой вкладке, перейдите по ссылке, затем вернитесь
+                  сюда и нажмите кнопку. Введённые данные карточки сохранены.
                 </p>
               </CardContent>
             </Card>

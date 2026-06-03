@@ -53,6 +53,13 @@ function CallbackHandler() {
     // browser history entries created after this navigation.
     window.history.replaceState(null, "", window.location.pathname)
 
+    // Store the access token in memory FIRST, so getProfile() authenticates with
+    // it directly. Otherwise getProfile() would run with no token, 401, and
+    // trigger the silent-refresh flow — which consumes the single-use refresh
+    // cookie and races the app-level bootstrap(), causing a spurious 401 and a
+    // bounce back to the auth screen.
+    useAuthStore.setState({ token: accessToken })
+
     // The refresh token was delivered as an HttpOnly cookie by the gateway.
     // Pass an empty string to login() — it will still call /api/auth/set-refresh
     // but with an empty body, which the route handler ignores (missing token → no-op).

@@ -13,6 +13,7 @@ import (
 	chatv1 "github.com/tienlao/agregator/gen/go/chat/v1"
 	crmv1 "github.com/tienlao/agregator/gen/go/crm/v1"
 	masterv1 "github.com/tienlao/agregator/gen/go/master/v1"
+	notificationv1 "github.com/tienlao/agregator/gen/go/notification/v1"
 	paymentv1 "github.com/tienlao/agregator/gen/go/payment/v1"
 	reviewv1 "github.com/tienlao/agregator/gen/go/review/v1"
 	userv1 "github.com/tienlao/agregator/gen/go/user/v1"
@@ -33,15 +34,16 @@ import (
 // cleanup func closes them in reverse order.
 type deps struct {
 	// gRPC clients
-	Auth    authv1.AuthServiceClient
-	User    userv1.UserServiceClient
-	Venue   venuev1.VenueServiceClient
-	Booking bookingv1.BookingServiceClient
-	Review  reviewv1.ReviewServiceClient
-	Payment paymentv1.PaymentServiceClient
-	Master  masterv1.MasterServiceClient
-	Chat    chatv1.ChatServiceClient
-	CRM     crmv1.CRMServiceClient
+	Auth         authv1.AuthServiceClient
+	User         userv1.UserServiceClient
+	Venue        venuev1.VenueServiceClient
+	Booking      bookingv1.BookingServiceClient
+	Review       reviewv1.ReviewServiceClient
+	Payment      paymentv1.PaymentServiceClient
+	Master       masterv1.MasterServiceClient
+	Chat         chatv1.ChatServiceClient
+	CRM          crmv1.CRMServiceClient
+	Notification notificationv1.NotificationServiceClient
 
 	// File storage for user-uploaded photos (venues, masters).
 	// MinioUploader when MINIO_ENDPOINT is set; DiskUploader otherwise.
@@ -157,16 +159,26 @@ func buildDeps(ctx context.Context, log zerolog.Logger, cfg Config) (*deps, func
 		return nil, cleanup, err
 	}
 
+	// notification-service enforces ServiceTokenServerInterceptor (like chat /
+	// payment), so the gateway must present x-service-token on every call.
+	notificationConn, err := mustDial(cfg.NotificationAddr, "notification-service",
+		grpc.WithUnaryInterceptor(grpcutil.ServiceTokenClientInterceptor(cfg.InternalServiceToken)),
+	)
+	if err != nil {
+		return nil, cleanup, err
+	}
+
 	d := &deps{
-		Auth:    authv1.NewAuthServiceClient(authConn),
-		User:    userv1.NewUserServiceClient(userConn),
-		Venue:   venuev1.NewVenueServiceClient(venueConn),
-		Booking: bookingv1.NewBookingServiceClient(bookingConn),
-		Review:  reviewv1.NewReviewServiceClient(reviewConn),
-		Payment: paymentv1.NewPaymentServiceClient(paymentConn),
-		Master:  masterv1.NewMasterServiceClient(masterConn),
-		Chat:    chatv1.NewChatServiceClient(chatConn),
-		CRM:     crmv1.NewCRMServiceClient(crmConn),
+		Auth:         authv1.NewAuthServiceClient(authConn),
+		User:         userv1.NewUserServiceClient(userConn),
+		Venue:        venuev1.NewVenueServiceClient(venueConn),
+		Booking:      bookingv1.NewBookingServiceClient(bookingConn),
+		Review:       reviewv1.NewReviewServiceClient(reviewConn),
+		Payment:      paymentv1.NewPaymentServiceClient(paymentConn),
+		Master:       masterv1.NewMasterServiceClient(masterConn),
+		Chat:         chatv1.NewChatServiceClient(chatConn),
+		CRM:          crmv1.NewCRMServiceClient(crmConn),
+		Notification: notificationv1.NewNotificationServiceClient(notificationConn),
 	}
 
 	// ── File storage ──────────────────────────────────────────────────────

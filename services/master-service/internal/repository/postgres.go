@@ -115,7 +115,7 @@ var _ domain.MasterRepository = (*MasterRepo)(nil)
 const masterColumns = `id, user_id, slug, display_name, bio, phone, city, work_format,
   travel_radius_km, travel_base_latitude, travel_base_longitude, travel_exclude_zones_json,
   experience_years, specializations, hourly_rate, availability_json,
-  payout_legal_form, yookassa_seller_account_id,
+  payout_legal_form,
   payout_legal_name, payout_inn, payout_kpp, payout_ogrn, payout_ogrnip,
   payout_bank_name, payout_bik, payout_settlement_account, payout_correspondent_account, payout_verification_status,
   status, moderation_comment, moderated_by, moderated_at, created_at, updated_at`
@@ -125,7 +125,7 @@ const masterColumns = `id, user_id, slug, display_name, bio, phone, city, work_f
 const masterColumnsAliased = `m.id, m.user_id, m.slug, m.display_name, m.bio, m.phone, m.city, m.work_format,
   m.travel_radius_km, m.travel_base_latitude, m.travel_base_longitude, m.travel_exclude_zones_json,
   m.experience_years, m.specializations, m.hourly_rate, m.availability_json,
-  m.payout_legal_form, m.yookassa_seller_account_id,
+  m.payout_legal_form,
   m.payout_legal_name, m.payout_inn, m.payout_kpp, m.payout_ogrn, m.payout_ogrnip,
   m.payout_bank_name, m.payout_bik, m.payout_settlement_account, m.payout_correspondent_account, m.payout_verification_status,
   m.status, m.moderation_comment, m.moderated_by, m.moderated_at, m.created_at, m.updated_at`
@@ -144,11 +144,11 @@ INSERT INTO masters (
   id, user_id, slug, display_name, bio, phone, city, work_format,
   travel_radius_km, travel_base_latitude, travel_base_longitude, travel_exclude_zones_json,
   experience_years, specializations, hourly_rate, availability_json,
-  payout_legal_form, yookassa_seller_account_id,
+  payout_legal_form,
   payout_legal_name, payout_inn, payout_kpp, payout_ogrn, payout_ogrnip,
   payout_bank_name, payout_bik, payout_settlement_account, payout_correspondent_account, payout_verification_status,
   status, moderation_comment, moderated_by, moderated_at
-) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32)
+) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31)
 RETURNING created_at, updated_at
 `
 	zj, err := marshalTravelExcludeZonesJSON(m.TravelExcludeZones)
@@ -159,7 +159,7 @@ RETURNING created_at, updated_at
 		m.ID, m.UserID, m.Slug, m.DisplayName, m.Bio, m.Phone, m.City, m.WorkFormat,
 		m.TravelRadiusKm, float64PtrArg(m.TravelBaseLatitude), float64PtrArg(m.TravelBaseLongitude), zj,
 		m.ExperienceYears, m.Specializations, m.HourlyRate, m.AvailabilityJSON,
-		m.PayoutLegalForm, m.YookassaSellerAccountID,
+		m.PayoutLegalForm,
 		m.PayoutLegalName, m.PayoutINN, m.PayoutKPP, m.PayoutOGRN, m.PayoutOGRNIP,
 		m.PayoutBankName, m.PayoutBIK, m.PayoutSettlementAccount, m.PayoutCorrespondentAccount, m.PayoutVerificationStatus,
 		m.Status, m.ModerationComment, m.ModeratedBy, m.ModeratedAt,
@@ -235,7 +235,7 @@ func scanMasterRow(row pgx.Row) (*domain.Master, error) {
 	err := row.Scan(
 		&m.ID, &m.UserID, &m.Slug, &m.DisplayName, &m.Bio, &m.Phone, &m.City, &m.WorkFormat,
 		&m.TravelRadiusKm, &lat, &lon, &zonesJSON, &m.ExperienceYears, &m.Specializations, &m.HourlyRate, &m.AvailabilityJSON,
-		&m.PayoutLegalForm, &m.YookassaSellerAccountID,
+		&m.PayoutLegalForm,
 		&m.PayoutLegalName, &m.PayoutINN, &m.PayoutKPP, &m.PayoutOGRN, &m.PayoutOGRNIP,
 		&m.PayoutBankName, &m.PayoutBIK, &m.PayoutSettlementAccount, &m.PayoutCorrespondentAccount, &m.PayoutVerificationStatus,
 		&m.Status, &m.ModerationComment, &modBy, &modAt, &m.CreatedAt, &m.UpdatedAt,
@@ -278,7 +278,7 @@ func scanMasterRowWithTotal(row pgx.Row, total *int32) (*domain.Master, error) {
 	err := row.Scan(
 		&m.ID, &m.UserID, &m.Slug, &m.DisplayName, &m.Bio, &m.Phone, &m.City, &m.WorkFormat,
 		&m.TravelRadiusKm, &lat, &lon, &zonesJSON, &m.ExperienceYears, &m.Specializations, &m.HourlyRate, &m.AvailabilityJSON,
-		&m.PayoutLegalForm, &m.YookassaSellerAccountID,
+		&m.PayoutLegalForm,
 		&m.PayoutLegalName, &m.PayoutINN, &m.PayoutKPP, &m.PayoutOGRN, &m.PayoutOGRNIP,
 		&m.PayoutBankName, &m.PayoutBIK, &m.PayoutSettlementAccount, &m.PayoutCorrespondentAccount, &m.PayoutVerificationStatus,
 		&m.Status, &m.ModerationComment, &modBy, &modAt, &m.CreatedAt, &m.UpdatedAt,
@@ -408,10 +408,10 @@ UPDATE masters SET
   travel_radius_km = $7, travel_base_latitude = $8, travel_base_longitude = $9,
   travel_exclude_zones_json = $10,
   experience_years = $11, specializations = $12,
-  hourly_rate = $13, availability_json = $14, payout_legal_form = $15, yookassa_seller_account_id = $16,
-  payout_legal_name = $17, payout_inn = $18, payout_kpp = $19, payout_ogrn = $20, payout_ogrnip = $21,
-  payout_bank_name = $22, payout_bik = $23, payout_settlement_account = $24, payout_correspondent_account = $25, payout_verification_status = $26,
-  status = $27, moderation_comment = $28, moderated_by = $29, moderated_at = $30,
+  hourly_rate = $13, availability_json = $14, payout_legal_form = $15,
+  payout_legal_name = $16, payout_inn = $17, payout_kpp = $18, payout_ogrn = $19, payout_ogrnip = $20,
+  payout_bank_name = $21, payout_bik = $22, payout_settlement_account = $23, payout_correspondent_account = $24, payout_verification_status = $25,
+  status = $26, moderation_comment = $27, moderated_by = $28, moderated_at = $29,
   updated_at = now()
 WHERE id = $1
 RETURNING updated_at
@@ -424,7 +424,7 @@ RETURNING updated_at
 		m.ID, m.DisplayName, m.Bio, m.Phone, m.City, m.WorkFormat,
 		m.TravelRadiusKm, float64PtrArg(m.TravelBaseLatitude), float64PtrArg(m.TravelBaseLongitude), zj,
 		m.ExperienceYears, m.Specializations, m.HourlyRate, m.AvailabilityJSON,
-		m.PayoutLegalForm, m.YookassaSellerAccountID,
+		m.PayoutLegalForm,
 		m.PayoutLegalName, m.PayoutINN, m.PayoutKPP, m.PayoutOGRN, m.PayoutOGRNIP,
 		m.PayoutBankName, m.PayoutBIK, m.PayoutSettlementAccount, m.PayoutCorrespondentAccount, m.PayoutVerificationStatus,
 		m.Status, m.ModerationComment, m.ModeratedBy, m.ModeratedAt,
@@ -453,6 +453,21 @@ WHERE id = $1
 		return domain.ErrNotFound
 	}
 	return nil
+}
+
+func (r *MasterRepo) SuspendByUser(ctx context.Context, userID uuid.UUID) (bool, error) {
+	const q = `
+UPDATE masters SET
+  status = $2,
+  moderated_at = now(),
+  updated_at = now()
+WHERE user_id = $1 AND status <> $2
+`
+	ct, err := r.pool.Exec(ctx, q, userID, domain.StatusSuspended)
+	if err != nil {
+		return false, err
+	}
+	return ct.RowsAffected() > 0, nil
 }
 
 func (r *MasterRepo) ListByStatus(ctx context.Context, statusFilter string, limit, offset int32) ([]domain.Master, int32, error) {

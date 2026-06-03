@@ -56,6 +56,8 @@ var (
 	GatewayVenueNotFound = Entry{HTTP: 404, Code: "GATEWAY.VENUE.NOT_FOUND", Message: "Заведение не найдено"}
 	// GatewayDependencyUserServiceUnavailable — GATEWAY.DEPENDENCY.USER_SERVICE_UNAVAILABLE
 	GatewayDependencyUserServiceUnavailable = Entry{HTTP: 503, Code: "GATEWAY.DEPENDENCY.USER_SERVICE_UNAVAILABLE", Message: "Сервис пользователей недоступен"}
+	// GatewayDependencyAuthServiceUnavailable — GATEWAY.DEPENDENCY.AUTH_SERVICE_UNAVAILABLE
+	GatewayDependencyAuthServiceUnavailable = Entry{HTTP: 503, Code: "GATEWAY.DEPENDENCY.AUTH_SERVICE_UNAVAILABLE", Message: "Сервис авторизации недоступен"}
 	// GatewayRequestInvalidVenueId — GATEWAY.REQUEST.INVALID_VENUE_ID
 	GatewayRequestInvalidVenueId = Entry{HTTP: 400, Code: "GATEWAY.REQUEST.INVALID_VENUE_ID", Message: "Некорректный идентификатор заведения"}
 	// GatewayRequestInvalidHallId — GATEWAY.REQUEST.INVALID_HALL_ID
@@ -72,6 +74,14 @@ var (
 	GatewayRequestEmptyFile = Entry{HTTP: 400, Code: "GATEWAY.REQUEST.EMPTY_FILE", Message: "Пустой файл"}
 	// GatewayRequestInvalidImageType — GATEWAY.REQUEST.INVALID_IMAGE_TYPE
 	GatewayRequestInvalidImageType = Entry{HTTP: 400, Code: "GATEWAY.REQUEST.INVALID_IMAGE_TYPE", Message: "Допустимы только JPEG, PNG и WebP"}
+	// GatewayAccountConfirmationRequired — GATEWAY.ACCOUNT.CONFIRMATION_REQUIRED
+	GatewayAccountConfirmationRequired = Entry{HTTP: 400, Code: "GATEWAY.ACCOUNT.CONFIRMATION_REQUIRED", Message: "Для удаления аккаунта введите подтверждение"}
+	// GatewayAccountConfirmationMismatch — GATEWAY.ACCOUNT.CONFIRMATION_MISMATCH
+	GatewayAccountConfirmationMismatch = Entry{HTTP: 400, Code: "GATEWAY.ACCOUNT.CONFIRMATION_MISMATCH", Message: "Подтверждение не совпадает с email вашего аккаунта"}
+	// GatewayAccountAdminSelfDeleteForbidden — GATEWAY.ACCOUNT.ADMIN_SELF_DELETE_FORBIDDEN
+	GatewayAccountAdminSelfDeleteForbidden = Entry{HTTP: 403, Code: "GATEWAY.ACCOUNT.ADMIN_SELF_DELETE_FORBIDDEN", Message: "Аккаунт администратора нельзя удалить через профиль"}
+	// GatewayAccountEmailNotVerified — GATEWAY.ACCOUNT.EMAIL_NOT_VERIFIED
+	GatewayAccountEmailNotVerified = Entry{HTTP: 403, Code: "GATEWAY.ACCOUNT.EMAIL_NOT_VERIFIED", Message: "Подтвердите email, чтобы продолжить. Мы отправили ссылку на вашу почту."}
 	// GatewayMasterNotCreated — GATEWAY.MASTER.NOT_CREATED
 	GatewayMasterNotCreated = Entry{HTTP: 400, Code: "GATEWAY.MASTER.NOT_CREATED", Message: "Сначала создайте профиль мастера"}
 	// GatewayInternalInvalidMasterId — GATEWAY.INTERNAL.INVALID_MASTER_ID
@@ -102,6 +112,10 @@ var (
 	GatewayMasterInvalidServices = Entry{HTTP: 400, Code: "GATEWAY.MASTER.INVALID_SERVICES", Message: "Некорректный список услуг"}
 	// GatewayPaymentWebhookForbidden — GATEWAY.PAYMENT.WEBHOOK_FORBIDDEN
 	GatewayPaymentWebhookForbidden = Entry{HTTP: 403, Code: "GATEWAY.PAYMENT.WEBHOOK_FORBIDDEN", Message: "Webhook отклонён: не пройдена верификация источника"}
+	// GatewayPayoutForbidden — GATEWAY.PAYOUT.FORBIDDEN
+	GatewayPayoutForbidden = Entry{HTTP: 403, Code: "GATEWAY.PAYOUT.FORBIDDEN", Message: "Управление выплатами доступно только владельцу"}
+	// GatewayPayoutInvalidKind — GATEWAY.PAYOUT.INVALID_KIND
+	GatewayPayoutInvalidKind = Entry{HTTP: 400, Code: "GATEWAY.PAYOUT.INVALID_KIND", Message: "Укажите способ выплаты: card, bank_account или sbp"}
 	// GatewayUpstreamInvalidArgument — GATEWAY.UPSTREAM.INVALID_ARGUMENT
 	GatewayUpstreamInvalidArgument = Entry{HTTP: 400, Code: "GATEWAY.UPSTREAM.INVALID_ARGUMENT", Message: "Некорректный запрос"}
 	// GatewayUpstreamNotFound — GATEWAY.UPSTREAM.NOT_FOUND
@@ -139,12 +153,16 @@ func ByCode(code string) (Entry, bool) {
 		return GatewayRequestMissingDateRange, true
 	case "GATEWAY.REQUEST.EMAIL_REQUIRED":
 		return GatewayRequestEmailRequired, true
+	case "GATEWAY.REQUEST.BODY_TOO_LARGE":
+		return GatewayRequestBodyTooLarge, true
 	case "GATEWAY.REQUEST.RATE_LIMITED":
 		return GatewayRequestRateLimited, true
 	case "GATEWAY.VENUE.NOT_FOUND":
 		return GatewayVenueNotFound, true
 	case "GATEWAY.DEPENDENCY.USER_SERVICE_UNAVAILABLE":
 		return GatewayDependencyUserServiceUnavailable, true
+	case "GATEWAY.DEPENDENCY.AUTH_SERVICE_UNAVAILABLE":
+		return GatewayDependencyAuthServiceUnavailable, true
 	case "GATEWAY.REQUEST.INVALID_VENUE_ID":
 		return GatewayRequestInvalidVenueId, true
 	case "GATEWAY.REQUEST.INVALID_HALL_ID":
@@ -161,6 +179,14 @@ func ByCode(code string) (Entry, bool) {
 		return GatewayRequestEmptyFile, true
 	case "GATEWAY.REQUEST.INVALID_IMAGE_TYPE":
 		return GatewayRequestInvalidImageType, true
+	case "GATEWAY.ACCOUNT.CONFIRMATION_REQUIRED":
+		return GatewayAccountConfirmationRequired, true
+	case "GATEWAY.ACCOUNT.CONFIRMATION_MISMATCH":
+		return GatewayAccountConfirmationMismatch, true
+	case "GATEWAY.ACCOUNT.ADMIN_SELF_DELETE_FORBIDDEN":
+		return GatewayAccountAdminSelfDeleteForbidden, true
+	case "GATEWAY.ACCOUNT.EMAIL_NOT_VERIFIED":
+		return GatewayAccountEmailNotVerified, true
 	case "GATEWAY.MASTER.NOT_CREATED":
 		return GatewayMasterNotCreated, true
 	case "GATEWAY.INTERNAL.INVALID_MASTER_ID":
@@ -191,6 +217,10 @@ func ByCode(code string) (Entry, bool) {
 		return GatewayMasterInvalidServices, true
 	case "GATEWAY.PAYMENT.WEBHOOK_FORBIDDEN":
 		return GatewayPaymentWebhookForbidden, true
+	case "GATEWAY.PAYOUT.FORBIDDEN":
+		return GatewayPayoutForbidden, true
+	case "GATEWAY.PAYOUT.INVALID_KIND":
+		return GatewayPayoutInvalidKind, true
 	case "GATEWAY.UPSTREAM.INVALID_ARGUMENT":
 		return GatewayUpstreamInvalidArgument, true
 	case "GATEWAY.UPSTREAM.NOT_FOUND":

@@ -7,11 +7,21 @@ option go_package = "github.com/tienlao/agregator/proto/payment/v1;paymentv1";
 import "google/protobuf/timestamp.proto";
 
 service PaymentService {
+  // Payment charges (escrow inflow).
   rpc CreatePayment(CreatePaymentRequest) returns (PaymentResponse);
   rpc GetPayment(GetPaymentRequest) returns (PaymentResponse);
   rpc GetPaymentByBooking(GetPaymentByBookingRequest) returns (PaymentResponse);
   rpc HandleWebhook(WebhookRequest) returns (WebhookResponse);
+
+  // Partner payout rails and balance.
+  rpc SetPayoutMethod(SetPayoutMethodRequest) returns (PayoutMethodResponse);
+  rpc GetPayoutMethod(GetPayoutMethodRequest) returns (PayoutMethodResponse);
+  rpc GetPartnerBalance(GetPartnerBalanceRequest) returns (PartnerBalanceResponse);
+  rpc ListPartnerLedger(ListPartnerLedgerRequest) returns (ListPartnerLedgerResponse);
+  rpc ListPartnerPayouts(ListPartnerPayoutsRequest) returns (ListPartnerPayoutsResponse);
 }
+
+// ── Payment charge ──────────────────────────────────────────────────────────
 
 message CreatePaymentRequest {
   string booking_id = 1;
@@ -19,19 +29,19 @@ message CreatePaymentRequest {
   string description = 3;
   string return_url = 4;
   string idempotency_key = 5;
-  // Counterparty for marketplace split: venue | master
+  // Counterparty receiving the partner share: venue | master
   string counterparty_type = 6;
   string counterparty_id = 7;
-  // Deprecated: use provider_seller_account_id instead.
-  // Kept for backward compatibility; will be removed in a future release.
-  string yookassa_seller_account_id = 8 [deprecated = true];
-  // provider_seller_account_id is the marketplace seller account at the payment
-  // provider (provider-agnostic replacement for yookassa_seller_account_id).
-  // When non-empty the provider creates a split payment with deferred capture.
-  string provider_seller_account_id = 9;
-  // provider_name identifies the payment gateway to use (default: "yookassa").
-  // Reserved for future use when multiple providers are supported in parallel.
-  string provider_name = 10;
+  // Wall-clock moment the booked service begins. Used by payment-service to
+  // compute the accrual's available_at = service_at + payout hold. Optional —
+  // when unset the accrual falls back to a now()-based hold window.
+  google.protobuf.Timestamp service_at = 11;
+
+  // Tags 8, 9, 10 were used by the deprecated marketplace-split model
+  // (yookassa_seller_account_id, provider_seller_account_id, provider_name).
+  // Reserved so future proto edits don't accidentally reuse them.
+  reserved 8, 9, 10;
+  reserved "yookassa_seller_account_id", "provider_seller_account_id", "provider_name";
 }
 
 message PaymentResponse {
@@ -61,4 +71,140 @@ message WebhookRequest {
 
 message WebhookResponse {
   bool ok = 1;
+}
+
+// ── Partner payout methods ──────────────────────────────────────────────────
+
+// PayoutMethodKind selects the rail used to deliver money to the partner.
+// Mirrors domain.PayoutMethodKind one-to-one.
+enum PayoutMethodKind {
+  PAYOUT_METHOD_KIND_UNSPECIFIED = 0;
+  PAYOUT_METHOD_KIND_CARD = 1;
+  PAYOUT_METHOD_KIND_BANK_ACCOUNT = 2;
+  PAYOUT_METHOD_KIND_SBP = 3;
+}
+
+message SetPayoutMethodRequest {
+  string partner_type = 1; // "venue" | "master"
+  string partner_id = 2;
+  PayoutMethodKind kind = 3;
+  // Optional override; defaults to active payout provider when empty.
+  string provider_name = 4;
+
+  // Card rails (set when kind == CARD).
+  string card_last4 = 10;
+  string card_brand = 11;
+  // Provider-issued opaque token representing the saved card; never the raw PAN.
+  string provider_token = 12;
+
+  // Bank-account rails (set when kind == BANK_ACCOUNT).
+  string bank_bic = 20;
+  string bank_account = 21;
+  string bank_name = 22;
+  string recipient_inn = 23;
+  string recipient_kpp = 24;
+  string recipient_name = 25;
+
+  // SBP rails (set when kind == SBP).
+  string sbp_phone = 30; // E.164 (+7XXXXXXXXXX)
+  string sbp_bank_id = 31;
+}
+
+message GetPayoutMethodRequest {
+  string partner_type = 1;
+  string partner_id = 2;
+}
+
+message PayoutMethodResponse {
+  string id = 1;
+  string partner_type = 2;
+  string partner_id = 3;
+  PayoutMethodKind kind = 4;
+  string provider_name = 5;
+
+  // Card
+  string card_last4 = 10;
+  string card_brand = 11;
+
+  // Bank-account (provider_token, account number etc. are intentionally
+  // omitted from the response — they are write-only).
+  string bank_bic = 20;
+  string bank_account_masked = 21;
+  string bank_name = 22;
+  string recipient_name = 25;
+
+  // SBP
+  string sbp_phone_masked = 30;
+  string sbp_bank_id = 31;
+
+  google.protobuf.Timestamp created_at = 50;
+  google.protobuf.Timestamp updated_at = 51;
+}
+
+// ── Balance & history reads ────────────────────────────────────────────────
+
+message GetPartnerBalanceRequest {
+  string partner_type = 1;
+  string partner_id = 2;
+}
+
+message PartnerBalanceResponse {
+  string partner_type = 1;
+  string partner_id = 2;
+  int64 total_kopecks = 3;
+  int64 available_kopecks = 4;
+  int64 held_kopecks = 5;
+  google.protobuf.Timestamp last_entry_at = 6;
+}
+
+message ListPartnerLedgerRequest {
+  string partner_type = 1;
+  string partner_id = 2;
+  int32 limit = 3;
+  int32 offset = 4;
+}
+
+message LedgerEntry {
+  int64 id = 1;
+  string partner_type = 2;
+  string partner_id = 3;
+  string entry_type = 4; // accrual | reversal | payout | adjustment
+  int64 amount_kopecks = 5;
+  string payment_id = 6;
+  string payout_id = 7;
+  int64 reverses_entry_id = 8;
+  google.protobuf.Timestamp available_at = 9;
+  string reason = 10;
+  google.protobuf.Timestamp created_at = 11;
+}
+
+message ListPartnerLedgerResponse {
+  repeated LedgerEntry entries = 1;
+}
+
+message ListPartnerPayoutsRequest {
+  string partner_type = 1;
+  string partner_id = 2;
+  int32 limit = 3;
+  int32 offset = 4;
+}
+
+message Payout {
+  string id = 1;
+  string partner_type = 2;
+  string partner_id = 3;
+  int64 amount_kopecks = 4;
+  string currency = 5;
+  string status = 6; // pending | processing | succeeded | failed
+  PayoutMethodKind method_kind_snapshot = 7;
+  string method_display = 8;
+  string provider_name = 9;
+  string provider_payout_id = 10;
+  string failure_reason = 11;
+  google.protobuf.Timestamp created_at = 12;
+  google.protobuf.Timestamp completed_at = 13;
+}
+
+message ListPartnerPayoutsResponse {
+  repeated Payout payouts = 1;
 }

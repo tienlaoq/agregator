@@ -111,6 +111,13 @@ func (s *Server) Logout(ctx context.Context, req *authv1.LogoutRequest) (*authv1
 	return &authv1.LogoutResponse{}, nil
 }
 
+func (s *Server) DeleteAccount(ctx context.Context, req *authv1.DeleteAccountRequest) (*authv1.DeleteAccountResponse, error) {
+	if err := s.uc.DeleteAccount(ctx, req.GetUserId()); err != nil {
+		return nil, err
+	}
+	return &authv1.DeleteAccountResponse{}, nil
+}
+
 func (s *Server) RequestPasswordReset(ctx context.Context, req *authv1.RequestPasswordResetRequest) (*authv1.RequestPasswordResetResponse, error) {
 	if err := s.uc.RequestPasswordReset(ctx, req.GetEmail()); err != nil {
 		return nil, err
@@ -123,4 +130,26 @@ func (s *Server) CompletePasswordReset(ctx context.Context, req *authv1.Complete
 		return nil, err
 	}
 	return &authv1.CompletePasswordResetResponse{}, nil
+}
+
+func (s *Server) VerifyEmail(ctx context.Context, req *authv1.VerifyEmailRequest) (*authv1.VerifyEmailResponse, error) {
+	if err := s.uc.VerifyEmail(ctx, req.GetToken()); err != nil {
+		return nil, err
+	}
+	return &authv1.VerifyEmailResponse{}, nil
+}
+
+func (s *Server) ResendVerification(ctx context.Context, req *authv1.ResendVerificationRequest) (*authv1.ResendVerificationResponse, error) {
+	if err := s.uc.ResendVerification(ctx, req.GetEmail()); err != nil {
+		return nil, err
+	}
+	return &authv1.ResendVerificationResponse{}, nil
+}
+
+func (s *Server) GetEmailVerification(ctx context.Context, req *authv1.GetEmailVerificationRequest) (*authv1.GetEmailVerificationResponse, error) {
+	verified, err := s.uc.GetEmailVerified(ctx, req.GetUserId())
+	if err != nil {
+		return nil, err
+	}
+	return &authv1.GetEmailVerificationResponse{EmailVerified: verified}, nil
 }

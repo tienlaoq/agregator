@@ -29,6 +29,19 @@ service MasterService {
   rpc AddMasterPhoto(AddMasterPhotoRequest) returns (MasterResponse);
   rpc DeleteMasterPhoto(DeleteMasterPhotoRequest) returns (DeleteMasterPhotoResponse);
   rpc SetMasterCoverPhoto(SetMasterCoverPhotoRequest) returns (MasterResponse);
+
+  // SuspendMasterByUser sets the master profile owned by user_id to status
+  // "suspended", removing it from public listings. Used by the account-deletion
+  // cascade. No-op success when the user has no master profile.
+  rpc SuspendMasterByUser(SuspendMasterByUserRequest) returns (SuspendMasterByUserResponse);
+}
+
+message SuspendMasterByUserRequest {
+  string user_id = 1;
+}
+
+message SuspendMasterByUserResponse {
+  bool suspended = 1;
 }
 
 message MasterServiceItem {
@@ -95,8 +108,10 @@ message Master {
   repeated MasterPhoto photos = 21;
   // ip | ooo | individual | self_employed — куда перечисляется оплата; в публичном API не отдаётся.
   string payout_legal_form = 22;
-  // ЮKassa account_id подключенного получателя (для marketplace split).
-  string yookassa_seller_account_id = 26;
+  // Tag 26 was yookassa_seller_account_id (marketplace-split model, replaced
+  // by the escrow + per-partner payout method stored in payment-service).
+  reserved 26;
+  reserved "yookassa_seller_account_id";
   string payout_legal_name = 27;
   string payout_inn = 28;
   string payout_kpp = 29;
@@ -143,7 +158,9 @@ message UpdateMyProfileRequest {
   // When true, replace specializations with the repeated field (empty clears).
   bool apply_specializations = 14;
   optional string payout_legal_form = 15;
-  optional string yookassa_seller_account_id = 20;
+  // Tag 20 was optional yookassa_seller_account_id (deprecated marketplace-split).
+  reserved 20;
+  reserved "yookassa_seller_account_id";
   optional string payout_legal_name = 21;
   optional string payout_inn = 22;
   optional string payout_kpp = 23;

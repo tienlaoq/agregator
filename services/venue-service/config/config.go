@@ -17,6 +17,10 @@ type Config struct {
 	// SearchCacheTTL controls how long list/search results are cached in Redis.
 	// Env: SEARCH_CACHE_TTL (e.g. "2m", "30s"). Default: 2m.
 	SearchCacheTTL time.Duration
+	// ReviewServiceAddr — адрес review-service для запроса авторитетного агрегата
+	// рейтинга (GetVenueRating) при обработке события review.created.
+	// Env: REVIEW_SERVICE_ADDR. Default: localhost:50055.
+	ReviewServiceAddr string
 }
 
 func Load() Config {
@@ -24,11 +28,12 @@ func Load() Config {
 	pg.DBName = config.GetEnv("PG_DB", "venue_db")
 
 	return Config{
-		GRPCPort:       config.GetEnv("GRPC_PORT", "50053"),
-		Postgres:       pg,
-		Redis:          config.NewRedisConfig(),
-		NATS:           config.NewNATSConfig(),
-		VenueCacheTTL:  config.GetEnvDuration("VENUE_CACHE_TTL", 10*time.Minute),
-		SearchCacheTTL: config.GetEnvDuration("SEARCH_CACHE_TTL", 2*time.Minute),
+		GRPCPort:          config.GetEnv("GRPC_PORT", "50053"),
+		Postgres:          pg,
+		Redis:             config.NewRedisConfig(),
+		NATS:              config.NewNATSConfig(),
+		VenueCacheTTL:     config.GetEnvDuration("VENUE_CACHE_TTL", 10*time.Minute),
+		SearchCacheTTL:    config.GetEnvDuration("SEARCH_CACHE_TTL", 2*time.Minute),
+		ReviewServiceAddr: config.GetEnv("REVIEW_SERVICE_ADDR", "localhost:50055"),
 	}
 }

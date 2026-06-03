@@ -15,6 +15,20 @@ service AuthService {
   rpc Logout(LogoutRequest) returns (LogoutResponse);
   rpc RequestPasswordReset(RequestPasswordResetRequest) returns (RequestPasswordResetResponse);
   rpc CompletePasswordReset(CompletePasswordResetRequest) returns (CompletePasswordResetResponse);
+  // DeleteAccount revokes all authentication material for a user: the
+  // credential row (password / OAuth identity) and every outstanding refresh
+  // token. After this call the user can no longer authenticate. Idempotent —
+  // deleting an already-revoked account is a no-op success.
+  rpc DeleteAccount(DeleteAccountRequest) returns (DeleteAccountResponse);
+  // VerifyEmail consumes a one-time verification token and marks the owning
+  // account's email as verified. Single-use: replaying the token fails.
+  rpc VerifyEmail(VerifyEmailRequest) returns (VerifyEmailResponse);
+  // ResendVerification re-issues a verification link. Anti-enumeration: the
+  // response is identical whether or not the email exists or is already verified.
+  rpc ResendVerification(ResendVerificationRequest) returns (ResendVerificationResponse);
+  // GetEmailVerification reports whether an account's email is verified. Used by
+  // the gateway to gate partner actions (venue / master profile creation).
+  rpc GetEmailVerification(GetEmailVerificationRequest) returns (GetEmailVerificationResponse);
 }
 
 message RegisterRequest {
@@ -100,3 +114,29 @@ message CompletePasswordResetRequest {
 }
 
 message CompletePasswordResetResponse {}
+
+message DeleteAccountRequest {
+  string user_id = 1;
+}
+
+message DeleteAccountResponse {}
+
+message VerifyEmailRequest {
+  string token = 1;
+}
+
+message VerifyEmailResponse {}
+
+message ResendVerificationRequest {
+  string email = 1;
+}
+
+message ResendVerificationResponse {}
+
+message GetEmailVerificationRequest {
+  string user_id = 1;
+}
+
+message GetEmailVerificationResponse {
+  bool email_verified = 1;
+}

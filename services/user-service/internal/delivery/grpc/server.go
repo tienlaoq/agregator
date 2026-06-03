@@ -149,6 +149,22 @@ func (s *UserServer) UpdateUser(ctx context.Context, req *userv1.UpdateUserReque
 	return userToProto(user), nil
 }
 
+func (s *UserServer) DeleteUser(ctx context.Context, req *userv1.DeleteUserRequest) (*userv1.DeleteUserResponse, error) {
+	if req.GetId() == "" {
+		return nil, apperrors.InvalidArgument("id is required")
+	}
+
+	if err := s.uc.Delete(ctx, req.GetId()); err != nil {
+		if errors.Is(err, domain.ErrNotFound) {
+			return nil, apperrors.NotFound("user not found")
+		}
+		s.log.Error().Err(err).Str("method", "DeleteUser").Str("user_id", req.GetId()).Msg("delete user failed")
+		return nil, apperrors.Internal(internalErrMsg)
+	}
+
+	return &userv1.DeleteUserResponse{}, nil
+}
+
 func userToProto(u *domain.User) *userv1.UserResponse {
 	return &userv1.UserResponse{
 		Id:        u.ID,

@@ -75,6 +75,9 @@ type AuthUseCase struct {
 	resetTokens   domain.PasswordResetRepository
 	resetMail     PasswordResetMailer
 	resetTTL      time.Duration
+	verifyTokens  domain.EmailVerificationRepository // nil-safe: checked before use
+	verifyMail    EmailVerificationMailer            // nil-safe: checked before use
+	verifyTTL     time.Duration
 	userClient    domain.UserClient
 	jwtPrivKey    *ecdsa.PrivateKey // ES256 signing key; never shared with other services
 	accessTTL     time.Duration
@@ -89,6 +92,9 @@ func NewAuthUseCase(
 	resetTokens domain.PasswordResetRepository,
 	resetMail PasswordResetMailer,
 	resetTTL time.Duration,
+	verifyTokens domain.EmailVerificationRepository,
+	verifyMail EmailVerificationMailer,
+	verifyTTL time.Duration,
 	userClient domain.UserClient,
 	jwtPrivKey *ecdsa.PrivateKey,
 	accessTTL, refreshTTL time.Duration,
@@ -98,12 +104,18 @@ func NewAuthUseCase(
 	if resetTTL <= 0 {
 		resetTTL = time.Hour
 	}
+	if verifyTTL <= 0 {
+		verifyTTL = 24 * time.Hour
+	}
 	return &AuthUseCase{
 		creds:         creds,
 		tokens:        tokens,
 		resetTokens:   resetTokens,
 		resetMail:     resetMail,
 		resetTTL:      resetTTL,
+		verifyTokens:  verifyTokens,
+		verifyMail:    verifyMail,
+		verifyTTL:     verifyTTL,
 		userClient:    userClient,
 		jwtPrivKey:    jwtPrivKey,
 		accessTTL:     accessTTL,
@@ -143,8 +155,8 @@ func validateRegisterInput(in *RegisterInput) error {
 	}
 
 	// --- password ---
-	if len(in.Password) < minAccountPasswordLen {
-		return pkgerr.InvalidArgument(fmt.Sprintf("password must be at least %d characters", minAccountPasswordLen))
+	if err := validateAccountPassword(in.Password); err != nil {
+		return err
 	}
 
 	// --- name ---
@@ -252,17 +264,29 @@ func (uc *AuthUseCase) Register(ctx context.Context, in RegisterInput) (*AuthRes
 		return nil, err
 	}
 
-	// Enqueue a partner-registration notification for admin visibility.
-	// Enqueue is non-blocking: the TelegramWorker buffers the event and delivers
-	// it asynchronously, so the Register response is not delayed by Telegram RTT.
-	if (in.Role == "master" || in.Role == "venue_owner") && uc.partnerNotify != nil {
-		uc.partnerNotify.Enqueue(domain.PartnerRegisteredEvent{
-			Role:   in.Role,
-			UserID: userResp.ID,
-			Email:  in.Email,
-			Phone:  in.Phone,
-			Name:   in.Name,
-		})
+	// Partner roles (master / venue_owner) are gated on email verification before
+	// they can create a venue or master profile. Send the verification link now so
+	// the link is waiting in the inbox by the time they finish the partner flow.
+	// Delivery is best-effort: a mail failure must not fail registration — the user
+	// can request a fresh link via ResendVerification.
+	if in.Role == "master" || in.Role == "venue_owner" {
+		if err := uc.sendVerificationEmail(ctx, userResp.ID, in.Email); err != nil {
+			uc.appLog.Warn().Err(err).Str("user_id", userResp.ID).
+				Msg("register: failed to send verification email — user can resend")
+		}
+
+		// Enqueue a partner-registration notification for admin visibility.
+		// Enqueue is non-blocking: the TelegramWorker buffers the event and delivers
+		// it asynchronously, so the Register response is not delayed by Telegram RTT.
+		if uc.partnerNotify != nil {
+			uc.partnerNotify.Enqueue(domain.PartnerRegisteredEvent{
+				Role:   in.Role,
+				UserID: userResp.ID,
+				Email:  in.Email,
+				Phone:  in.Phone,
+				Name:   in.Name,
+			})
+		}
 	}
 
 	return &AuthResult{UserID: userResp.ID, Tokens: *tokens}, nil
@@ -351,10 +375,11 @@ func (uc *AuthUseCase) OAuthLogin(ctx context.Context, in OAuthInput) (*OAuthRes
 		existingCred, err := uc.creds.GetByEmail(ctx, in.Email)
 		if err == nil {
 			newCred := &domain.Credential{
-				UserID:     existingCred.UserID,
-				Email:      in.Email, // already normalised above
-				Provider:   in.Provider,
-				ProviderID: in.ProviderID,
+				UserID:        existingCred.UserID,
+				Email:         in.Email, // already normalised above
+				Provider:      in.Provider,
+				ProviderID:    in.ProviderID,
+				EmailVerified: true, // reached only when in.EmailVerified is true
 			}
 			if cerr := uc.creds.CreateOAuth(ctx, newCred); cerr != nil {
 				// Concurrent request already linked this provider → find it and issue tokens.
@@ -400,10 +425,11 @@ func (uc *AuthUseCase) OAuthLogin(ctx context.Context, in OAuthInput) (*OAuthRes
 	}
 
 	newCred := &domain.Credential{
-		UserID:     userResp.ID,
-		Email:      registrationEmail,
-		Provider:   in.Provider,
-		ProviderID: in.ProviderID,
+		UserID:        userResp.ID,
+		Email:         registrationEmail,
+		Provider:      in.Provider,
+		ProviderID:    in.ProviderID,
+		EmailVerified: in.EmailVerified, // provider vouched for the address
 	}
 	if err := uc.creds.CreateOAuth(ctx, newCred); err != nil {
 		// Concurrent request with the same provider/providerID already inserted a
@@ -659,6 +685,24 @@ func (uc *AuthUseCase) Logout(ctx context.Context, rawRefreshToken string) error
 		return nil
 	}
 	return err
+}
+
+// DeleteAccount revokes all authentication material for a user: every
+// outstanding refresh token and the credential row itself. After this the user
+// cannot log in or refresh. Idempotent — missing rows (already revoked) are not
+// treated as errors. Tokens are deleted first so that even if the credential
+// delete fails midway, no usable session remains.
+func (uc *AuthUseCase) DeleteAccount(ctx context.Context, userID string) error {
+	if userID == "" {
+		return pkgerr.InvalidArgument("user_id is required")
+	}
+	if err := uc.tokens.DeleteByUserID(ctx, userID); err != nil && !isNotFound(err) {
+		return err
+	}
+	if err := uc.creds.DeleteByUserID(ctx, userID); err != nil && !isNotFound(err) {
+		return err
+	}
+	return nil
 }
 
 // --- token helpers ---
