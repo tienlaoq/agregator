@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -135,6 +136,13 @@ func (r *PaymentRepo) DriveProviderWithLock(
 	idempotencyKey string,
 	fn func(p *domain.Payment) (providerID, paymentURL string, err error),
 ) (*domain.Payment, error) {
+	// Guard against an empty key: hashtext("") == 0, so every empty-keyed call
+	// would serialise on the same advisory lock id and block each other. An empty
+	// idempotency key is a caller bug regardless, so fail fast and loud.
+	if strings.TrimSpace(idempotencyKey) == "" {
+		return nil, fmt.Errorf("DriveProviderWithLock: empty idempotency key")
+	}
+
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("DriveProviderWithLock begin tx: %w", err)

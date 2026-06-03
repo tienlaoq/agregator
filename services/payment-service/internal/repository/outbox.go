@@ -3,11 +3,31 @@ package repository
 import (
 	"context"
 	"fmt"
+	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/tienlao/agregator/services/payment-service/internal/domain"
 )
+
+// maxLastErrorBytes bounds the last_error column to keep the table compact.
+const maxLastErrorBytes = 500
+
+// truncateUTF8 returns s shortened to at most maxBytes bytes without splitting a
+// multi-byte UTF-8 rune. len() counts bytes, so a naive s[:maxBytes] can cut
+// through the middle of a Cyrillic (or any multi-byte) character and leave the
+// stored last_error as invalid UTF-8. We back off to the nearest rune boundary.
+func truncateUTF8(s string, maxBytes int) string {
+	if len(s) <= maxBytes {
+		return s
+	}
+	for i := maxBytes; i > 0; i-- {
+		if utf8.RuneStart(s[i]) {
+			return s[:i]
+		}
+	}
+	return s[:maxBytes]
+}
 
 // OutboxRepo implements domain.OutboxRepository using PostgreSQL.
 type OutboxRepo struct {
@@ -65,10 +85,7 @@ func (r *OutboxRepo) RelayBatch(ctx context.Context, limit int, publish func(*do
 	for _, e := range batch {
 		if publishErr := publish(e); publishErr != nil {
 			// Truncate error message to avoid unbounded text in the DB.
-			msg := publishErr.Error()
-			if len(msg) > 500 {
-				msg = msg[:500]
-			}
+			msg := truncateUTF8(publishErr.Error(), maxLastErrorBytes)
 			const failQ = `
 				UPDATE payment_outbox
 				   SET attempt_count = attempt_count + 1,
@@ -104,9 +121,7 @@ const outboxMaxAttempts = 10
 
 func (r *OutboxRepo) MarkFailed(ctx context.Context, id int64, errMsg string) error {
 	// Truncate to avoid unbounded text in the DB.
-	if len(errMsg) > 500 {
-		errMsg = errMsg[:500]
-	}
+	errMsg = truncateUTF8(errMsg, maxLastErrorBytes)
 	const q = `
 		UPDATE payment_outbox
 		   SET attempt_count = attempt_count + 1,

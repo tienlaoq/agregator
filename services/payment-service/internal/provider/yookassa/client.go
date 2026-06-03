@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math/rand/v2"
@@ -197,7 +198,7 @@ func retryDo(ctx context.Context, fn func() error) error {
 // Currently: HTTP 4xx client errors (bad request, auth failure, not found).
 func isPermanent(err error) bool {
 	var apiErr *apiError
-	if asAPIError(err, &apiErr) {
+	if errors.As(err, &apiErr) {
 		return apiErr.statusCode >= 400 && apiErr.statusCode < 500
 	}
 	return false
@@ -230,20 +231,6 @@ type apiError struct {
 
 func (e *apiError) Error() string {
 	return fmt.Sprintf("yookassa %s: HTTP %d: %s", e.op, e.statusCode, e.body)
-}
-
-// asAPIError is a poor-man's errors.As for *apiError without importing errors.
-// We use a simple type assertion because apiError is always wrapped as a pointer
-// at the first level; the retry helper never double-wraps it.
-func asAPIError(err error, target **apiError) bool {
-	if err == nil {
-		return false
-	}
-	if e, ok := err.(*apiError); ok {
-		*target = e
-		return true
-	}
-	return false
 }
 
 // ── PaymentProvider implementation ──────────────────────────────────────────

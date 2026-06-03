@@ -4,10 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"strings"
 	"time"
 
+	"github.com/rs/zerolog"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
@@ -33,6 +33,7 @@ type PaymentUseCase struct {
 	returnURL      string
 	feeBPS         int64
 	holdDuration   time.Duration // accrual hold = ServiceAt + holdDuration
+	log            zerolog.Logger
 }
 
 // NewPaymentUseCase wires the dependencies.
@@ -49,6 +50,7 @@ func NewPaymentUseCase(
 	returnURL string,
 	platformFeeBPS int,
 	holdDuration time.Duration,
+	lg zerolog.Logger,
 ) *PaymentUseCase {
 	if platformFeeBPS <= 0 {
 		platformFeeBPS = 1500
@@ -65,6 +67,7 @@ func NewPaymentUseCase(
 		returnURL:      returnURL,
 		feeBPS:         int64(platformFeeBPS),
 		holdDuration:   holdDuration,
+		log:            lg.With().Str("component", "payment-usecase").Logger(),
 	}
 }
 
@@ -244,10 +247,10 @@ func (uc *PaymentUseCase) HandleWebhook(ctx context.Context, rawBody []byte) (*d
 		// statuses before they silently become no-ops in production.
 		if event.RawProviderStatus != "" {
 			if _, known := knownProviderStatuses[event.RawProviderStatus]; !known {
-				slog.Warn("webhook: unrecognised provider status, treating as pending no-op",
-					"object_id", event.ProviderPaymentID,
-					"raw_provider_status", event.RawProviderStatus,
-				)
+				uc.log.Warn().
+					Str("object_id", event.ProviderPaymentID).
+					Str("raw_provider_status", event.RawProviderStatus).
+					Msg("webhook: unrecognised provider status, treating as pending no-op")
 			}
 		}
 		return event, nil
@@ -269,11 +272,11 @@ func (uc *PaymentUseCase) HandleWebhook(ctx context.Context, rawBody []byte) (*d
 	//
 	// In mock mode activeProvider is empty — skip the check to keep tests simple.
 	if uc.activeProvider != "" && p.ProviderName != uc.activeProvider {
-		slog.Warn("webhook: provider mismatch — ignoring notification",
-			"object_id", event.ProviderPaymentID,
-			"payment_provider", p.ProviderName,
-			"active_provider", uc.activeProvider,
-		)
+		uc.log.Warn().
+			Str("object_id", event.ProviderPaymentID).
+			Str("payment_provider", p.ProviderName).
+			Str("active_provider", uc.activeProvider).
+			Msg("webhook: provider mismatch — ignoring notification")
 		return event, status.Errorf(codes.FailedPrecondition,
 			"webhook provider mismatch: payment created by %q, active provider is %q",
 			p.ProviderName, uc.activeProvider,
@@ -450,25 +453,27 @@ func (uc *PaymentUseCase) writeReversal(ctx context.Context, p *domain.Payment) 
 // ── helpers ───────────────────────────────────────────────────────────────────
 
 // paymentEventPayload is the JSON shape written to the outbox and subsequently
-// published to NATS.  Matches the existing events.paymentEvent struct so that
-// downstream consumers see no breaking change.
+// published to NATS.
+//
+// Only the fields downstream consumers actually read are included. Both current
+// subscribers — booking-service and master-service — decode just payment_id,
+// booking_id and status (they confirm/cancel a booking; they never look at
+// money). Financial fields (amount, platform fee, counterparty net) are
+// deliberately omitted: broadcasting them to the event bus would leak payment
+// amounts to services that have no use for them, with no benefit. If a future
+// consumer genuinely needs an amount, add the specific field back here together
+// with the consumer that reads it — don't pre-emptively widen the payload.
 type paymentEventPayload struct {
-	PaymentID              string `json:"payment_id"`
-	BookingID              string `json:"booking_id"`
-	Amount                 int64  `json:"amount"`
-	Status                 string `json:"status"`
-	PlatformFeeKopecks     int64  `json:"platform_fee_kopecks,omitempty"`
-	CounterpartyNetKopecks int64  `json:"counterparty_net_kopecks,omitempty"`
+	PaymentID string `json:"payment_id"`
+	BookingID string `json:"booking_id"`
+	Status    string `json:"status"`
 }
 
 func buildOutboxEvent(p *domain.Payment, subject domain.OutboxSubject) (*domain.OutboxEvent, error) {
 	payload, err := json.Marshal(paymentEventPayload{
-		PaymentID:              p.ID,
-		BookingID:              p.BookingID,
-		Amount:                 p.Amount,
-		Status:                 p.Status.String(),
-		PlatformFeeKopecks:     p.PlatformFeeKopecks,
-		CounterpartyNetKopecks: p.CounterpartyNetKopecks,
+		PaymentID: p.ID,
+		BookingID: p.BookingID,
+		Status:    p.Status.String(),
 	})
 	if err != nil {
 		return nil, err

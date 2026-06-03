@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
@@ -21,7 +22,7 @@ const testHold = 24 * time.Hour
 // and a known hold duration, so accrual/reversal side-effects can be asserted.
 // activeProvider="" disables the provider-mismatch guard.
 func paymentUCWithLedger(repo *mockPaymentRepo, ledger *mockLedgerRepo, prov *mockPaymentProvider) *PaymentUseCase {
-	return NewPaymentUseCase(repo, &mockOutboxRepo{}, ledger, prov, "", "https://example.com/return", 1500, testHold)
+	return NewPaymentUseCase(repo, &mockOutboxRepo{}, ledger, prov, "", "https://example.com/return", 1500, testHold, zerolog.Nop())
 }
 
 // ── Accrual on payment success ────────────────────────────────────────────────
