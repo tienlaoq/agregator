@@ -4,11 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/rs/zerolog"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
@@ -59,6 +59,7 @@ type PayoutUseCase struct {
 
 	minPayoutKopecks int64
 	tickInterval     time.Duration
+	log              zerolog.Logger
 }
 
 // PayoutSchedulerConfig holds the scheduler tunables.
@@ -80,6 +81,7 @@ func NewPayoutUseCase(
 	prov provider.PaymentProvider,
 	activeProvider string,
 	cfg PayoutSchedulerConfig,
+	lg zerolog.Logger,
 ) *PayoutUseCase {
 	if cfg.MinPayoutKopecks <= 0 {
 		cfg.MinPayoutKopecks = 10000 // 100 rubles
@@ -95,6 +97,7 @@ func NewPayoutUseCase(
 		activeProvider:   activeProvider,
 		minPayoutKopecks: cfg.MinPayoutKopecks,
 		tickInterval:     cfg.TickInterval,
+		log:              lg.With().Str("component", "payout-usecase").Logger(),
 	}
 }
 
@@ -249,7 +252,7 @@ func (uc *PayoutUseCase) RunScheduler(ctx context.Context) error {
 func (uc *PayoutUseCase) reconcile(ctx context.Context) {
 	stuck, err := uc.payouts.ListPendingOlderThan(ctx, reconcileMinAge, reconcileBatchLimit)
 	if err != nil {
-		slog.Error("payout reconcile: list pending failed", "err", err)
+		uc.log.Error().Err(err).Msg("payout reconcile: list pending failed")
 		return
 	}
 	for i := range stuck {
@@ -257,11 +260,11 @@ func (uc *PayoutUseCase) reconcile(ctx context.Context) {
 			return
 		}
 		if err := uc.reconcileOne(ctx, &stuck[i]); err != nil {
-			slog.Error("payout reconcile: one failed",
-				"payout_id", stuck[i].ID,
-				"idempotency_key", stuck[i].IdempotencyKey,
-				"err", err,
-			)
+			uc.log.Error().
+				Str("payout_id", stuck[i].ID).
+				Str("idempotency_key", stuck[i].IdempotencyKey).
+				Err(err).
+				Msg("payout reconcile: one failed")
 		}
 	}
 }
@@ -306,8 +309,10 @@ func (uc *PayoutUseCase) reconcileOne(ctx context.Context, p *domain.Payout) err
 	})
 	if err != nil {
 		if errors.Is(err, provider.ErrTransient) {
-			slog.Warn("payout reconcile: still transient — will retry",
-				"payout_id", p.ID, "err", err)
+			uc.log.Warn().
+				Str("payout_id", p.ID).
+				Err(err).
+				Msg("payout reconcile: still transient — will retry")
 			return nil
 		}
 		_, markErr := uc.payouts.MarkFailedWithReversal(ctx, p.ID, err.Error(), time.Now())
@@ -331,11 +336,11 @@ func (uc *PayoutUseCase) reconcileOne(ctx context.Context, p *domain.Payout) err
 			return fmt.Errorf("reconcile mark failed: %w", err)
 		}
 	}
-	slog.Info("payout reconcile: recovered",
-		"payout_id", p.ID,
-		"provider_payout_id", result.ProviderPayoutID,
-		"status", string(result.Status),
-	)
+	uc.log.Info().
+		Str("payout_id", p.ID).
+		Str("provider_payout_id", result.ProviderPayoutID).
+		Str("status", string(result.Status)).
+		Msg("payout reconcile: recovered")
 	return nil
 }
 
@@ -347,7 +352,7 @@ func (uc *PayoutUseCase) tick(ctx context.Context) {
 
 	partners, err := uc.ledger.PartnersWithAvailableBalance(ctx, uc.minPayoutKopecks, batchLimit)
 	if err != nil {
-		slog.Error("payout scheduler: enumerate partners failed", "err", err)
+		uc.log.Error().Err(err).Msg("payout scheduler: enumerate partners failed")
 		return
 	}
 	for _, p := range partners {
@@ -355,11 +360,11 @@ func (uc *PayoutUseCase) tick(ctx context.Context) {
 			return
 		}
 		if err := uc.payoutPartner(ctx, p); err != nil {
-			slog.Error("payout scheduler: partner payout failed",
-				"partner_type", string(p.PartnerType),
-				"partner_id", p.PartnerID,
-				"err", err,
-			)
+			uc.log.Error().
+				Str("partner_type", string(p.PartnerType)).
+				Str("partner_id", p.PartnerID).
+				Err(err).
+				Msg("payout scheduler: partner payout failed")
 		}
 	}
 }
@@ -387,11 +392,11 @@ func (uc *PayoutUseCase) payoutPartner(ctx context.Context, ref domain.PartnerRe
 	method, err := uc.methods.GetActive(ctx, ref.PartnerType, ref.PartnerID)
 	if err != nil {
 		if status.Code(err) == codes.NotFound {
-			slog.Info("payout scheduler: partner has balance but no active method",
-				"partner_type", string(ref.PartnerType),
-				"partner_id", ref.PartnerID,
-				"available_kopecks", balance.AvailableKopecks,
-			)
+			uc.log.Info().
+				Str("partner_type", string(ref.PartnerType)).
+				Str("partner_id", ref.PartnerID).
+				Int64("available_kopecks", balance.AvailableKopecks).
+				Msg("payout scheduler: partner has balance but no active method")
 			return nil
 		}
 		return fmt.Errorf("get method: %w", err)
@@ -431,12 +436,12 @@ func (uc *PayoutUseCase) payoutPartner(ctx context.Context, ref domain.PartnerRe
 		// lock inside the repo refused the over-large payout — exactly the
 		// safety net we want.  Skip the partner; next tick re-reads balance.
 		if status.Code(err) == codes.FailedPrecondition {
-			slog.Info("payout scheduler: balance dropped before insert — skipping",
-				"partner_type", string(ref.PartnerType),
-				"partner_id", ref.PartnerID,
-				"planned_amount_kopecks", amount,
-				"err", err,
-			)
+			uc.log.Info().
+				Str("partner_type", string(ref.PartnerType)).
+				Str("partner_id", ref.PartnerID).
+				Int64("planned_amount_kopecks", amount).
+				Err(err).
+				Msg("payout scheduler: balance dropped before insert — skipping")
 			return nil
 		}
 		return fmt.Errorf("create pending payout: %w", err)
@@ -468,11 +473,11 @@ func (uc *PayoutUseCase) payoutPartner(ctx context.Context, ref domain.PartnerRe
 		// reconciliation loop will re-call CreatePayout with the SAME idempotency
 		// key — ЮKassa deduplicates and returns the existing payout if any.
 		if errors.Is(err, provider.ErrTransient) {
-			slog.Warn("payout: transient provider error — leaving pending for reconciliation",
-				"payout_id", payout.ID,
-				"idempotency_key", idempotencyKey,
-				"err", err,
-			)
+			uc.log.Warn().
+				Str("payout_id", payout.ID).
+				Str("idempotency_key", idempotencyKey).
+				Err(err).
+				Msg("payout: transient provider error — leaving pending for reconciliation")
 			return nil
 		}
 		// Permanent error (4xx, validation) — provider definitely rejected the
@@ -536,10 +541,10 @@ func (uc *PayoutUseCase) HandlePayoutWebhook(ctx context.Context, rawBody []byte
 		if status.Code(err) == codes.NotFound {
 			// Stale webhook for a payout we don't know about (cross-environment
 			// replay, manual provider-side payout).  Absorb silently.
-			slog.Warn("payout webhook: unknown provider payout id",
-				"object_id", event.ProviderPayoutID,
-				"event", event.RawEvent,
-			)
+			uc.log.Warn().
+				Str("object_id", event.ProviderPayoutID).
+				Str("event", event.RawEvent).
+				Msg("payout webhook: unknown provider payout id")
 			return event, nil
 		}
 		return event, fmt.Errorf("get payout: %w", err)
@@ -555,12 +560,12 @@ func (uc *PayoutUseCase) HandlePayoutWebhook(ctx context.Context, rawBody []byte
 	//
 	// In mock mode activeProvider is empty — skip the check to keep tests simple.
 	if uc.activeProvider != "" && p.ProviderName != uc.activeProvider {
-		slog.Warn("payout webhook: provider mismatch — ignoring",
-			"object_id", event.ProviderPayoutID,
-			"payout_provider", p.ProviderName,
-			"active_provider", uc.activeProvider,
-			"event", event.RawEvent,
-		)
+		uc.log.Warn().
+			Str("object_id", event.ProviderPayoutID).
+			Str("payout_provider", p.ProviderName).
+			Str("active_provider", uc.activeProvider).
+			Str("event", event.RawEvent).
+			Msg("payout webhook: provider mismatch — ignoring")
 		return event, status.Errorf(codes.FailedPrecondition,
 			"payout webhook provider mismatch: payout created by %q, active provider is %q",
 			p.ProviderName, uc.activeProvider,
@@ -605,7 +610,7 @@ func (uc *PayoutUseCase) StartSchedulerInBackground(parent context.Context) func
 	go func() {
 		defer close(h.done)
 		if err := uc.RunScheduler(ctx); err != nil && !errors.Is(err, context.Canceled) {
-			slog.Error("payout scheduler exited with error", "err", err)
+			uc.log.Error().Err(err).Msg("payout scheduler exited with error")
 		}
 	}()
 

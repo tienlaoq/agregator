@@ -14,17 +14,33 @@ import (
 )
 
 const (
-	handlerTimeout = 30 * time.Second
+	// handlerTimeout bounds a single delivery's processing time. It must exceed
+	// the provider refund retry budget — yookassa's retryAttempts (3) × per-call
+	// totalTimeout (10s) plus backoff ≈ 38s. At 30s the context cancelled the
+	// retry loop early and NATS redelivered after AckWait (60s) — correct, but
+	// wasteful. 45s lets the retry loop run to completion within a single
+	// delivery, and still sits comfortably under AckWait so a genuinely stuck
+	// handler is still redelivered.
+	handlerTimeout = 45 * time.Second
 
 	// bookingCancelledConsumer is the durable name for the push consumer that
 	// processes booking.cancelled events.  Changing this name creates a new
 	// consumer and orphans the old one — rename only with a coordinated migration.
 	bookingCancelledConsumer = "payment-booking-cancelled"
 
-	// dlqSubjectBookingCancelled is the NATS subject used to park messages that
-	// exhausted all delivery attempts.  The PAYMENTS_DLQ stream (created in
-	// main.go) captures everything under "dlq.payment.>".
-	dlqSubjectBookingCancelled = "dlq.payment.booking-cancelled"
+	// DLQSubjectPrefix is the NATS subject prefix for parked (dead-letter)
+	// payment messages that exhausted all delivery attempts. main.go wires the
+	// PAYMENTS_DLQ stream to DLQSubjectWildcard so it captures every subject
+	// below this prefix. Keeping the prefix here (not duplicated as a literal in
+	// main.go) means a rename touches exactly one place.
+	DLQSubjectPrefix = "dlq.payment."
+
+	// DLQSubjectWildcard is the stream filter that captures all DLQ subjects.
+	DLQSubjectWildcard = DLQSubjectPrefix + ">"
+
+	// dlqSubjectBookingCancelled is the concrete subject for parked
+	// booking.cancelled refund messages.
+	dlqSubjectBookingCancelled = DLQSubjectPrefix + "booking-cancelled"
 
 	// maxDeliver is the maximum number of times NATS will redeliver a message
 	// before the consumer considers it exhausted.  After the last attempt the

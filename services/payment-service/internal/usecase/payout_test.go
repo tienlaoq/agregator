@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
@@ -28,7 +29,7 @@ func testPayoutUseCase(
 	return NewPayoutUseCase(payouts, methods, ledger, prov, "yookassa", PayoutSchedulerConfig{
 		MinPayoutKopecks: 10000,
 		TickInterval:     time.Hour,
-	})
+	}, zerolog.Nop())
 }
 
 func cardMethod(partnerType domain.PartnerType, partnerID string) *domain.PayoutMethod {
@@ -530,7 +531,7 @@ func TestHandlePayoutWebhook_ProviderMismatch_Rejected(t *testing.T) {
 	}}
 
 	// Active provider is now t-bank; the row says yookassa.
-	uc := NewPayoutUseCase(payouts, &mockPayoutMethodRepo{}, &mockLedgerRepo{}, prov, "tbank", PayoutSchedulerConfig{})
+	uc := NewPayoutUseCase(payouts, &mockPayoutMethodRepo{}, &mockLedgerRepo{}, prov, "tbank", PayoutSchedulerConfig{}, zerolog.Nop())
 
 	_, err := uc.HandlePayoutWebhook(context.Background(), []byte(`{}`))
 	require.Error(t, err)
@@ -556,7 +557,7 @@ func TestHandlePayoutWebhook_EmptyActiveProvider_BypassesGuard(t *testing.T) {
 	}}
 
 	// activeProvider="" — guard skipped.
-	uc := NewPayoutUseCase(payouts, &mockPayoutMethodRepo{}, &mockLedgerRepo{}, prov, "", PayoutSchedulerConfig{})
+	uc := NewPayoutUseCase(payouts, &mockPayoutMethodRepo{}, &mockLedgerRepo{}, prov, "", PayoutSchedulerConfig{}, zerolog.Nop())
 
 	_, err := uc.HandlePayoutWebhook(context.Background(), []byte(`{}`))
 	require.NoError(t, err)

@@ -2,8 +2,8 @@ package grpc
 
 import (
 	"context"
-	"log/slog"
 
+	"github.com/rs/zerolog"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	paymentv1 "github.com/tienlao/agregator/gen/go/payment/v1"
@@ -15,10 +15,15 @@ type Server struct {
 	paymentv1.UnimplementedPaymentServiceServer
 	uc     *usecase.PaymentUseCase
 	payout *usecase.PayoutUseCase
+	log    zerolog.Logger
 }
 
-func NewServer(uc *usecase.PaymentUseCase, payout *usecase.PayoutUseCase) *Server {
-	return &Server{uc: uc, payout: payout}
+func NewServer(uc *usecase.PaymentUseCase, payout *usecase.PayoutUseCase, lg zerolog.Logger) *Server {
+	return &Server{
+		uc:     uc,
+		payout: payout,
+		log:    lg.With().Str("component", "payment-grpc").Logger(),
+	}
 }
 
 func (s *Server) CreatePayment(ctx context.Context, req *paymentv1.CreatePaymentRequest) (*paymentv1.PaymentResponse, error) {
@@ -93,20 +98,20 @@ func (s *Server) HandleWebhook(ctx context.Context, req *paymentv1.WebhookReques
 				objectID = payoutEvent.ProviderPayoutID
 				objectStatus = string(payoutEvent.Status)
 			}
-			slog.Error("handle payout webhook",
-				"event", rawEvent,
-				"object_id", objectID,
-				"object_status", objectStatus,
-				"err", perr,
-			)
+			s.log.Error().
+				Str("event", rawEvent).
+				Str("object_id", objectID).
+				Str("object_status", objectStatus).
+				Err(perr).
+				Msg("handle payout webhook")
 			return &paymentv1.WebhookResponse{Ok: false}, nil
 		}
 		if payoutEvent != nil {
-			slog.Info("processed payout webhook",
-				"event", payoutEvent.RawEvent,
-				"object_id", payoutEvent.ProviderPayoutID,
-				"object_status", string(payoutEvent.Status),
-			)
+			s.log.Info().
+				Str("event", payoutEvent.RawEvent).
+				Str("object_id", payoutEvent.ProviderPayoutID).
+				Str("object_status", string(payoutEvent.Status)).
+				Msg("processed payout webhook")
 			return &paymentv1.WebhookResponse{Ok: true}, nil
 		}
 	}
@@ -116,24 +121,24 @@ func (s *Server) HandleWebhook(ctx context.Context, req *paymentv1.WebhookReques
 		// Log with whatever fields the provider managed to populate before the
 		// error (event may be nil if ParseWebhook itself failed).
 		if event != nil {
-			slog.Error("handle webhook",
-				"event", event.RawEvent,
-				"object_id", event.ProviderPaymentID,
-				"object_status", event.RawProviderStatus,
-				"err", err,
-			)
+			s.log.Error().
+				Str("event", event.RawEvent).
+				Str("object_id", event.ProviderPaymentID).
+				Str("object_status", event.RawProviderStatus).
+				Err(err).
+				Msg("handle webhook")
 		} else {
-			slog.Error("handle webhook", "err", err)
+			s.log.Error().Err(err).Msg("handle webhook")
 		}
 		return &paymentv1.WebhookResponse{Ok: false}, nil
 	}
 
 	// Permitted fields only — see policy above.
-	slog.Info("processed webhook",
-		"event", event.RawEvent,
-		"object_id", event.ProviderPaymentID,
-		"object_status", event.RawProviderStatus,
-	)
+	s.log.Info().
+		Str("event", event.RawEvent).
+		Str("object_id", event.ProviderPaymentID).
+		Str("object_status", event.RawProviderStatus).
+		Msg("processed webhook")
 
 	return &paymentv1.WebhookResponse{Ok: true}, nil
 }

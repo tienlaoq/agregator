@@ -65,7 +65,7 @@ func main() {
 	// PAYMENTS_DLQ captures booking.cancelled messages that exhausted all delivery
 	// attempts.  The subscriber publishes them here after calling msg.Term() so
 	// they are never silently dropped and can be inspected / replayed by ops.
-	if err := natsutil.EnsureStream(js, "PAYMENTS_DLQ", []string{"dlq.payment.>"}); err != nil {
+	if err := natsutil.EnsureStream(js, "PAYMENTS_DLQ", []string{events.DLQSubjectWildcard}); err != nil {
 		log.Fatal().Err(err).Msg("failed to ensure PAYMENTS_DLQ stream")
 	}
 
@@ -95,11 +95,13 @@ func main() {
 		paymentRepo, outboxRepo, ledgerRepo,
 		paymentProvider, string(cfg.ActiveProvider),
 		cfg.PaymentReturnURL, cfg.PlatformFeeBPS, holdDuration,
+		log,
 	)
 	payoutUC := usecase.NewPayoutUseCase(
 		payoutRepo, payoutMethodRepo, ledgerRepo,
 		paymentProvider, string(cfg.ActiveProvider),
 		usecase.PayoutSchedulerConfig{},
+		log,
 	)
 	stopScheduler := payoutUC.StartSchedulerInBackground(ctx)
 	defer stopScheduler()
@@ -132,7 +134,7 @@ func main() {
 		grpcutil.ServiceTokenServerInterceptor(cfg.InternalServiceToken),
 	))
 	grpcServer := grpc.NewServer(srvOpts...)
-	paymentv1.RegisterPaymentServiceServer(grpcServer, delivery.NewServer(uc, payoutUC))
+	paymentv1.RegisterPaymentServiceServer(grpcServer, delivery.NewServer(uc, payoutUC, log))
 
 	lis, err := net.Listen("tcp", ":"+cfg.GRPCPort)
 	if err != nil {

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"testing"
 
+	"github.com/rs/zerolog"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
@@ -28,7 +29,7 @@ func testPaymentUseCaseWithProvider(t *testing.T, repo *mockPaymentRepo, outbox 
 	// it should call NewPaymentUseCase directly with a non-empty activeProvider.
 	// holdDuration=0 leaves the usecase using the 24h default; tests that need
 	// to observe the available_at value should call NewPaymentUseCase directly.
-	return NewPaymentUseCase(repo, outbox, &mockLedgerRepo{}, prov, "", "https://example.com/return", 1500, 0)
+	return NewPaymentUseCase(repo, outbox, &mockLedgerRepo{}, prov, "", "https://example.com/return", 1500, 0, zerolog.Nop())
 }
 
 // ── CreatePayment ─────────────────────────────────────────────────────────────
@@ -573,7 +574,7 @@ func TestHandleWebhook_ProviderMismatch(t *testing.T) {
 	// the webhook was parsed as a yookassa event — the check fires on name mismatch
 	// between what the webhook claims vs what the payment row records.
 	// Here we simulate: activeProvider=yookassa, payment stored as tbank.
-	uc := NewPaymentUseCase(repo, &mockOutboxRepo{}, &mockLedgerRepo{}, prov, "yookassa", "https://example.com/return", 1500, 0)
+	uc := NewPaymentUseCase(repo, &mockOutboxRepo{}, &mockLedgerRepo{}, prov, "yookassa", "https://example.com/return", 1500, 0, zerolog.Nop())
 	_, err := uc.HandleWebhook(context.Background(), rawWebhookBody)
 	require.Error(t, err)
 	// Must be FailedPrecondition so the gateway returns 4xx (not retried).
@@ -612,7 +613,7 @@ func TestHandleWebhook_ProviderMatch(t *testing.T) {
 			}, nil
 		},
 	}
-	uc := NewPaymentUseCase(repo, &mockOutboxRepo{}, &mockLedgerRepo{}, prov, "yookassa", "https://example.com/return", 1500, 0)
+	uc := NewPaymentUseCase(repo, &mockOutboxRepo{}, &mockLedgerRepo{}, prov, "yookassa", "https://example.com/return", 1500, 0, zerolog.Nop())
 	_, err := uc.HandleWebhook(context.Background(), rawWebhookBody)
 	require.NoError(t, err)
 	require.True(t, updateCalled, "UpdateStatusWithOutbox must be called when providers match")
