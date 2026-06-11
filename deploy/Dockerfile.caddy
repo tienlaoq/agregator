@@ -1,0 +1,11 @@
+# Custom Caddy image bundling the Cloudflare DNS provider so ACME DNS-01
+# challenges can be solved through the Cloudflare API. This is required because
+# the zones are proxied behind Cloudflare's orange cloud, where an HTTP-01
+# challenge would be intercepted at the CF edge and never reach Caddy.
+#
+# Build is wired from deploy/docker-compose.yml (service "caddy", profile edge).
+FROM caddy:2-builder AS builder
+RUN xcaddy build --with github.com/caddy-dns/cloudflare
+
+FROM caddy:2-alpine
+COPY --from=builder /usr/bin/caddy /usr/bin/caddy

@@ -21,6 +21,7 @@ import (
 	"github.com/tienlao/agregator/pkg/auth"
 	pkgerr "github.com/tienlao/agregator/pkg/errors"
 	"github.com/tienlao/agregator/services/auth-service/internal/domain"
+	"github.com/tienlao/agregator/services/auth-service/internal/kpi"
 )
 
 type argon2Params struct {
@@ -259,6 +260,10 @@ func (uc *AuthUseCase) Register(ctx context.Context, in RegisterInput) (*AuthRes
 		return nil, pkgerr.Internal("ошибка при создании пользователя")
 	}
 
+	// KPI: аккаунт создан (credential + user) — ошибка выдачи токенов ниже
+	// не отменяет факт регистрации.
+	kpi.Registration("password")
+
 	tokens, err := uc.generateTokenPair(ctx, userResp.ID, in.Email, in.Role)
 	if err != nil {
 		return nil, err
@@ -356,6 +361,7 @@ func (uc *AuthUseCase) OAuthLogin(ctx context.Context, in OAuthInput) (*OAuthRes
 				cred.Email = in.Email
 			}
 		}
+		kpi.Login("oauth_"+in.Provider, true)
 		return uc.issueOAuthTokens(ctx, cred.UserID, false)
 	}
 
@@ -389,10 +395,12 @@ func (uc *AuthUseCase) OAuthLogin(ctx context.Context, in OAuthInput) (*OAuthRes
 					if ferr != nil {
 						return nil, fmt.Errorf("link oauth concurrent race: %w", ferr)
 					}
+					kpi.Login("oauth_"+in.Provider, true)
 					return uc.issueOAuthTokens(ctx, linked.UserID, false)
 				}
 				return nil, fmt.Errorf("link oauth: %w", cerr)
 			}
+			kpi.Login("oauth_"+in.Provider, true)
 			return uc.issueOAuthTokens(ctx, existingCred.UserID, false)
 		}
 	} else {
@@ -449,10 +457,14 @@ func (uc *AuthUseCase) OAuthLogin(ctx context.Context, in OAuthInput) (*OAuthRes
 			if ferr != nil {
 				return nil, fmt.Errorf("oauth concurrent race recovery: %w", ferr)
 			}
+			kpi.Login("oauth_"+in.Provider, true)
 			return uc.issueOAuthTokens(ctx, existing.UserID, false)
 		}
 		return nil, fmt.Errorf("create oauth credential: %w", err)
 	}
+
+	// KPI: новый аккаунт через OAuth — это регистрация, не логин.
+	kpi.Registration("oauth_" + in.Provider)
 
 	// New user: role is always "user" and is already known — no extra GetUser call needed.
 	tokens, err := uc.generateTokenPair(ctx, userResp.ID, registrationEmail, "user")
@@ -512,6 +524,7 @@ func (uc *AuthUseCase) Login(ctx context.Context, email, password string) (*Auth
 	passwordOK := verifyPassword(password, hashToVerify)
 
 	if credErr != nil || !passwordOK {
+		kpi.Login("password", false)
 		return nil, pkgerr.Unauthenticated("invalid email or password")
 	}
 
@@ -520,6 +533,7 @@ func (uc *AuthUseCase) Login(ctx context.Context, email, password string) (*Auth
 	// but the check here makes the invariant readable and prevents a regression
 	// if verifyPassword is ever changed.
 	if !accountCredentialHasPassword(cred) {
+		kpi.Login("password", false)
 		return nil, pkgerr.Unauthenticated("invalid email or password")
 	}
 
@@ -533,6 +547,7 @@ func (uc *AuthUseCase) Login(ctx context.Context, email, password string) (*Auth
 		return nil, err
 	}
 
+	kpi.Login("password", true)
 	return &AuthResult{UserID: cred.UserID, Tokens: *tokens}, nil
 }
 

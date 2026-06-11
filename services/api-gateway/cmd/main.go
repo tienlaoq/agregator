@@ -11,6 +11,8 @@ import (
 
 	"github.com/rs/zerolog"
 	"github.com/tienlao/agregator/pkg/logger"
+	pkgmetrics "github.com/tienlao/agregator/pkg/metrics"
+	gwmetrics "github.com/tienlao/agregator/services/api-gateway/internal/metrics"
 	"github.com/tienlao/agregator/services/api-gateway/internal/telemetry"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 )
@@ -49,12 +51,24 @@ func main() {
 		log.Fatal().Err(err).Msg("router build failed")
 	}
 
+	// ── Internal observability listener (never published on the host) ─────
+	go func() {
+		addr := pkgmetrics.AddrFromEnv()
+		log.Info().Str("addr", addr).Msg("metrics listener starting")
+		if err := pkgmetrics.ServeRegistry(rootCtx, addr, gwmetrics.Registry(), nil); err != nil {
+			log.Error().Err(err).Msg("metrics listener failed")
+		}
+	}()
+
 	// ── HTTP server ────────────────────────────────────────────────────────
 	var httpHandler http.Handler = r
 	if strings.TrimSpace(os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT")) != "" {
 		httpHandler = otelhttp.NewHandler(r, "api-gateway",
+			// WebSocket-апгрейды идут мимо otelhttp: его ResponseWriter не
+			// реализует http.Hijacker, из-за чего gorilla возвращает 500 на
+			// каждый /ws. Спан на долгоживущий сокет всё равно бесполезен.
 			otelhttp.WithFilter(func(req *http.Request) bool {
-				return req.URL.Path != "/metrics"
+				return !strings.EqualFold(req.Header.Get("Upgrade"), "websocket")
 			}),
 		)
 	}
@@ -113,7 +127,7 @@ func logConfig(log zerolog.Logger, cfg Config) {
 		Str("notification_addr", cfg.NotificationAddr).
 		Bool("redis", cfg.RedisAddr != "").
 		Bool("nats", cfg.NATSUrl != "").
-		Bool("google_oauth", cfg.GoogleClientID != "").
 		Bool("vk_oauth", cfg.VKClientID != "").
+		Bool("yandex_oauth", cfg.YandexClientID != "").
 		Msg("config loaded")
 }

@@ -17,7 +17,6 @@ import (
 	authv1 "github.com/tienlao/agregator/gen/go/auth/v1"
 	"github.com/tienlao/agregator/services/api-gateway/internal/apicatalog"
 	"golang.org/x/oauth2"
-	"golang.org/x/oauth2/google"
 )
 
 // vkHTTPTimeout is the end-to-end deadline for VK ID API calls (token
@@ -81,18 +80,18 @@ const (
 )
 
 type OAuthConfig struct {
-	GoogleClientID     string
-	GoogleClientSecret string
 	VKClientID         string
 	VKClientSecret     string
+	YandexClientID     string
+	YandexClientSecret string
 	BaseURL            string
 	FrontendURL        string
 }
 
 type OAuthHandler struct {
 	authClient   authv1.AuthServiceClient
-	google       *oauth2.Config
 	vk           *oauth2.Config
+	yandex       *oauth2.Config
 	vkClient     *http.Client // dedicated client for VK ID API — never http.DefaultClient
 	frontURL     string
 	secureCookie bool // true when BASE_URL is https — sets Secure flag on state cookie
@@ -146,16 +145,6 @@ func NewOAuthHandler(log zerolog.Logger, authClient authv1.AuthServiceClient, cf
 		log:          log,
 	}
 
-	if cfg.GoogleClientID != "" {
-		h.google = &oauth2.Config{
-			ClientID:     cfg.GoogleClientID,
-			ClientSecret: cfg.GoogleClientSecret,
-			RedirectURL:  baseURL + "/api/v1/auth/google/callback",
-			Scopes:       []string{"openid", "email", "profile"},
-			Endpoint:     google.Endpoint,
-		}
-	}
-
 	if cfg.VKClientID != "" {
 		h.vk = &oauth2.Config{
 			ClientID:     cfg.VKClientID,
@@ -169,11 +158,24 @@ func NewOAuthHandler(log zerolog.Logger, authClient authv1.AuthServiceClient, cf
 		}
 	}
 
+	if cfg.YandexClientID != "" {
+		h.yandex = &oauth2.Config{
+			ClientID:     cfg.YandexClientID,
+			ClientSecret: cfg.YandexClientSecret,
+			RedirectURL:  baseURL + "/api/v1/auth/yandex/callback",
+			Scopes:       []string{"login:email", "login:info"},
+			Endpoint: oauth2.Endpoint{
+				AuthURL:  "https://oauth.yandex.ru/authorize",
+				TokenURL: "https://oauth.yandex.ru/token",
+			},
+		}
+	}
+
 	return h, nil
 }
 
 // setStateCookie writes a provider-scoped OAuth state cookie.
-// Using a distinct name per provider prevents a parallel Google + VK login
+// Using a distinct name per provider prevents a parallel VK + Yandex login
 // flow from overwriting each other's state and causing spurious state_mismatch
 // errors at callback time.
 // Secure is set to true automatically when the gateway's BASE_URL uses https —
@@ -244,84 +246,6 @@ func generatePKCE() (verifier, challenge string, err error) {
 	sum := sha256.Sum256([]byte(verifier))
 	challenge = base64.RawURLEncoding.EncodeToString(sum[:])
 	return
-}
-
-// --- Google ---
-
-func (h *OAuthHandler) GoogleRedirect(w http.ResponseWriter, r *http.Request) {
-	if h.google == nil {
-		writeCatalog(w, apicatalog.GatewayOauthGoogleNotConfigured)
-		return
-	}
-	state, err := generateState()
-	if err != nil {
-		h.log.Error().Err(err).Msg("google redirect: failed to generate state")
-		writeCatalog(w, apicatalog.GatewayUpstreamInternal)
-		return
-	}
-	h.setStateCookie(w, "google_oauth_state", state)
-	http.Redirect(w, r, h.google.AuthCodeURL(state), http.StatusTemporaryRedirect)
-}
-
-func (h *OAuthHandler) GoogleCallback(w http.ResponseWriter, r *http.Request) {
-	if h.google == nil {
-		writeCatalog(w, apicatalog.GatewayOauthGoogleNotConfigured)
-		return
-	}
-
-	cookie, err := r.Cookie("google_oauth_state")
-	if err != nil || cookie.Value != r.URL.Query().Get("state") {
-		h.redirectError(w, r, oauthErrStateMismatch, err)
-		return
-	}
-
-	code := r.URL.Query().Get("code")
-	if code == "" {
-		h.redirectError(w, r, oauthErrDenied, nil)
-		return
-	}
-
-	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
-	defer cancel()
-
-	token, err := h.google.Exchange(ctx, code)
-	if err != nil {
-		h.redirectError(w, r, oauthErrExchangeFailed, err)
-		return
-	}
-
-	userInfo, err := fetchGoogleUserInfo(ctx, h.google, token)
-	if err != nil {
-		h.redirectError(w, r, oauthErrUserInfoFailed, err)
-		return
-	}
-
-	h.oauthLogin(w, r, "google", userInfo.ID, userInfo.Email, userInfo.VerifiedEmail, userInfo.Name, userInfo.Picture)
-}
-
-type googleUserInfo struct {
-	ID            string `json:"id"`
-	Email         string `json:"email"`
-	// VerifiedEmail is set by Google when the address has passed their verification
-	// flow. Only when true may the email be used to link to an existing account.
-	VerifiedEmail bool   `json:"verified_email"`
-	Name          string `json:"name"`
-	Picture       string `json:"picture"`
-}
-
-func fetchGoogleUserInfo(ctx context.Context, cfg *oauth2.Config, token *oauth2.Token) (*googleUserInfo, error) {
-	client := cfg.Client(ctx, token)
-	resp, err := client.Get("https://www.googleapis.com/oauth2/v2/userinfo")
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	var info googleUserInfo
-	if err := json.NewDecoder(resp.Body).Decode(&info); err != nil {
-		return nil, err
-	}
-	return &info, nil
 }
 
 // --- VK ---
@@ -403,7 +327,7 @@ func (h *OAuthHandler) VKCallback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Get user info from VK ID
-	vkUser, err := fetchVKIDUserInfo(ctx, h.vkClient, vkTokenResp.AccessToken)
+	vkUser, err := fetchVKIDUserInfo(ctx, h.vkClient, h.vk.ClientID, vkTokenResp.AccessToken)
 	if err != nil {
 		h.redirectError(w, r, oauthErrUserInfoFailed, err)
 		return
@@ -467,10 +391,10 @@ type vkIDUserInfo struct {
 	Avatar    string `json:"avatar"`
 }
 
-func fetchVKIDUserInfo(ctx context.Context, client *http.Client, accessToken string) (*vkIDUserInfo, error) {
+func fetchVKIDUserInfo(ctx context.Context, client *http.Client, clientID, accessToken string) (*vkIDUserInfo, error) {
 	form := url.Values{
 		"access_token": {accessToken},
-		"client_id":    {},
+		"client_id":    {clientID},
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://id.vk.com/oauth2/user_info",
 		strings.NewReader(form.Encode()))
@@ -492,6 +416,110 @@ func fetchVKIDUserInfo(ctx context.Context, client *http.Client, accessToken str
 		return nil, err
 	}
 	return &result.User, nil
+}
+
+// --- Yandex ---
+
+func (h *OAuthHandler) YandexRedirect(w http.ResponseWriter, r *http.Request) {
+	if h.yandex == nil {
+		writeCatalog(w, apicatalog.GatewayOauthYandexNotConfigured)
+		return
+	}
+	state, err := generateState()
+	if err != nil {
+		h.log.Error().Err(err).Msg("yandex redirect: failed to generate state")
+		writeCatalog(w, apicatalog.GatewayUpstreamInternal)
+		return
+	}
+	h.setStateCookie(w, "yandex_oauth_state", state)
+	http.Redirect(w, r, h.yandex.AuthCodeURL(state), http.StatusTemporaryRedirect)
+}
+
+func (h *OAuthHandler) YandexCallback(w http.ResponseWriter, r *http.Request) {
+	if h.yandex == nil {
+		writeCatalog(w, apicatalog.GatewayOauthYandexNotConfigured)
+		return
+	}
+
+	cookie, err := r.Cookie("yandex_oauth_state")
+	if err != nil || cookie.Value != r.URL.Query().Get("state") {
+		h.redirectError(w, r, oauthErrStateMismatch, err)
+		return
+	}
+
+	code := r.URL.Query().Get("code")
+	if code == "" {
+		h.redirectError(w, r, oauthErrDenied, nil)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+
+	token, err := h.yandex.Exchange(ctx, code)
+	if err != nil {
+		h.redirectError(w, r, oauthErrExchangeFailed, err)
+		return
+	}
+
+	userInfo, err := fetchYandexUserInfo(ctx, token.AccessToken)
+	if err != nil {
+		h.redirectError(w, r, oauthErrUserInfoFailed, err)
+		return
+	}
+
+	name := strings.TrimSpace(userInfo.RealName)
+	if name == "" {
+		name = userInfo.DisplayName
+	}
+
+	avatar := ""
+	if userInfo.DefaultAvatarID != "" && !userInfo.IsAvatarEmpty {
+		avatar = "https://avatars.yandex.net/get-yapic/" + userInfo.DefaultAvatarID + "/islands-200"
+	}
+
+	// Yandex returns default_email only when the user granted login:email scope and
+	// has a confirmed address on file — any non-empty value can be treated as verified.
+	emailVerified := userInfo.DefaultEmail != ""
+	h.oauthLogin(w, r, "yandex", userInfo.ID, userInfo.DefaultEmail, emailVerified, name, avatar)
+}
+
+type yandexUserInfo struct {
+	ID              string `json:"id"`
+	Login           string `json:"login"`
+	DefaultEmail    string `json:"default_email"`
+	RealName        string `json:"real_name"`
+	DisplayName     string `json:"display_name"`
+	DefaultAvatarID string `json:"default_avatar_id"`
+	IsAvatarEmpty   bool   `json:"is_avatar_empty"`
+}
+
+// fetchYandexUserInfo calls https://login.yandex.ru/info with the OAuth access
+// token. Yandex requires the token to be passed via the `Authorization: OAuth …`
+// header (not Bearer) — this is documented in their identity API spec.
+func fetchYandexUserInfo(ctx context.Context, accessToken string) (*yandexUserInfo, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://login.yandex.ru/info?format=json", nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "OAuth "+accessToken)
+
+	client := &http.Client{Timeout: 8 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("yandex info: unexpected status %d", resp.StatusCode)
+	}
+
+	var info yandexUserInfo
+	if err := json.NewDecoder(resp.Body).Decode(&info); err != nil {
+		return nil, fmt.Errorf("yandex info: decode: %w", err)
+	}
+	return &info, nil
 }
 
 // --- common ---

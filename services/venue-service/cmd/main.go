@@ -18,6 +18,7 @@ import (
 	venuev1 "github.com/tienlao/agregator/gen/go/venue/v1"
 	"github.com/tienlao/agregator/pkg/grpcutil"
 	"github.com/tienlao/agregator/pkg/logger"
+	"github.com/tienlao/agregator/pkg/metrics"
 	"github.com/tienlao/agregator/pkg/natsutil"
 	"github.com/tienlao/agregator/pkg/postgres"
 	pkgredis "github.com/tienlao/agregator/pkg/redis"
@@ -53,6 +54,16 @@ func main() {
 	if err := dbmigrate.Up(ctx, cfg.Postgres.DSN(), migDir, log); err != nil {
 		log.Fatal().Err(err).Str("dir", migDir).Msg("postgres migrations failed")
 	}
+
+	m := metrics.New("venue-service")
+	m.RegisterPgxPool(pgPool)
+	go func() {
+		addr := metrics.AddrFromEnv()
+		log.Info().Str("addr", addr).Msg("metrics listener starting")
+		if err := m.Serve(ctx, addr, pgPool.Ping); err != nil {
+			log.Error().Err(err).Msg("metrics listener failed")
+		}
+	}()
 
 	rdb, err := pkgredis.NewClient(ctx, cfg.Redis)
 	if err != nil {
@@ -103,7 +114,7 @@ func main() {
 	reviewClient := reviewv1.NewReviewServiceClient(reviewConn)
 	log.Info().Str("addr", cfg.ReviewServiceAddr).Msg("review-service client ready")
 
-	reviewSub := events.NewSubscriber(js, reviewClient, uc, log)
+	reviewSub := events.NewSubscriber(js, reviewClient, uc, log, m)
 	if err := reviewSub.SubscribeReviewEvents(); err != nil {
 		log.Fatal().Err(err).Msg("failed to subscribe to review events")
 	}
@@ -123,6 +134,7 @@ func main() {
 		log.Fatal().Err(err).Msg("gRPC server transport config error")
 	}
 	srvOpts = append(srvOpts, grpc.ChainUnaryInterceptor(
+		m.UnaryServerInterceptor(), // outermost: observes codes after PgError mapping
 		grpcutil.SafePgErrorUnaryInterceptor(),
 	))
 	grpcServer := grpc.NewServer(srvOpts...)

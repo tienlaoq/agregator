@@ -17,6 +17,7 @@ import {
   Users,
   MapPin,
   ArrowRight,
+  Sparkles,
 } from "lucide-react"
 
 const pageUrl = `${siteUrl()}/about`
@@ -24,24 +25,17 @@ const pageUrl = `${siteUrl()}/about`
 export const metadata: Metadata = {
   title: "О нас — миссия и принципы БаняГид",
   description:
-    "БаняГид помогает находить и бронировать проверенные бани и сауны по всей России: честные отзывы, прозрачные цены и онлайн-оплата. Узнайте, как мы работаем и почему нам доверяют.",
+    "БаняГид — платформа для поиска и онлайн-бронирования бань и саун. Запускаемся: собираем проверенные заведения, выстраиваем систему честных отзывов и прозрачных цен.",
   alternates: { canonical: pageUrl },
   robots: { index: true, follow: true },
   openGraph: {
     title: "О нас — миссия и принципы БаняГид",
     description:
-      "Платформа для поиска и бронирования бань и саун: проверенные заведения, реальные отзывы, удобная онлайн-бронь.",
+      "Платформа для поиска и бронирования бань и саун. Готовимся к запуску — рассказываем, как будем работать.",
     url: pageUrl,
     images: [{ url: `${siteUrl()}/og-home.jpg`, width: 1200, height: 630, alt: "БаняГид" }],
   },
 }
-
-const stats = [
-  { value: "500+", label: "проверенных заведений" },
-  { value: "60+", label: "городов России" },
-  { value: "10 000+", label: "броней оформлено" },
-  { value: "4,8", label: "средняя оценка площадок" },
-]
 
 const steps = [
   {
@@ -71,13 +65,13 @@ const values = [
     icon: BadgeCheck,
     title: "Только проверенные заведения",
     description:
-      "Каждая площадка проходит модерацию перед публикацией. Никаких объявлений из случайных групп.",
+      "Каждую площадку модерируем перед публикацией: реальный адрес, контакты, фото. Никаких объявлений из случайных групп.",
   },
   {
     icon: ShieldCheck,
     title: "Честные отзывы",
     description:
-      "Оценку оставляют гости с подтверждённым визитом — рейтингу можно доверять.",
+      "Оставить оценку сможет только гость с подтверждённым визитом — чтобы рейтингу можно было доверять.",
   },
   {
     icon: Wallet,
@@ -89,13 +83,13 @@ const values = [
     icon: HeartHandshake,
     title: "Сертифицированные мастера",
     description:
-      "Пар-мастера с подтверждённой квалификацией — для тех, кто ценит настоящую банную культуру.",
+      "Подключаем пар-мастеров с подтверждённой квалификацией — для тех, кто ценит настоящую банную культуру.",
   },
   {
     icon: CalendarCheck,
     title: "Бронирование 24/7",
     description:
-      "Свободные слоты обновляются в реальном времени. Меньше звонков — больше отдыха.",
+      "Свободные слоты в реальном времени. Меньше звонков — больше отдыха.",
   },
   {
     icon: Users,
@@ -112,7 +106,7 @@ const organizationJsonLd = {
   url: siteUrl(),
   logo: `${siteUrl()}/icon.png`,
   description:
-    "Агрегатор бань и саун России: поиск, отзывы и онлайн-бронирование проверенных заведений.",
+    "Платформа для поиска и онлайн-бронирования бань и саун в России. Готовится к запуску.",
   areaServed: { "@type": "Country", name: "Россия" },
 }
 
@@ -128,6 +122,10 @@ export default function AboutPage() {
       <section className="relative overflow-hidden">
         <div className="absolute inset-0 bg-gradient-to-b from-[#78350F] via-[#92400E] to-[#1C1917]" />
         <div className="relative mx-auto flex max-w-4xl flex-col items-center px-4 py-20 text-center md:py-28">
+          <span className="mb-6 inline-flex items-center gap-2 rounded-full border border-white/20 bg-white/10 px-4 py-1.5 text-sm font-medium text-white backdrop-blur">
+            <Sparkles className="h-4 w-4" />
+            Скоро запуск
+          </span>
           <div className="mb-6 flex h-16 w-16 items-center justify-center rounded-full bg-primary-foreground/15">
             <Flame className="h-8 w-8 text-primary-foreground" />
           </div>
@@ -135,8 +133,8 @@ export default function AboutPage() {
             Делаем поход в баню простым и предсказуемым
           </h1>
           <p className="max-w-2xl text-pretty text-lg text-white/90 md:text-xl">
-            БаняГид — это место, где легко найти, сравнить и забронировать проверенную баню или
-            сауну рядом с вами. Без звонков, без неизвестности, без переплат.
+            БаняГид — это платформа, где можно будет найти, сравнить и забронировать проверенную
+            баню или сауну рядом с вами. Без звонков, без неизвестности, без переплат.
           </p>
         </div>
       </section>
@@ -148,33 +146,20 @@ export default function AboutPage() {
             Наша миссия
           </span>
           <h2 className="mb-6 text-balance text-3xl font-bold text-foreground md:text-4xl">
-            Раньше выбрать баню было сложно. Мы это исправили
+            Выбрать баню должно быть так же просто, как заказать столик
           </h2>
           <div className="space-y-4 text-lg leading-relaxed text-muted-foreground">
             <p>
-              Чтобы попариться, людям приходилось обзванивать заведения, искать актуальные цены в
+              Чтобы попариться, людям приходится обзванивать заведения, искать актуальные цены в
               чатах и надеяться, что свободное время ещё осталось. Отзывов толком нет, фото
               устарели, а гарантий — никаких.
             </p>
             <p>
-              Мы собрали проверенные бани и сауны в одном месте: с реальными отзывами, актуальными
-              ценами и онлайн-бронированием. Теперь выбрать и забронировать парную так же просто, как
-              заказать столик в ресторане.
+              Мы собираем проверенные бани и сауны в одном месте: с реальными отзывами, актуальными
+              ценами и онлайн-бронированием. Сейчас платформа в стадии запуска — постепенно
+              подключаем первых партнёров и доводим сервис до того уровня, на котором не стыдно
+              рекомендовать друзьям.
             </p>
-          </div>
-        </div>
-      </section>
-
-      {/* Stats */}
-      <section className="bg-secondary/40 py-16">
-        <div className="container mx-auto px-4">
-          <div className="grid grid-cols-2 gap-8 text-center md:grid-cols-4">
-            {stats.map((s) => (
-              <div key={s.label}>
-                <div className="text-4xl font-bold text-primary md:text-5xl">{s.value}</div>
-                <div className="mt-2 text-sm text-muted-foreground">{s.label}</div>
-              </div>
-            ))}
           </div>
         </div>
       </section>
@@ -214,10 +199,10 @@ export default function AboutPage() {
         <div className="container mx-auto px-4">
           <div className="mb-12 text-center">
             <h2 className="mb-3 text-balance text-3xl font-bold text-foreground md:text-4xl">
-              Почему нам доверяют
+              Принципы платформы
             </h2>
             <p className="mx-auto max-w-xl text-pretty text-lg text-muted-foreground">
-              Принципы, на которых держится платформа
+              На чём строим сервис с первого дня
             </p>
           </div>
           <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">

@@ -10,6 +10,7 @@ import (
 	pkgerr "github.com/tienlao/agregator/pkg/errors"
 	"github.com/tienlao/agregator/services/review-service/internal/domain"
 	"github.com/tienlao/agregator/services/review-service/internal/events"
+	"github.com/tienlao/agregator/services/review-service/internal/kpi"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -175,6 +176,7 @@ func (uc *ReviewUseCase) CreateReview(ctx context.Context, in CreateReviewInput)
 		return nil, pkgerr.Internal("failed to commit transaction")
 	}
 
+	kpi.Review(in.Rating)
 	return review, nil
 }
 

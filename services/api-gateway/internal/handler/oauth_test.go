@@ -156,12 +156,12 @@ func TestNewOAuthHandler_trailingSlashStripped(t *testing.T) {
 	h, err := NewOAuthHandler(zerolog.Nop(), nil, OAuthConfig{
 		BaseURL:        "https://api.example.com/",
 		FrontendURL:    "https://app.example.com/",
-		GoogleClientID: "gid",
-		GoogleClientSecret: "gsecret",
+		VKClientID:     "vid",
+		VKClientSecret: "vsecret",
 	})
 	require.NoError(t, err)
-	require.NotNil(t, h.google)
-	assert.Equal(t, "https://api.example.com/api/v1/auth/google/callback", h.google.RedirectURL,
+	require.NotNil(t, h.vk)
+	assert.Equal(t, "https://api.example.com/api/v1/auth/vk/callback", h.vk.RedirectURL,
 		"trailing slash in BaseURL must not produce double slash in redirect URI")
 }
 
@@ -185,12 +185,12 @@ func TestSetStateCookie_insecureWhenHTTP(t *testing.T) {
 	require.NoError(t, err)
 
 	w := httptest.NewRecorder()
-	h.setStateCookie(w, "google_oauth_state", "teststate")
+	h.setStateCookie(w, "vk_oauth_state", "teststate")
 
 	cookies := w.Result().Cookies()
 	require.Len(t, cookies, 1)
 	c := cookies[0]
-	assert.Equal(t, "google_oauth_state", c.Name)
+	assert.Equal(t, "vk_oauth_state", c.Name)
 	assert.Equal(t, "teststate", c.Value)
 	assert.False(t, c.Secure, "Secure must be false when BASE_URL is http")
 	assert.True(t, c.HttpOnly)
@@ -206,7 +206,7 @@ func TestSetStateCookie_secureWhenHTTPS(t *testing.T) {
 	require.NoError(t, err)
 
 	w := httptest.NewRecorder()
-	h.setStateCookie(w, "google_oauth_state", "securestate")
+	h.setStateCookie(w, "vk_oauth_state", "securestate")
 
 	cookies := w.Result().Cookies()
 	require.Len(t, cookies, 1)

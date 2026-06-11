@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useMemo } from "react";
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { Activity, AlertTriangle, CheckCircle2, RefreshCw } from "lucide-react";
@@ -109,11 +108,17 @@ export default function AdminMetricsPage() {
   }, [hydrated, token, user, router]);
 
   const metricsQuery = useQuery({
-    queryKey: ["admin-metrics"],
+    queryKey: ["admin-metrics", token],
     enabled: !!token && user?.role === "admin",
     queryFn: async () => {
+      // Prometheus exposition — text, не JSON, поэтому не через fetchAPI.
+      // Эндпоинт за RequireRole(admin): публичный /metrics с гейтвея убран
+      // (живёт на внутреннем METRICS_ADDR-листенере для Prometheus).
       const base = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080";
-      const res = await fetch(`${base}/metrics`, { cache: "no-store" });
+      const res = await fetch(`${base}/api/v1/admin/metrics`, {
+        cache: "no-store",
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
       if (!res.ok) throw new Error(`metrics status ${res.status}`);
       return res.text();
     },
@@ -137,8 +142,19 @@ export default function AdminMetricsPage() {
       <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
         <h1 className="text-2xl font-bold">Метрики платформы</h1>
         <div className="flex gap-2">
-          <Button variant="outline" asChild>
-            <Link href="/metrics" target="_blank">Raw /metrics</Link>
+          <Button
+            variant="outline"
+            disabled={!metricsQuery.data}
+            onClick={() => {
+              if (!metricsQuery.data) return;
+              const url = URL.createObjectURL(
+                new Blob([metricsQuery.data], { type: "text/plain" }),
+              );
+              window.open(url, "_blank");
+              URL.revokeObjectURL(url);
+            }}
+          >
+            Raw /metrics
           </Button>
           <Button variant="outline" onClick={() => metricsQuery.refetch()} disabled={metricsQuery.isFetching}>
             <RefreshCw className={`mr-2 h-4 w-4 ${metricsQuery.isFetching ? "animate-spin" : ""}`} />

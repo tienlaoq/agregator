@@ -269,6 +269,9 @@ func (m *mockMasterClient) ListPublicMasters(ctx context.Context, in *masterv1.L
 func (m *mockMasterClient) GetPublicMaster(ctx context.Context, in *masterv1.GetPublicMasterRequest, opts ...grpc.CallOption) (*masterv1.MasterResponse, error) {
 	return nil, nil
 }
+func (m *mockMasterClient) GetMaster(ctx context.Context, in *masterv1.GetMasterRequest, opts ...grpc.CallOption) (*masterv1.MasterResponse, error) {
+	return nil, nil
+}
 func (m *mockMasterClient) ListForModeration(ctx context.Context, in *masterv1.ListForModerationRequest, opts ...grpc.CallOption) (*masterv1.ListMastersResponse, error) {
 	return nil, nil
 }

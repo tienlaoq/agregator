@@ -1,0 +1,56 @@
+# Caddyfile — edge reverse-proxy for the agregator platform.
+#
+# Routing is subdomain-based (matches FRONTEND_URL / BASE_URL in deploy/.env):
+#   {$APP_DOMAIN}  → frontend:3000     (Next.js)
+#   {$API_DOMAIN}  → api-gateway:8080  (chi router, serves /api/v1/*)
+#
+# No path rewriting: each subdomain is proxied wholesale, so OAuth redirect URIs
+# (<BASE_URL>/api/v1/auth/.../callback) and the payment webhook
+# (<BASE_URL>/api/v1/payments/webhook) keep working unchanged. CORS between the
+# two origins is handled by the gateway (CORS_ALLOWED_ORIGINS).
+{
+	# ACME registration contact / expiry notices.
+	email {$ACME_EMAIL}
+
+	# Issue and renew certificates via the Cloudflare DNS-01 challenge. DNS-01 is
+	# required when the zone is proxied through Cloudflare's orange cloud: an
+	# HTTP-01 challenge would terminate at the CF edge and never reach Caddy.
+	# Requires the caddy-dns/cloudflare module (see deploy/Dockerfile.caddy) and a
+	# scoped Cloudflare API token (Zone:DNS:Edit) supplied via CF_API_TOKEN.
+	acme_dns cloudflare {env.CF_API_TOKEN}
+
+	servers {
+		# All traffic arrives from Cloudflare edge IPs, so trust their
+		# X-Forwarded-For to recover the real visitor IP. This makes Caddy's
+		# access logs — and the X-Forwarded-For Caddy forwards to api-gateway —
+		# reflect the client rather than a CF node. The gateway then trusts
+		# Caddy's docker IP via TRUSTED_PROXY_CIDRS to complete the chain.
+		# Refresh these ranges from https://www.cloudflare.com/ips/ when they change.
+		trusted_proxies static \
+ 173.245.48.0/20 103.21.244.0/22 103.22.200.0/22 103.31.4.0/22 \
+ 141.101.64.0/18 108.162.192.0/18 190.93.240.0/20 188.114.96.0/20 \
+ 197.234.240.0/22 198.41.128.0/17 162.158.0.0/15 104.16.0.0/13 \
+ 104.24.0.0/14 172.64.0.0/13 131.0.72.0/22 \
+ 2400:cb00::/32 2606:4700::/32 2803:f800::/32 2405:b500::/32 \
+ 2405:8100::/32 2a06:98c0::/29 2c0f:f248::/32
+	}
+}
+
+# ── Frontend (Next.js) ──────────────────────────────────────────────────────
+{$APP_DOMAIN} {
+	encode zstd gzip
+	reverse_proxy frontend:3000
+}
+
+# ── API gateway (chi router serving /api/v1/*) ──────────────────────────────
+{$API_DOMAIN} {
+	encode zstd gzip
+
+	# Belt-and-suspenders: /metrics moved to the gateway's internal
+	# METRICS_ADDR listener, but block it at the edge too — Prometheus
+	# exposition leaks route patterns and traffic volumes.
+	@metrics path /metrics
+	respond @metrics 403
+
+	reverse_proxy api-gateway:8080
+}

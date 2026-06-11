@@ -12,6 +12,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/tienlao/agregator/services/payment-service/internal/domain"
+	"github.com/tienlao/agregator/services/payment-service/internal/kpi"
 	"github.com/tienlao/agregator/services/payment-service/internal/provider"
 )
 
@@ -297,6 +298,9 @@ func (uc *PaymentUseCase) HandleWebhook(ctx context.Context, rawBody []byte) (*d
 		// Already in a terminal state — duplicate delivery, absorb silently.
 		return event, nil
 	}
+	// KPI: считаем переход ровно один раз — updated=false (дубль вебхука)
+	// сюда не доходит.
+	kpi.Payment(string(event.Status))
 
 	// On terminal-success: credit the partner's ledger with their net share.
 	// Idempotent — the partial unique index on (payment_id) WHERE entry_type=accrual
@@ -410,6 +414,7 @@ func (uc *PaymentUseCase) RefundByBooking(ctx context.Context, bookingID string)
 		// the provider — no double-refund risk.
 		return fmt.Errorf("update payment status to refunded: %w", err)
 	}
+	kpi.Payment(string(domain.StatusRefunded))
 
 	// Reverse the partner's accrual.  Idempotent on (payment_id) via the
 	// partial unique index — retried refunds collapse to one reversal.

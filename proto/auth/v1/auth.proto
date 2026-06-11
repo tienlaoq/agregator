@@ -81,7 +81,7 @@ message LogoutRequest {
 }
 
 message OAuthLoginRequest {
-  string provider = 1;    // "google" or "vk"
+  string provider = 1;    // "vk" or "yandex"
   string provider_id = 2; // provider's unique user ID
   string email = 3;
   string name = 4;

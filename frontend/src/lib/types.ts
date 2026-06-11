@@ -578,8 +578,6 @@ export interface MasterProfile {
   city: string;
   /** ip | ooo | individual | self_employed — не отдаётся в публичном API каталога */
   payout_legal_form?: string;
-  /** ЮKassa account_id подключенного получателя для split-выплат. */
-  yookassa_seller_account_id?: string;
   payout_legal_name?: string;
   payout_inn?: string;
   payout_kpp?: string;
@@ -737,3 +735,98 @@ export interface SupportTicketsListResponse {
   tickets: SupportTicketAdmin[];
   total: number;
 }
+
+// ── Кабинет выплат партнёра (venue / master) ───────────────────────────────
+
+/** Способ выплаты партнёру. Реквизиты приходят только в маскированном виде. */
+export interface PayoutMethod {
+  id: string;
+  partner_type: "venue" | "master";
+  partner_id: string;
+  kind: "card" | "bank_account" | "sbp";
+  provider_name?: string;
+  // card
+  card_last4?: string;
+  card_brand?: string;
+  // bank_account
+  bank_bic?: string;
+  bank_account_masked?: string;
+  bank_name?: string;
+  recipient_name?: string;
+  // sbp
+  sbp_phone_masked?: string;
+  sbp_bank_id?: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
+/** Реквизиты для сохранения способа выплаты (PUT payout-method). */
+export interface SetPayoutMethodInput {
+  kind: "bank_account" | "sbp";
+  // bank_account
+  bank_bic?: string;
+  bank_account?: string;
+  bank_name?: string;
+  recipient_inn?: string;
+  recipient_kpp?: string;
+  recipient_name?: string;
+  // sbp
+  sbp_phone?: string;
+  sbp_bank_id?: string;
+}
+
+/** Баланс партнёра: total = весь долг, available = к выплате, held = на удержании. */
+export interface PartnerBalance {
+  partner_type: string;
+  partner_id: string;
+  total_kopecks: number;
+  available_kopecks: number;
+  held_kopecks: number;
+  last_entry_at?: string;
+}
+
+/** Строка журнала начислений (accrual | reversal | payout | adjustment). */
+export interface PartnerLedgerEntry {
+  id: number;
+  partner_type: string;
+  partner_id: string;
+  entry_type: "accrual" | "reversal" | "payout" | "adjustment";
+  amount_kopecks: number;
+  payment_id?: string;
+  payout_id?: string;
+  reverses_entry_id?: number;
+  reason?: string;
+  available_at?: string;
+  created_at?: string;
+}
+
+/** Исходящая выплата партнёру. */
+export interface PartnerPayout {
+  id: string;
+  partner_type: string;
+  partner_id: string;
+  amount_kopecks: number;
+  currency: string;
+  status: "pending" | "processing" | "succeeded" | "failed";
+  method_kind: string;
+  method_display: string;
+  provider_name?: string;
+  provider_payout_id?: string;
+  failure_reason?: string;
+  created_at?: string;
+  completed_at?: string;
+}
+
+export const PAYOUT_STATUS_LABELS: Record<string, string> = {
+  pending: "В очереди",
+  processing: "Обрабатывается",
+  succeeded: "Выплачено",
+  failed: "Ошибка",
+};
+
+export const LEDGER_ENTRY_LABELS: Record<string, string> = {
+  accrual: "Начисление",
+  reversal: "Возврат",
+  payout: "Выплата",
+  adjustment: "Корректировка",
+};

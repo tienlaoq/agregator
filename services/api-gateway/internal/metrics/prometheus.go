@@ -1,6 +1,9 @@
 package metrics
 
 import (
+	"bufio"
+	"errors"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -62,6 +65,17 @@ func (w *statusRecorder) WriteHeader(code int) {
 	w.ResponseWriter.WriteHeader(code)
 }
 
+// Hijack пробрасывает http.Hijacker нижележащего writer'а: без него gorilla
+// отвечает 500 на каждый WebSocket-апгрейд (/ws), потому что видит только
+// эту обёртку.
+func (w *statusRecorder) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	h, ok := w.ResponseWriter.(http.Hijacker)
+	if !ok {
+		return nil, nil, errors.New("metrics: underlying ResponseWriter does not implement http.Hijacker")
+	}
+	return h.Hijack()
+}
+
 func statusClass(code int) string {
 	if code == 0 {
 		code = http.StatusOK
@@ -84,10 +98,10 @@ func routeLabel(r *http.Request) string {
 			return p
 		}
 	}
-	if p := strings.TrimSpace(r.URL.Path); p != "" {
-		return p
-	}
-	return "/"
+	// No chi pattern means the request matched no route (404s, scanner bots).
+	// Raw paths here would grow label cardinality without bound, so clamp
+	// them all to a single value.
+	return "unmatched"
 }
 
 // HTTPMiddleware records RED-style metrics (rate, errors by class, duration).

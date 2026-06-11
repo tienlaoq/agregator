@@ -16,6 +16,7 @@ import (
 	userv1 "github.com/tienlao/agregator/gen/go/user/v1"
 	"github.com/tienlao/agregator/pkg/grpcutil"
 	"github.com/tienlao/agregator/pkg/logger"
+	"github.com/tienlao/agregator/pkg/metrics"
 	"github.com/tienlao/agregator/pkg/postgres"
 	"github.com/tienlao/agregator/services/user-service/config"
 	grpcdelivery "github.com/tienlao/agregator/services/user-service/internal/delivery/grpc"
@@ -41,6 +42,16 @@ func main() {
 	defer pool.Close()
 	log.Info().Msg("connected to postgres")
 
+	m := metrics.New("user-service")
+	m.RegisterPgxPool(pool)
+	go func() {
+		addr := metrics.AddrFromEnv()
+		log.Info().Str("addr", addr).Msg("metrics listener starting")
+		if err := m.Serve(ctx, addr, pool.Ping); err != nil {
+			log.Error().Err(err).Msg("metrics listener failed")
+		}
+	}()
+
 	repo := repository.NewPostgresUserRepository(pool)
 	uc := usecase.NewUserUseCase(repo)
 	userServer := grpcdelivery.NewUserServer(uc, log)
@@ -50,6 +61,7 @@ func main() {
 		log.Fatal().Err(err).Msg("gRPC server transport config error")
 	}
 	srvOpts = append(srvOpts, grpc.ChainUnaryInterceptor(
+		m.UnaryServerInterceptor(), // outermost: observes codes after PgError mapping
 		grpcutil.PgErrorUnaryInterceptor(),
 	))
 	grpcServer := grpc.NewServer(srvOpts...)

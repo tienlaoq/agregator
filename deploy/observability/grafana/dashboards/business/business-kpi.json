@@ -1,0 +1,222 @@
+{
+  "uid": "business-kpi",
+  "title": "Business KPI — брони, оплаты, регистрации, отзывы",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "1m",
+  "time": { "from": "now-24h", "to": "now" },
+  "templating": { "list": [] },
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Брони за 24 часа",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 5, "w": 5, "x": 0, "y": 0 },
+      "targets": [
+        { "refId": "A", "expr": "sum(increase(booking_service_bookings_total{event=\"created\"}[24h]))", "legendFormat": "создано" }
+      ],
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "fieldConfig": { "defaults": { "decimals": 0 }, "overrides": [] }
+    },
+    {
+      "type": "stat",
+      "title": "Успешность оплат (24ч)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 5, "w": 5, "x": 5, "y": 0 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(increase(payment_service_payments_total{status=\"succeeded\"}[24h])) / sum(increase(payment_service_payments_total{status=~\"succeeded|cancelled\"}[24h]))",
+          "legendFormat": "success rate"
+        }
+      ],
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "thresholds": { "mode": "absolute", "steps": [ { "color": "red", "value": null }, { "color": "yellow", "value": 0.9 }, { "color": "green", "value": 0.97 } ] }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Доля отмен (24ч)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 5, "w": 5, "x": 10, "y": 0 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(increase(booking_service_bookings_total{event=\"cancelled\"}[24h])) / sum(increase(booking_service_bookings_total{event=\"created\"}[24h]))",
+          "legendFormat": "отмены"
+        }
+      ],
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "yellow", "value": 0.25 }, { "color": "red", "value": 0.5 } ] }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Регистрации за 24 часа",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 5, "w": 5, "x": 15, "y": 0 },
+      "targets": [
+        { "refId": "A", "expr": "sum(increase(auth_service_registrations_total[24h]))", "legendFormat": "новые аккаунты" }
+      ],
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "fieldConfig": { "defaults": { "decimals": 0 }, "overrides": [] }
+    },
+    {
+      "type": "stat",
+      "title": "Средний рейтинг (7 дней)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 5, "w": 4, "x": 20, "y": 0 },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "(5*sum(increase(review_service_reviews_total{rating=\"5\"}[7d])) + 4*sum(increase(review_service_reviews_total{rating=\"4\"}[7d])) + 3*sum(increase(review_service_reviews_total{rating=\"3\"}[7d])) + 2*sum(increase(review_service_reviews_total{rating=\"2\"}[7d])) + 1*sum(increase(review_service_reviews_total{rating=\"1\"}[7d]))) / sum(increase(review_service_reviews_total{rating=~\"[1-5]\"}[7d]))",
+          "legendFormat": "avg"
+        }
+      ],
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 2, "min": 1, "max": 5,
+          "thresholds": { "mode": "absolute", "steps": [ { "color": "red", "value": null }, { "color": "yellow", "value": 3.5 }, { "color": "green", "value": 4.2 } ] }
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Брони по часам (created / confirmed / cancelled / completed)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 5 },
+      "targets": [
+        { "refId": "A", "expr": "sum by (event) (increase(booking_service_bookings_total[1h]))", "legendFormat": "{{event}}" }
+      ],
+      "fieldConfig": { "defaults": { "decimals": 0 }, "overrides": [] }
+    },
+    {
+      "type": "timeseries",
+      "title": "Платежи по часам (по статусам)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 5 },
+      "targets": [
+        { "refId": "A", "expr": "sum by (status) (increase(payment_service_payments_total[1h]))", "legendFormat": "{{status}}" }
+      ],
+      "fieldConfig": { "defaults": { "decimals": 0 }, "overrides": [] }
+    },
+    {
+      "type": "timeseries",
+      "title": "Регистрации и логины (по методам, в час)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 14 },
+      "targets": [
+        { "refId": "A", "expr": "sum by (method) (increase(auth_service_registrations_total[1h]))", "legendFormat": "регистрации {{method}}" },
+        { "refId": "B", "expr": "sum by (result) (increase(auth_service_logins_total[1h]))", "legendFormat": "логины {{result}}" }
+      ],
+      "fieldConfig": { "defaults": { "decimals": 0 }, "overrides": [] }
+    },
+    {
+      "type": "timeseries",
+      "title": "Отзывы по рейтингу (в день)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 14 },
+      "targets": [
+        { "refId": "A", "expr": "sum by (rating) (increase(review_service_reviews_total[1d]))", "legendFormat": "★{{rating}}" }
+      ],
+      "fieldConfig": { "defaults": { "decimals": 0 }, "overrides": [] }
+    },
+    {
+      "type": "row",
+      "title": "Выручка — точные данные из payment_db (рефанды выпадают автоматически: статус succeeded → refunded)",
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 23 },
+      "panels": []
+    },
+    {
+      "type": "stat",
+      "title": "Выручка сегодня",
+      "datasource": { "type": "postgres", "uid": "payments-db" },
+      "gridPos": { "h": 5, "w": 6, "x": 0, "y": 24 },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT COALESCE(sum(amount), 0) / 100.0 AS \"выручка\" FROM payments WHERE status = 'succeeded' AND created_at >= date_trunc('day', now())"
+        }
+      ],
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "fieldConfig": { "defaults": { "unit": "currencyRUB", "decimals": 0 }, "overrides": [] }
+    },
+    {
+      "type": "stat",
+      "title": "Выручка вчера",
+      "datasource": { "type": "postgres", "uid": "payments-db" },
+      "gridPos": { "h": 5, "w": 6, "x": 6, "y": 24 },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT COALESCE(sum(amount), 0) / 100.0 AS \"выручка\" FROM payments WHERE status = 'succeeded' AND created_at >= date_trunc('day', now() - interval '1 day') AND created_at < date_trunc('day', now())"
+        }
+      ],
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "fieldConfig": { "defaults": { "unit": "currencyRUB", "decimals": 0 }, "overrides": [] }
+    },
+    {
+      "type": "stat",
+      "title": "Выручка за 7 дней",
+      "datasource": { "type": "postgres", "uid": "payments-db" },
+      "gridPos": { "h": 5, "w": 6, "x": 12, "y": 24 },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT COALESCE(sum(amount), 0) / 100.0 AS \"выручка\" FROM payments WHERE status = 'succeeded' AND created_at >= now() - interval '7 days'"
+        }
+      ],
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "fieldConfig": { "defaults": { "unit": "currencyRUB", "decimals": 0 }, "overrides": [] }
+    },
+    {
+      "type": "stat",
+      "title": "Средний чек (7 дней)",
+      "datasource": { "type": "postgres", "uid": "payments-db" },
+      "gridPos": { "h": 5, "w": 6, "x": 18, "y": 24 },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT COALESCE(avg(amount), 0) / 100.0 AS \"чек\" FROM payments WHERE status = 'succeeded' AND created_at >= now() - interval '7 days'"
+        }
+      ],
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] } },
+      "fieldConfig": { "defaults": { "unit": "currencyRUB", "decimals": 0 }, "overrides": [] }
+    },
+    {
+      "type": "timeseries",
+      "title": "Выручка по дням",
+      "datasource": { "type": "postgres", "uid": "payments-db" },
+      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 29 },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT date_trunc('day', created_at) AS time, sum(amount) / 100.0 AS \"выручка\" FROM payments WHERE status = 'succeeded' AND $__timeFilter(created_at) GROUP BY 1 ORDER BY 1"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "currencyRUB", "decimals": 0, "custom": { "drawStyle": "bars", "fillOpacity": 60 } }, "overrides": [] }
+    }
+  ]
+}

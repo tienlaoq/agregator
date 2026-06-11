@@ -13,6 +13,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	reviewv1 "github.com/tienlao/agregator/gen/go/review/v1"
+	"github.com/tienlao/agregator/pkg/metrics"
 	"github.com/tienlao/agregator/pkg/natsutil"
 )
 
@@ -62,10 +63,11 @@ type Subscriber struct {
 	reviews ratingFetcher
 	venues  ratingUpdater
 	log     zerolog.Logger
+	m       *metrics.Metrics
 }
 
-func NewSubscriber(js nats.JetStreamContext, reviews ratingFetcher, venues ratingUpdater, log zerolog.Logger) *Subscriber {
-	return &Subscriber{js: js, reviews: reviews, venues: venues, log: log}
+func NewSubscriber(js nats.JetStreamContext, reviews ratingFetcher, venues ratingUpdater, log zerolog.Logger, m *metrics.Metrics) *Subscriber {
+	return &Subscriber{js: js, reviews: reviews, venues: venues, log: log, m: m}
 }
 
 // SubscribeReviewEvents подписывается на review.created долговечным push-консьюмером.
@@ -85,6 +87,10 @@ func (s *Subscriber) SubscribeReviewEvents() error {
 // и того же события (at-least-once) безопасна и не требует дедупликации по ReviewID:
 // повтор просто перезапишет тот же или более свежий агрегат.
 func (s *Subscriber) handleReviewCreated(msg *nats.Msg) {
+	start := time.Now()
+	result := metrics.NATSError
+	defer func() { s.m.ObserveNATS(subjectReviewCreated, result, time.Since(start)) }()
+
 	ctx, cancel := natsutil.MsgContext(msg, handlerTimeout)
 	defer cancel()
 	msgID := natsutil.MsgIDFromCtx(ctx)
@@ -100,6 +106,7 @@ func (s *Subscriber) handleReviewCreated(msg *nats.Msg) {
 	// Подписчик отвечает только за площадки. События по мастерам игнорируем
 	// (их рейтинг ведёт отдельный владелец), но Ack'аем — это не ошибка.
 	if evt.TargetType != targetTypeVenue {
+		result = metrics.NATSOk
 		_ = msg.Ack()
 		return
 	}
@@ -122,6 +129,7 @@ func (s *Subscriber) handleReviewCreated(msg *nats.Msg) {
 		// InvalidArgument/NotFound терминальны — ретрай не поможет, Ack.
 		if st, ok := status.FromError(err); ok && (st.Code() == codes.InvalidArgument || st.Code() == codes.NotFound) {
 			s.log.Warn().Err(err).Str("msg_id", msgID).Str("venue_id", evt.VenueID).Msg("update venue rating skipped (terminal)")
+			result = metrics.NATSOk
 			_ = msg.Ack()
 			return
 		}
@@ -136,5 +144,6 @@ func (s *Subscriber) handleReviewCreated(msg *nats.Msg) {
 		Float64("avg_rating", rating.GetAvgRating()).
 		Int32("review_count", rating.GetReviewCount()).
 		Msg("venue rating updated from review.created")
+	result = metrics.NATSOk
 	_ = msg.Ack()
 }

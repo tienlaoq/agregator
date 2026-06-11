@@ -23,6 +23,11 @@ import type {
   SupportTicketReplyRequest,
   SupportTicketReplyResponse,
   SupportTicketsListResponse,
+  PayoutMethod,
+  SetPayoutMethodInput,
+  PartnerBalance,
+  PartnerLedgerEntry,
+  PartnerPayout,
 } from "./types";
 import { userMessageForGatewayError } from "./api-user-messages";
 import { packCitiesForQuery } from "./cities-http";
@@ -669,6 +674,65 @@ export async function addBookingStaffNote(
     `/api/v1/owner/venues/${encodeURIComponent(venueId)}/bookings/${encodeURIComponent(bookingId)}/staff-notes`,
     { method: "POST", body: JSON.stringify({ body }) },
   );
+}
+
+// ── Кабинет выплат заведения (только владелец venue) ────────────────────────
+
+export async function getVenuePayoutMethod(
+  venueId: string,
+): Promise<PayoutMethod | null> {
+  const data = await fetchAPI<{ payout_method: PayoutMethod | null }>(
+    `/api/v1/owner/venues/${encodeURIComponent(venueId)}/payout-method`,
+  );
+  return data.payout_method ?? null;
+}
+
+export async function setVenuePayoutMethod(
+  venueId: string,
+  input: SetPayoutMethodInput,
+): Promise<PayoutMethod> {
+  const data = await fetchAPI<{ payout_method: PayoutMethod }>(
+    `/api/v1/owner/venues/${encodeURIComponent(venueId)}/payout-method`,
+    { method: "PUT", body: JSON.stringify(input) },
+  );
+  return data.payout_method;
+}
+
+export async function getVenueBalance(
+  venueId: string,
+): Promise<PartnerBalance> {
+  const data = await fetchAPI<{ balance: PartnerBalance }>(
+    `/api/v1/owner/venues/${encodeURIComponent(venueId)}/balance`,
+  );
+  return data.balance;
+}
+
+export async function listVenueLedger(
+  venueId: string,
+  params?: { limit?: number; offset?: number },
+): Promise<PartnerLedgerEntry[]> {
+  const search = new URLSearchParams();
+  if (params?.limit) search.set("limit", String(params.limit));
+  if (params?.offset) search.set("offset", String(params.offset));
+  const qs = search.toString();
+  const data = await fetchAPI<{ entries: PartnerLedgerEntry[] }>(
+    `/api/v1/owner/venues/${encodeURIComponent(venueId)}/ledger${qs ? `?${qs}` : ""}`,
+  );
+  return data.entries ?? [];
+}
+
+export async function listVenuePayouts(
+  venueId: string,
+  params?: { limit?: number; offset?: number },
+): Promise<PartnerPayout[]> {
+  const search = new URLSearchParams();
+  if (params?.limit) search.set("limit", String(params.limit));
+  if (params?.offset) search.set("offset", String(params.offset));
+  const qs = search.toString();
+  const data = await fetchAPI<{ payouts: PartnerPayout[] }>(
+    `/api/v1/owner/venues/${encodeURIComponent(venueId)}/payouts${qs ? `?${qs}` : ""}`,
+  );
+  return data.payouts ?? [];
 }
 
 export async function createVenue(data: CreateVenueRequest): Promise<Venue> {

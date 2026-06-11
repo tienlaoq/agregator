@@ -23,12 +23,13 @@ import (
 )
 
 type VenueHandler struct {
-	client          venuev1.VenueServiceClient
-	userClient      userv1.UserServiceClient // optional; used for staff invite by email
-	crm             crmv1.CRMServiceClient   // staff & CRM tasks (extracted from venue-service)
-	storage         storage.Uploader
-	suspendNotifier *suspendnotify.Sender // optional; письма владельцу и персоналу при приостановке (SMTP)
-	staffNotifier   staffInviteNotifier   // optional; in-app "колокольчик" при добавлении в персонал
+	client             venuev1.VenueServiceClient
+	userClient         userv1.UserServiceClient // optional; used for staff invite by email
+	crm                crmv1.CRMServiceClient   // staff & CRM tasks (extracted from venue-service)
+	storage            storage.Uploader
+	suspendNotifier    *suspendnotify.Sender   // optional; письма владельцу и персоналу при приостановке (SMTP)
+	staffNotifier      staffInviteNotifier     // optional; in-app "колокольчик" при добавлении в персонал
+	moderationNotifier venueModerationNotifier // optional; "колокольчик" владельцу о решении модерации
 }
 
 // staffInviteNotifier delivers the in-app "added to a venue's team" bell
@@ -36,6 +37,13 @@ type VenueHandler struct {
 // implemented by *NotificationHandler.
 type staffInviteNotifier interface {
 	NotifyStaffInvited(ctx context.Context, userID, venueID, role string)
+}
+
+// venueModerationNotifier delivers the in-app "your venue's listing status
+// changed" bell to the venue owner. Defined at the consumer site; implemented
+// by *NotificationHandler.
+type venueModerationNotifier interface {
+	NotifyVenueModerated(ctx context.Context, ownerID, venueID, venueName, action, comment string)
 }
 
 type VenueHandlerOption func(*VenueHandler)
@@ -51,6 +59,15 @@ func WithSuspendNotifier(n *suspendnotify.Sender) VenueHandlerOption {
 func WithStaffInviteNotifier(n staffInviteNotifier) VenueHandlerOption {
 	return func(h *VenueHandler) {
 		h.staffNotifier = n
+	}
+}
+
+// WithVenueModerationNotifier wires the bell notification sent to the venue
+// owner on every moderation decision. Optional: when unset, moderation still
+// succeeds silently.
+func WithVenueModerationNotifier(n venueModerationNotifier) VenueHandlerOption {
+	return func(h *VenueHandler) {
+		h.moderationNotifier = n
 	}
 }
 
@@ -823,6 +840,20 @@ func (h *VenueHandler) Moderate(w http.ResponseWriter, r *http.Request) {
 				strings.TrimSpace(req.Comment),
 			)
 		}
+	}
+
+	// Bell for the venue owner on every moderation decision (best-effort,
+	// never fails the moderation). Fired before the response is written so
+	// r.Context() is still live.
+	if h.moderationNotifier != nil {
+		h.moderationNotifier.NotifyVenueModerated(
+			r.Context(),
+			strings.TrimSpace(resp.GetOwnerId()),
+			venueID,
+			strings.TrimSpace(resp.GetName()),
+			act,
+			strings.TrimSpace(req.Comment),
+		)
 	}
 
 	writeJSON(w, http.StatusOK, venueToJSON(resp, true))

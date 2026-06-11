@@ -9,3 +9,6 @@ providers:
     editable: true
     options:
       path: /var/lib/grafana/dashboards
+      # Подкаталоги становятся папками Grafana: dashboards/business/ → папка
+      # "business" для руководства, файлы в корне — General (технические).
+      foldersFromFilesStructure: true

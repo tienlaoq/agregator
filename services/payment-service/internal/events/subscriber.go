@@ -10,6 +10,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"github.com/tienlao/agregator/pkg/metrics"
 	"github.com/tienlao/agregator/pkg/natsutil"
 )
 
@@ -98,10 +99,11 @@ type Subscriber struct {
 	js  nats.JetStreamContext
 	uc  refunder
 	log zerolog.Logger
+	m   *metrics.Metrics
 }
 
-func NewSubscriber(js nats.JetStreamContext, uc refunder, log zerolog.Logger) *Subscriber {
-	return &Subscriber{js: js, uc: uc, log: log}
+func NewSubscriber(js nats.JetStreamContext, uc refunder, log zerolog.Logger, m *metrics.Metrics) *Subscriber {
+	return &Subscriber{js: js, uc: uc, log: log, m: m}
 }
 
 // SubscribeBookingEvents подписывается на события из стрима BOOKINGS.
@@ -133,6 +135,10 @@ func (s *Subscriber) SubscribeBookingEvents() error {
 }
 
 func (s *Subscriber) handleBookingCancelled(msg *nats.Msg) {
+	start := time.Now()
+	result := metrics.NATSError
+	defer func() { s.m.ObserveNATS("booking.cancelled", result, time.Since(start)) }()
+
 	meta, err := msg.Metadata()
 	if err != nil {
 		s.log.Error().Err(err).Msg("payment: failed to read NATS message metadata")
@@ -144,12 +150,14 @@ func (s *Subscriber) handleBookingCancelled(msg *nats.Msg) {
 	if err := json.Unmarshal(msg.Data, &evt); err != nil {
 		s.log.Error().Err(err).Msg("payment: unmarshal booking.cancelled — malformed payload, terminating")
 		// Malformed JSON will never recover on retry — term immediately.
+		result = metrics.NATSDLQ
 		s.termToDLQ(msg, evt.BookingID, "unmarshal error: "+err.Error())
 		return
 	}
 
 	if evt.BookingID == "" {
 		s.log.Warn().Msg("payment: booking.cancelled missing booking_id, skipping")
+		result = metrics.NATSOk
 		_ = msg.Ack()
 		return
 	}
@@ -165,6 +173,7 @@ func (s *Subscriber) handleBookingCancelled(msg *nats.Msg) {
 				Str("booking_id", evt.BookingID).
 				Uint64("delivery", meta.NumDelivered).
 				Msg("payment: permanent refund error — terminating to DLQ")
+			result = metrics.NATSDLQ
 			s.termToDLQ(msg, evt.BookingID, err.Error())
 			return
 		}
@@ -177,6 +186,7 @@ func (s *Subscriber) handleBookingCancelled(msg *nats.Msg) {
 				Str("booking_id", evt.BookingID).
 				Uint64("delivery", meta.NumDelivered).
 				Msg("payment: refund exhausted max retries — terminating to DLQ")
+			result = metrics.NATSDLQ
 			s.termToDLQ(msg, evt.BookingID, err.Error())
 			return
 		}
@@ -194,6 +204,7 @@ func (s *Subscriber) handleBookingCancelled(msg *nats.Msg) {
 		Str("booking_id", evt.BookingID).
 		Uint64("delivery", meta.NumDelivered).
 		Msg("payment: refund issued on booking.cancelled")
+	result = metrics.NATSOk
 	_ = msg.Ack()
 }
 

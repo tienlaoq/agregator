@@ -1,7 +1,10 @@
 package middleware
 
 import (
+	"bufio"
 	"context"
+	"errors"
+	"net"
 	"net/http"
 	"time"
 
@@ -17,6 +20,17 @@ type wrappedWriter struct {
 func (w *wrappedWriter) WriteHeader(code int) {
 	w.statusCode = code
 	w.ResponseWriter.WriteHeader(code)
+}
+
+// Hijack пробрасывает http.Hijacker нижележащего writer'а: без него gorilla
+// отвечает 500 на каждый WebSocket-апгрейд (/ws), потому что видит только
+// эту обёртку.
+func (w *wrappedWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	h, ok := w.ResponseWriter.(http.Hijacker)
+	if !ok {
+		return nil, nil, errors.New("logging: underlying ResponseWriter does not implement http.Hijacker")
+	}
+	return h.Hijack()
 }
 
 func traceIDFromCtx(ctx context.Context) string {

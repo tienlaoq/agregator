@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/url"
 	"strings"
@@ -302,6 +303,176 @@ func (h *NotificationHandler) NotifyStaffInvited(ctx context.Context, userID, ve
 		"Вам выдан доступ к управлению заведением в роли «"+roleLabel+"». Откройте кабинет владельца, чтобы начать работу.",
 		string(data),
 	)
+}
+
+// ── Venue-owner notifications ────────────────────────────────────────────────
+// Владелец может иметь несколько заведений, поэтому каждое уведомление
+// называет заведение по имени и несёт venue_id в data.
+
+// NotifyVenueBookingCreated delivers the "new booking at your venue" bell to
+// the venue owner. Implements bookingOwnerNotifier (booking.go).
+func (h *NotificationHandler) NotifyVenueBookingCreated(ctx context.Context, ownerID, venueID, venueName, bookingID, date, timeFrom, timeTo string, guests int32) {
+	when := strings.TrimSpace(date)
+	if timeFrom != "" {
+		when += " " + timeFrom
+		if timeTo != "" {
+			when += "–" + timeTo
+		}
+	}
+	body := when
+	if guests > 0 {
+		body += fmt.Sprintf(", гостей: %d", guests)
+	}
+	body += ". Откройте CRM заведения, чтобы посмотреть детали."
+	data, _ := json.Marshal(map[string]string{
+		"kind":       "venue_booking_created",
+		"venue_id":   venueID,
+		"booking_id": bookingID,
+	})
+	h.Notify(ctx, ownerID, "venue_booking_created",
+		"Новая бронь — "+venueName,
+		body,
+		string(data),
+	)
+}
+
+// NotifyVenueModerated delivers the "your venue's listing status changed" bell
+// to the venue owner. Implements venueModerationNotifier (venue.go).
+func (h *NotificationHandler) NotifyVenueModerated(ctx context.Context, ownerID, venueID, venueName, action, comment string) {
+	var title, body string
+	switch strings.ToLower(strings.TrimSpace(action)) {
+	case "approve":
+		title = "Заведение «" + venueName + "» одобрено"
+		body = "Карточка прошла модерацию и опубликована в каталоге."
+	case "reject":
+		title = "Заведение «" + venueName + "» не прошло модерацию"
+		body = "Исправьте карточку и отправьте на проверку снова."
+		if c := strings.TrimSpace(comment); c != "" {
+			body = "Причина: " + c + " — исправьте карточку и отправьте на проверку снова."
+		}
+	case "suspend":
+		title = "Заведение «" + venueName + "» приостановлено"
+		body = "Карточка скрыта из каталога."
+		if c := strings.TrimSpace(comment); c != "" {
+			body = "Карточка скрыта из каталога. Причина: " + c
+		}
+	case "resume":
+		title = "Заведение «" + venueName + "» снова активно"
+		body = "Публикация в каталоге возобновлена."
+	default:
+		return
+	}
+	data, _ := json.Marshal(map[string]string{
+		"kind":     "venue_moderation",
+		"venue_id": venueID,
+		"action":   strings.ToLower(strings.TrimSpace(action)),
+	})
+	h.Notify(ctx, ownerID, "venue_moderation", title, body, string(data))
+}
+
+// NotifyVenueReviewCreated delivers the "new review at your venue" bell to the
+// venue owner. Implements reviewOwnerNotifier (review.go).
+func (h *NotificationHandler) NotifyVenueReviewCreated(ctx context.Context, ownerID, venueID, venueName string, rating int32) {
+	body := "Гость оставил отзыв о заведении."
+	if rating >= 1 && rating <= 5 {
+		body = fmt.Sprintf("Оценка %d из 5. Откройте карточку заведения, чтобы прочитать отзыв.", rating)
+	}
+	data, _ := json.Marshal(map[string]any{
+		"kind":     "venue_review_created",
+		"venue_id": venueID,
+		"rating":   rating,
+	})
+	h.Notify(ctx, ownerID, "venue_review_created",
+		"Новый отзыв — "+venueName,
+		body,
+		string(data),
+	)
+}
+
+// ── Master notifications ─────────────────────────────────────────────────────
+// Адресуются user_id владельца профиля мастера. Имя мастера выносится в
+// заголовок, master_id кладётся в data для будущих ссылок.
+
+// NotifyMasterBookingCreated delivers the "new booking with you" bell to the
+// master. Implements masterBookingNotifier (master.go).
+func (h *NotificationHandler) NotifyMasterBookingCreated(ctx context.Context, masterUserID, masterID, masterName, bookingID, date, timeFrom, timeTo string) {
+	when := strings.TrimSpace(date)
+	if timeFrom != "" {
+		when += " " + timeFrom
+		if timeTo != "" {
+			when += "–" + timeTo
+		}
+	}
+	body := strings.TrimSpace(when) + ". Откройте кабинет мастера, чтобы посмотреть детали."
+	data, _ := json.Marshal(map[string]string{
+		"kind":       "master_booking_created",
+		"master_id":  masterID,
+		"booking_id": bookingID,
+	})
+	title := "Новая запись"
+	if strings.TrimSpace(masterName) != "" {
+		title = "Новая запись — " + masterName
+	}
+	h.Notify(ctx, masterUserID, "master_booking_created", title, body, string(data))
+}
+
+// NotifyMasterModerated delivers the "your master profile status changed" bell
+// to the master. Implements masterModerationNotifier (master.go).
+func (h *NotificationHandler) NotifyMasterModerated(ctx context.Context, masterUserID, masterID, masterName, action, comment string) {
+	who := strings.TrimSpace(masterName)
+	if who == "" {
+		who = "ваш профиль"
+	} else {
+		who = "профиль «" + who + "»"
+	}
+	var title, body string
+	switch strings.ToLower(strings.TrimSpace(action)) {
+	case "approve":
+		title = "Профиль мастера одобрен"
+		body = "Ваш " + who + " прошёл модерацию и опубликован в каталоге мастеров."
+	case "reject":
+		title = "Профиль мастера не прошёл модерацию"
+		body = "Исправьте профиль и отправьте на проверку снова."
+		if c := strings.TrimSpace(comment); c != "" {
+			body = "Причина: " + c + " — исправьте профиль и отправьте на проверку снова."
+		}
+	case "suspend":
+		title = "Профиль мастера приостановлен"
+		body = "Ваш " + who + " скрыт из каталога."
+		if c := strings.TrimSpace(comment); c != "" {
+			body = "Ваш " + who + " скрыт из каталога. Причина: " + c
+		}
+	case "resume":
+		title = "Профиль мастера снова активен"
+		body = "Публикация в каталоге мастеров возобновлена."
+	default:
+		return
+	}
+	data, _ := json.Marshal(map[string]string{
+		"kind":      "master_moderation",
+		"master_id": masterID,
+		"action":    strings.ToLower(strings.TrimSpace(action)),
+	})
+	h.Notify(ctx, masterUserID, "master_moderation", title, body, string(data))
+}
+
+// NotifyMasterReviewCreated delivers the "new review about you" bell to the
+// master. Implements masterReviewNotifier (review.go).
+func (h *NotificationHandler) NotifyMasterReviewCreated(ctx context.Context, masterUserID, masterID, masterName string, rating int32) {
+	body := "Гость оставил отзыв о вашей работе."
+	if rating >= 1 && rating <= 5 {
+		body = fmt.Sprintf("Оценка %d из 5. Откройте свой профиль, чтобы прочитать отзыв.", rating)
+	}
+	data, _ := json.Marshal(map[string]any{
+		"kind":      "master_review_created",
+		"master_id": masterID,
+		"rating":    rating,
+	})
+	title := "Новый отзыв о вас"
+	if strings.TrimSpace(masterName) != "" {
+		title = "Новый отзыв — " + masterName
+	}
+	h.Notify(ctx, masterUserID, "master_review_created", title, body, string(data))
 }
 
 // ── WebSocket ─────────────────────────────────────────────────────────────────

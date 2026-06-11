@@ -15,6 +15,11 @@ service MasterService {
   rpc ListPublicMasters(ListPublicMastersRequest) returns (ListMastersResponse);
   rpc GetPublicMaster(GetPublicMasterRequest) returns (MasterResponse);
 
+  // GetMaster resolves a master profile by its id. Internal service-to-service
+  // lookup (e.g. the gateway resolving master_id → owner user_id + display_name
+  // to address an owner notification). Payout credentials are stripped.
+  rpc GetMaster(GetMasterRequest) returns (MasterResponse);
+
   rpc ListForModeration(ListForModerationRequest) returns (ListMastersResponse);
   rpc ModerateMaster(ModerateMasterRequest) returns (MasterResponse);
   rpc ListModerationHistory(ListModerationHistoryRequest) returns (ListModerationHistoryResponse);
@@ -200,6 +205,10 @@ message ListMastersResponse {
 
 message GetPublicMasterRequest {
   string slug = 1;
+}
+
+message GetMasterRequest {
+  string id = 1;
 }
 
 message ListForModerationRequest {

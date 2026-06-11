@@ -55,6 +55,9 @@ func (m *mockMasterClient) ListPublicMasters(context.Context, *masterv1.ListPubl
 func (m *mockMasterClient) GetPublicMaster(context.Context, *masterv1.GetPublicMasterRequest, ...grpc.CallOption) (*masterv1.MasterResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "GetPublicMaster")
 }
+func (m *mockMasterClient) GetMaster(context.Context, *masterv1.GetMasterRequest, ...grpc.CallOption) (*masterv1.MasterResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "GetMaster")
+}
 func (m *mockMasterClient) ListForModeration(context.Context, *masterv1.ListForModerationRequest, ...grpc.CallOption) (*masterv1.ListMastersResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "ListForModeration")
 }

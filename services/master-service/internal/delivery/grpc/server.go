@@ -261,6 +261,22 @@ func (s *Server) GetPublicMaster(ctx context.Context, req *masterv1.GetPublicMas
 	return &masterv1.MasterResponse{Master: masterToProtoPublic(m)}, nil
 }
 
+// GetMaster resolves a master profile by id for internal callers. Payout
+// credentials are stripped (masterToProtoPublic); the response carries id,
+// user_id and display_name — enough for the gateway to address an owner
+// notification.
+func (s *Server) GetMaster(ctx context.Context, req *masterv1.GetMasterRequest) (*masterv1.MasterResponse, error) {
+	mid, err := parseUUID(req.GetId(), "id")
+	if err != nil {
+		return nil, err
+	}
+	m, err := s.uc.GetByID(ctx, mid)
+	if err != nil {
+		return nil, err
+	}
+	return &masterv1.MasterResponse{Master: masterToProtoPublic(m)}, nil
+}
+
 func (s *Server) ListForModeration(ctx context.Context, req *masterv1.ListForModerationRequest) (*masterv1.ListMastersResponse, error) {
 	list, total, err := s.uc.ListForModeration(ctx, req.GetStatusFilter(), req.GetLimit(), req.GetOffset())
 	if err != nil {
@@ -602,8 +618,8 @@ func masterToProto(m *domain.Master) *masterv1.Master {
 		Specializations:            m.Specializations,
 		HourlyRate:                 m.HourlyRate,
 		AvailabilityJson:           m.AvailabilityJSON,
-		PayoutLegalForm: m.PayoutLegalForm,
-		PayoutLegalName: m.PayoutLegalName,
+		PayoutLegalForm:            m.PayoutLegalForm,
+		PayoutLegalName:            m.PayoutLegalName,
 		PayoutInn:                  m.PayoutINN,
 		PayoutKpp:                  m.PayoutKPP,
 		PayoutOgrn:                 m.PayoutOGRN,
@@ -719,4 +735,3 @@ func bookingToProto(b *domain.MasterBooking) *masterv1.MasterBooking {
 	}
 	return pb
 }
-

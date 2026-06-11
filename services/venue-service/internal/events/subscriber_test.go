@@ -11,6 +11,7 @@ import (
 	"google.golang.org/grpc"
 
 	reviewv1 "github.com/tienlao/agregator/gen/go/review/v1"
+	"github.com/tienlao/agregator/pkg/metrics"
 )
 
 // fakeRatingFetcher records the venue_id it was asked about and returns a canned
@@ -109,7 +110,7 @@ func TestHandleReviewCreated(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			s := NewSubscriber(nil, tt.fetcher, tt.updater, zerolog.Nop())
+			s := NewSubscriber(nil, tt.fetcher, tt.updater, zerolog.Nop(), metrics.New("venue-service-test"))
 			s.handleReviewCreated(&nats.Msg{Subject: subjectReviewCreated, Data: []byte(tt.data)})
 
 			if tt.fetcher.callCount != tt.wantFetchCalls {
@@ -140,7 +141,7 @@ func TestHandleReviewCreated(t *testing.T) {
 	t.Run("ignores per-review rating in payload", func(t *testing.T) {
 		fetcher := &fakeRatingFetcher{resp: &reviewv1.VenueRatingResponse{AvgRating: 2.0, ReviewCount: 1}}
 		updater := &fakeRatingUpdater{}
-		s := NewSubscriber(nil, fetcher, updater, zerolog.Nop())
+		s := NewSubscriber(nil, fetcher, updater, zerolog.Nop(), metrics.New("venue-service-test"))
 		s.handleReviewCreated(&nats.Msg{Subject: subjectReviewCreated,
 			Data: []byte(`{"target_type":"venue","venue_id":"` + venueID.String() + `","rating":5}`)})
 		if updater.gotAvg != 2.0 {

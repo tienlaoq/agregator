@@ -8,6 +8,7 @@ import (
 	"github.com/nats-io/nats.go"
 	"github.com/rs/zerolog"
 
+	"github.com/tienlao/agregator/pkg/metrics"
 	"github.com/tienlao/agregator/pkg/natsutil"
 	"github.com/tienlao/agregator/services/master-service/internal/domain"
 	"github.com/tienlao/agregator/services/master-service/internal/usecase"
@@ -134,10 +135,11 @@ type Subscriber struct {
 	js  nats.JetStreamContext
 	uc  *usecase.MasterUseCase
 	log zerolog.Logger
+	m   *metrics.Metrics
 }
 
-func NewSubscriber(js nats.JetStreamContext, uc *usecase.MasterUseCase, log zerolog.Logger) *Subscriber {
-	return &Subscriber{js: js, uc: uc, log: log}
+func NewSubscriber(js nats.JetStreamContext, uc *usecase.MasterUseCase, log zerolog.Logger, m *metrics.Metrics) *Subscriber {
+	return &Subscriber{js: js, uc: uc, log: log, m: m}
 }
 
 // SubscribePaymentEvents subscribes to payment.completed and payment.failed
@@ -178,6 +180,10 @@ func (s *Subscriber) SubscribePaymentEvents() ([]*nats.Subscription, error) {
 }
 
 func (s *Subscriber) handlePaymentCompleted(msg *nats.Msg) {
+	start := time.Now()
+	result := metrics.NATSError
+	defer func() { s.m.ObserveNATS("payment.completed", result, time.Since(start)) }()
+
 	var evt paymentEvent
 	if err := json.Unmarshal(msg.Data, &evt); err != nil {
 		// Malformed message — Nak so it retries, but it will hit MaxDeliver
@@ -239,6 +245,7 @@ func (s *Subscriber) handlePaymentCompleted(msg *nats.Msg) {
 			// return "cancelled" even if the UPDATE missed for a different reason — both
 			// outcomes are correct to Ack (the booking is not in payment_pending either way).
 			log.Warn().Err(err).Msg("payment.completed: confirm skipped — logic conflict")
+			result = metrics.NATSOk
 			ack(msg, log)
 		case errors.Is(err, domain.ErrNotFound):
 			// Booking not found — possible out-of-order delivery (booking row not
@@ -255,10 +262,15 @@ func (s *Subscriber) handlePaymentCompleted(msg *nats.Msg) {
 	}
 
 	log.Info().Msg("payment.completed: master booking confirmed")
+	result = metrics.NATSOk
 	ack(msg, log)
 }
 
 func (s *Subscriber) handlePaymentFailed(msg *nats.Msg) {
+	start := time.Now()
+	result := metrics.NATSError
+	defer func() { s.m.ObserveNATS("payment.failed", result, time.Since(start)) }()
+
 	var evt paymentEvent
 	if err := json.Unmarshal(msg.Data, &evt); err != nil {
 		s.log.Error().Err(err).
@@ -309,6 +321,7 @@ func (s *Subscriber) handlePaymentFailed(msg *nats.Msg) {
 			// that status was read by a post-hoc SELECT after the UPDATE touched 0 rows.
 			// See handlePaymentCompleted comment for the race window explanation.
 			log.Warn().Err(err).Msg("payment.failed: cancel skipped — logic conflict")
+			result = metrics.NATSOk
 			ack(msg, log)
 		case errors.Is(err, domain.ErrNotFound):
 			log.Warn().Msg("payment.failed: booking not found — will retry")
@@ -334,5 +347,6 @@ func (s *Subscriber) handlePaymentFailed(msg *nats.Msg) {
 	//      can still Nak and retry the whole handler idempotently.
 	//   4. Note: CancelBookingByPayment is idempotent (ErrBookingNotPending on
 	//      a second call), so re-delivery after a publish failure is safe.
+	result = metrics.NATSOk
 	ack(msg, log)
 }

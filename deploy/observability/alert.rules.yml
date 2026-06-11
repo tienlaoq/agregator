@@ -25,3 +25,137 @@ groups:
         annotations:
           summary: "api-gateway p95 latency above 2s"
           description: "95th percentile HTTP latency exceeds 2 seconds."
+
+  # Metric names are namespaced per service (booking_service_grpc_handled_total,
+  # …), hence the __name__ regex matchers. Labels come from pkg/metrics.
+  - name: platform_services
+    rules:
+      - alert: ServiceTargetDown
+        expr: up == 0
+        for: 3m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.job }} metrics target down"
+          description: "Prometheus cannot scrape {{ $labels.instance }} for 3 minutes — service likely down."
+
+      - alert: ServiceGrpcErrorRateHigh
+        expr: |
+          sum by (job) (rate({__name__=~".+_grpc_handled_total", code=~"Internal|Unknown|Unavailable|DataLoss"}[5m]))
+            /
+          sum by (job) (rate({__name__=~".+_grpc_handled_total"}[5m])) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.job }} gRPC error rate above 5%"
+          description: "More than 5% of gRPC responses are Internal/Unknown/Unavailable/DataLoss over 5 minutes."
+
+      - alert: ServiceGrpcP95High
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (job, le) (rate({__name__=~".+_grpc_handling_seconds_bucket"}[5m]))
+          ) > 1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.job }} gRPC p95 latency above 1s"
+          description: "95th percentile gRPC handling time exceeds 1 second."
+
+      - alert: NATSConsumerErrors
+        expr: |
+          sum by (job, subject) (rate({__name__=~".+_nats_messages_total", result="error"}[10m])) > 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.job }} failing to process {{ $labels.subject }}"
+          description: "NATS handler errors (Nak/poison) for 10 minutes straight — check service logs and redeliveries."
+
+      - alert: PgxPoolSaturated
+        expr: |
+          sum by (job) (rate({__name__=~".+_pgxpool_empty_acquire_total"}[10m])) > 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.job }} Postgres pool saturated"
+          description: "Acquires are waiting for free connections — pool exhausted or queries too slow."
+
+  - name: nats_jetstream
+    rules:
+      # Closes the "alert on DLQ growth" item from docs/PROJECT.md. Metric names
+      # come from prometheus-nats-exporter (-jsz all); verify label/metric names
+      # against `curl nats-exporter:7777/metrics` after upgrading the exporter.
+      - alert: PaymentsDLQNotEmpty
+        expr: jetstream_stream_total_messages{stream_name="PAYMENTS_DLQ"} > 0
+        for: 15m
+        labels:
+          severity: critical
+        annotations:
+          summary: "PAYMENTS_DLQ has parked messages"
+          description: "Refund messages exhausted delivery attempts and need manual inspection/replay ({{ $value }} parked)."
+
+      - alert: JetStreamConsumerLag
+        expr: jetstream_consumer_num_pending > 1000
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "JetStream consumer {{ $labels.consumer_name }} lagging"
+          description: "More than 1000 pending messages on {{ $labels.stream_name }}/{{ $labels.consumer_name }} for 15 minutes."
+
+  # severity=business — сигналы о здоровье бизнеса, не инфраструктуры.
+  # Роутинг в продуктовый канал (не разработчикам) настраивается в Alertmanager
+  # по этому лейблу; пока Alertmanager не развёрнут, алерты видны в Prometheus UI.
+  # Метрики приходят из internal/kpi сервисов (docs/metrics-design.md §5).
+  - name: business_kpi
+    rules:
+      - alert: PaymentSuccessRateLow
+        # Guard ≥5 платежей за окно: ночью при 1-2 платежах метрика не репрезентативна.
+        expr: |
+          (
+            sum(increase(payment_service_payments_total{status="succeeded"}[30m]))
+              /
+            sum(increase(payment_service_payments_total{status=~"succeeded|cancelled"}[30m]))
+          ) < 0.9
+          and
+          sum(increase(payment_service_payments_total{status=~"succeeded|cancelled"}[30m])) >= 5
+        for: 10m
+        labels:
+          severity: business
+        annotations:
+          summary: "Payment success rate below 90%"
+          description: "Less than 90% of payments succeed over the last 30 minutes (≥5 payments observed) — check the payment provider and webhook flow."
+
+      - alert: NoBookingsDuringBusinessHours
+        # hour() — UTC; рабочие часы 08:00–22:00 МСК = 05:00–19:00 UTC.
+        # `or vector(0)` покрывает случай, когда счётчик ещё не существует.
+        expr: |
+          (sum(increase(booking_service_bookings_total{event="created"}[2h])) or vector(0)) == 0
+          and on() (hour() >= 5)
+          and on() (hour() < 19)
+        for: 15m
+        labels:
+          severity: business
+        annotations:
+          summary: "No new bookings for 2h during business hours"
+          description: "Zero bookings created in the last 2 hours within 08:00–22:00 MSK — the booking funnel may be broken end-to-end."
+
+      - alert: CancellationSpike
+        expr: |
+          (
+            sum(increase(booking_service_bookings_total{event="cancelled"}[1h]))
+              /
+            sum(increase(booking_service_bookings_total{event="created"}[1h]))
+          ) > 0.5
+          and
+          sum(increase(booking_service_bookings_total{event="created"}[1h])) >= 5
+        for: 15m
+        labels:
+          severity: business
+        annotations:
+          summary: "Cancellation rate above 50%"
+          description: "More than half of bookings created in the last hour were cancelled (≥5 created) — check payments and venue availability."

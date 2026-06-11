@@ -22,3 +22,34 @@ datasources:
     access: proxy
     url: http://jaeger:16686
     editable: false
+
+  # SQL-слой точной отчётности (docs/metrics-design.md §6.1): роль grafana_ro
+  # создаётся deploy/grafana-ro.sh (SELECT-only, statement_timeout=5s).
+  # Пароль приходит из env grafana-контейнера (GRAFANA_RO_PASSWORD в deploy/.env).
+  - name: Payments (Postgres)
+    uid: payments-db
+    type: postgres
+    access: proxy
+    url: postgres:5432
+    user: grafana_ro
+    editable: false
+    jsonData:
+      database: payment_db
+      sslmode: disable
+      maxOpenConns: 2
+    secureJsonData:
+      password: $GRAFANA_RO_PASSWORD
+
+  - name: Analytics (Postgres)
+    uid: analytics-db
+    type: postgres
+    access: proxy
+    url: postgres:5432
+    user: grafana_ro
+    editable: false
+    jsonData:
+      database: analytics_db
+      sslmode: disable
+      maxOpenConns: 2
+    secureJsonData:
+      password: $GRAFANA_RO_PASSWORD

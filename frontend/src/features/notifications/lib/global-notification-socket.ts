@@ -1,5 +1,6 @@
 "use client";
 
+import { issueNotificationWsTicket } from "@/lib/api";
 import { NOTIFICATION_V2_WS_PATH } from "@/lib/notification-paths";
 import type { NotificationEventEnvelope } from "@/features/notifications/types/notification";
 
@@ -88,12 +89,31 @@ function connect(): void {
     clearTimers();
     pingTimer = null;
     ws = null;
-    if (stopped || !activeToken || !activeWsTicket) return;
+    if (stopped || !activeToken) return;
     const backoffMs = Math.min(30000, 1000 * Math.pow(2, Math.min(attempt, 5)));
     attempt++;
-    reconnectTimer = setTimeout(connect, backoffMs);
+    reconnectTimer = setTimeout(() => void reconnectWithFreshTicket(), backoffMs);
   };
   ws.onerror = () => ws?.close();
+}
+
+/**
+ * Реконнект всегда идёт со свежим билетом: старый погашен сервером при
+ * предыдущем апгрейде (Redis GetDel — билет одноразовый), поэтому повторное
+ * подключение со старым значением гарантированно получает 401.
+ */
+async function reconnectWithFreshTicket(): Promise<void> {
+  if (stopped || !activeToken) return;
+  const res = await issueNotificationWsTicket();
+  if (stopped || !activeToken) return;
+  if (!res?.ticket) {
+    const backoffMs = Math.min(30000, 1000 * Math.pow(2, Math.min(attempt, 5)));
+    attempt++;
+    reconnectTimer = setTimeout(() => void reconnectWithFreshTicket(), backoffMs);
+    return;
+  }
+  activeWsTicket = res.ticket;
+  connect();
 }
 
 /**

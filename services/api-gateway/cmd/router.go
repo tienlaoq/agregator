@@ -28,10 +28,10 @@ func buildRouter(ctx context.Context, log zerolog.Logger, cfg Config, d *deps) (
 	authHandler := handler.NewAuthHandler(d.Auth)
 
 	oauthHandler, err := handler.NewOAuthHandler(log, d.Auth, handler.OAuthConfig{
-		GoogleClientID:     cfg.GoogleClientID,
-		GoogleClientSecret: cfg.GoogleClientSecret,
 		VKClientID:         cfg.VKClientID,
 		VKClientSecret:     cfg.VKClientSecret,
+		YandexClientID:     cfg.YandexClientID,
+		YandexClientSecret: cfg.YandexClientSecret,
 		BaseURL:            cfg.BaseURL,
 		FrontendURL:        cfg.FrontendURL,
 	})
@@ -50,16 +50,24 @@ func buildRouter(ctx context.Context, log zerolog.Logger, cfg Config, d *deps) (
 	venueHandler := handler.NewVenueHandler(d.Venue, d.User, d.CRM, d.Storage,
 		handler.WithSuspendNotifier(suspendMail),
 		handler.WithStaffInviteNotifier(notificationHandler),
+		handler.WithVenueModerationNotifier(notificationHandler),
 	)
 	if suspendMail.Enabled() {
 		log.Info().Msg("SMTP configured: при приостановке и возобновлении заведения владельцу и персоналу уйдут письма")
 	}
 
-	bookingHandler := handler.NewBookingHandler(d.Booking, d.Venue, d.User)
-	reviewHandler := handler.NewReviewHandler(d.Review, d.User)
+	bookingHandler := handler.NewBookingHandler(d.Booking, d.Venue, d.User,
+		handler.WithBookingOwnerNotifier(notificationHandler),
+	)
+	reviewHandler := handler.NewReviewHandler(d.Review, d.User,
+		handler.WithReviewOwnerNotifier(d.Venue, notificationHandler),
+		handler.WithReviewMasterNotifier(d.Master, notificationHandler),
+	)
 	paymentHandler := handler.NewPaymentHandler(log, d.Payment,
 		handler.ParseWebhookSecurityConfig(cfg.PaymentWebhookSecret, cfg.PaymentWebhookIPAllowlist))
-	masterHandler := handler.NewMasterHandler(d.Master, d.Storage)
+	masterHandler := handler.NewMasterHandler(d.Master, d.Storage,
+		handler.WithMasterOwnerNotifier(notificationHandler),
+	)
 	payoutHandler := handler.NewPayoutHandler(log, d.Payment, d.Venue, d.Master)
 	analyticsHandler := handler.NewAnalyticsHandler(log, d.NATS)
 
@@ -204,9 +212,10 @@ func buildRouter(ctx context.Context, log zerolog.Logger, cfg Config, d *deps) (
 
 	// ── Public ────────────────────────────────────────────────────────────
 	r.Get("/healthz", handler.HealthCheck)
-	r.Handle("/metrics", promhttp.HandlerFor(gwmetrics.Registry(), promhttp.HandlerOpts{
-		EnableOpenMetrics: false,
-	}))
+	// /metrics intentionally NOT mounted here: the public listener is proxied
+	// wholesale by Caddy ({$API_DOMAIN} → api-gateway:8080), which would expose
+	// route patterns and traffic volumes. Prometheus scrapes the internal
+	// METRICS_ADDR listener started in main.go instead.
 
 	r.Route("/api/v1", func(api chi.Router) {
 		// /uploads/* is only mounted when using DiskUploader (dev/single-replica).
@@ -233,10 +242,10 @@ func buildRouter(ctx context.Context, log zerolog.Logger, cfg Config, d *deps) (
 			r.With(resendVerificationRL).Post("/auth/resend-verification", authHandler.ResendVerification)
 
 			// OAuth (public)
-			r.Get("/auth/google", oauthHandler.GoogleRedirect)
-			r.Get("/auth/google/callback", oauthHandler.GoogleCallback)
 			r.Get("/auth/vk", oauthHandler.VKRedirect)
 			r.Get("/auth/vk/callback", oauthHandler.VKCallback)
+			r.Get("/auth/yandex", oauthHandler.YandexRedirect)
+			r.Get("/auth/yandex/callback", oauthHandler.YandexCallback)
 
 			// Venues (public read)
 			r.Get("/venues", venueHandler.List)
@@ -277,7 +286,17 @@ func buildRouter(ctx context.Context, log zerolog.Logger, cfg Config, d *deps) (
 				// emailVerified gates the two actions that create moderation load —
 				// venue creation here and master-profile creation below — so an
 				// unverified throwaway email cannot flood the moderation queue.
-				emailVerified := middleware.RequireEmailVerified(log, d.Auth)
+				//
+				// Temporarily bypassable via EMAIL_VERIFICATION_GATE_ENABLED=false:
+				// the gate becomes a pass-through so unverified users can publish.
+				// The startup warning makes the relaxed state visible in logs.
+				var emailVerified func(http.Handler) http.Handler
+				if cfg.EmailVerificationGateEnabled {
+					emailVerified = middleware.RequireEmailVerified(log, d.Auth)
+				} else {
+					log.Warn().Msg("email verification gate DISABLED (EMAIL_VERIFICATION_GATE_ENABLED=false) — unverified users can create venues and master profiles")
+					emailVerified = func(next http.Handler) http.Handler { return next }
+				}
 				ownerOrMaster := middleware.RequireRole(roles.RoleVenueOwner, roles.RoleMaster)
 				r.With(ownerOrMaster, emailVerified).Post("/venues", venueHandler.Create)
 				r.With(ownerOrMaster).Post("/venues/{id}/submit-for-review", venueHandler.SubmitForReview)
@@ -374,6 +393,12 @@ func buildRouter(ctx context.Context, log zerolog.Logger, cfg Config, d *deps) (
 				r.With(admin, adminRL).Get("/admin/support/tickets", supportHandler.AdminListTickets)
 				r.With(admin, adminRL).Get("/admin/support/tickets/{requestID}", supportHandler.AdminGetTicket)
 				r.With(admin, adminRL).Post("/admin/support/reply", supportHandler.AdminReply)
+				// Prometheus exposition for the /admin/metrics frontend page.
+				// The unauthenticated /metrics endpoint moved to the internal
+				// METRICS_ADDR listener; this is the only authenticated way to
+				// read gateway metrics from outside the docker network.
+				r.With(admin, adminRL).Get("/admin/metrics",
+					promhttp.HandlerFor(gwmetrics.Registry(), promhttp.HandlerOpts{}).ServeHTTP)
 			})
 		})
 

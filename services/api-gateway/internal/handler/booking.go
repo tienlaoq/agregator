@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"time"
@@ -14,17 +15,40 @@ import (
 )
 
 type BookingHandler struct {
-	client      bookingv1.BookingServiceClient
-	venueClient venuev1.VenueServiceClient
-	userClient  userv1.UserServiceClient
+	client        bookingv1.BookingServiceClient
+	venueClient   venuev1.VenueServiceClient
+	userClient    userv1.UserServiceClient
+	ownerNotifier bookingOwnerNotifier // optional; «колокольчик» владельцу о новой брони
+}
+
+// bookingOwnerNotifier delivers the in-app "new booking at your venue" bell to
+// the venue owner. Defined at the consumer site; implemented by
+// *NotificationHandler.
+type bookingOwnerNotifier interface {
+	NotifyVenueBookingCreated(ctx context.Context, ownerID, venueID, venueName, bookingID, date, timeFrom, timeTo string, guests int32)
+}
+
+type BookingHandlerOption func(*BookingHandler)
+
+// WithBookingOwnerNotifier wires the bell notification sent to the venue owner
+// when a guest books. Optional: when unset, bookings succeed silently.
+func WithBookingOwnerNotifier(n bookingOwnerNotifier) BookingHandlerOption {
+	return func(h *BookingHandler) {
+		h.ownerNotifier = n
+	}
 }
 
 func NewBookingHandler(
 	client bookingv1.BookingServiceClient,
 	venueClient venuev1.VenueServiceClient,
 	userClient userv1.UserServiceClient,
+	opts ...BookingHandlerOption,
 ) *BookingHandler {
-	return &BookingHandler{client: client, venueClient: venueClient, userClient: userClient}
+	h := &BookingHandler{client: client, venueClient: venueClient, userClient: userClient}
+	for _, o := range opts {
+		o(h)
+	}
+	return h
 }
 
 func (h *BookingHandler) Create(w http.ResponseWriter, r *http.Request) {
@@ -63,11 +87,12 @@ func (h *BookingHandler) Create(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	var venueName string
+	var venueName, venueOwnerID string
 	if req.VenueID != "" {
 		venueResp, err := h.venueClient.GetVenue(r.Context(), &venuev1.GetVenueRequest{Id: req.VenueID})
 		if err == nil && venueResp != nil {
 			venueName = venueResp.GetName()
+			venueOwnerID = venueResp.GetOwnerId()
 		}
 	}
 
@@ -87,6 +112,17 @@ func (h *BookingHandler) Create(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		grpcErrorToHTTP(w, err)
 		return
+	}
+
+	// Bell for the venue owner (best-effort, never fails the booking). Skipped
+	// when the owner books their own venue. Fired before the response is
+	// written so r.Context() is still live.
+	if h.ownerNotifier != nil && venueOwnerID != "" && venueOwnerID != userID {
+		h.ownerNotifier.NotifyVenueBookingCreated(
+			r.Context(),
+			venueOwnerID, req.VenueID, venueName,
+			resp.GetId(), req.Date, timeFrom, timeTo, req.Guests,
+		)
 	}
 
 	writeJSON(w, http.StatusCreated, bookingToJSON(resp))

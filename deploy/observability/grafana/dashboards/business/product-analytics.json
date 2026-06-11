@@ -1,0 +1,56 @@
+{
+  "uid": "product-analytics",
+  "title": "Product analytics — события с фронтенда (analytics_db)",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "5m",
+  "time": { "from": "now-7d", "to": "now" },
+  "templating": { "list": [] },
+  "panels": [
+    {
+      "type": "timeseries",
+      "title": "События по дням (по именам)",
+      "datasource": { "type": "postgres", "uid": "analytics-db" },
+      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 0 },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "time_series",
+          "rawQuery": true,
+          "rawSql": "SELECT date_trunc('day', ts) AS time, event AS metric, count(*) AS value FROM events WHERE $__timeFilter(ts) GROUP BY 1, 2 ORDER BY 1"
+        }
+      ],
+      "fieldConfig": { "defaults": { "decimals": 0, "custom": { "drawStyle": "bars", "fillOpacity": 60, "stacking": { "mode": "normal" } } }, "overrides": [] }
+    },
+    {
+      "type": "table",
+      "title": "Источники трафика за 7 дней (utm_source)",
+      "datasource": { "type": "postgres", "uid": "analytics-db" },
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 9 },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT COALESCE(NULLIF(props->>'utm_source', ''), '(прямые / без метки)') AS \"источник\", count(*) AS \"события\" FROM events WHERE ts >= now() - interval '7 days' GROUP BY 1 ORDER BY 2 DESC LIMIT 15"
+        }
+      ],
+      "fieldConfig": { "defaults": {}, "overrides": [] }
+    },
+    {
+      "type": "table",
+      "title": "Топ страниц за 7 дней (page_view)",
+      "datasource": { "type": "postgres", "uid": "analytics-db" },
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 9 },
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "rawQuery": true,
+          "rawSql": "SELECT COALESCE(props->>'page', props->>'path', '(не указана)') AS \"страница\", count(*) AS \"просмотры\" FROM events WHERE event = 'page_view' AND ts >= now() - interval '7 days' GROUP BY 1 ORDER BY 2 DESC LIMIT 15"
+        }
+      ],
+      "fieldConfig": { "defaults": {}, "overrides": [] }
+    }
+  ]
+}

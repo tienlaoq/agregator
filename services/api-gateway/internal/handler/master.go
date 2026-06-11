@@ -2,6 +2,7 @@ package handler
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -22,12 +23,35 @@ import (
 )
 
 type MasterHandler struct {
-	client  masterv1.MasterServiceClient
-	storage storage.Uploader
+	client   masterv1.MasterServiceClient
+	storage  storage.Uploader
+	notifier masterOwnerNotifier // optional; «колокольчик» мастеру о брони и модерации
 }
 
-func NewMasterHandler(c masterv1.MasterServiceClient, up storage.Uploader) *MasterHandler {
-	return &MasterHandler{client: c, storage: up}
+// masterOwnerNotifier delivers in-app bells to a master: new booking and
+// profile-moderation decisions. Defined at the consumer site; implemented by
+// *NotificationHandler.
+type masterOwnerNotifier interface {
+	NotifyMasterBookingCreated(ctx context.Context, masterUserID, masterID, masterName, bookingID, date, timeFrom, timeTo string)
+	NotifyMasterModerated(ctx context.Context, masterUserID, masterID, masterName, action, comment string)
+}
+
+type MasterHandlerOption func(*MasterHandler)
+
+// WithMasterOwnerNotifier wires the bells sent to a master on new bookings and
+// moderation decisions. Optional: when unset, those actions succeed silently.
+func WithMasterOwnerNotifier(n masterOwnerNotifier) MasterHandlerOption {
+	return func(h *MasterHandler) {
+		h.notifier = n
+	}
+}
+
+func NewMasterHandler(c masterv1.MasterServiceClient, up storage.Uploader, opts ...MasterHandlerOption) *MasterHandler {
+	h := &MasterHandler{client: c, storage: up}
+	for _, o := range opts {
+		o(h)
+	}
+	return h
 }
 
 func masterProtoToJSON(m *masterv1.Master) map[string]any {
@@ -244,7 +268,9 @@ func (h *MasterHandler) CreateMyProfile(w http.ResponseWriter, r *http.Request) 
 	var body struct {
 		DisplayName string `json:"display_name"`
 	}
-	if !readJSONOrRespond(w, r, &body) { return }
+	if !readJSONOrRespond(w, r, &body) {
+		return
+	}
 	resp, err := h.client.CreateMyProfile(r.Context(), &masterv1.CreateMyProfileRequest{
 		UserId:      uid,
 		DisplayName: strings.TrimSpace(body.DisplayName),
@@ -433,7 +459,9 @@ func (h *MasterHandler) PatchMyProfile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var raw map[string]json.RawMessage
-	if !readJSONOrRespond(w, r, &raw) { return }
+	if !readJSONOrRespond(w, r, &raw) {
+		return
+	}
 	req, err := h.updateReqFromRaw(uid, raw)
 	if err != nil {
 		writeCatalog(w, apicatalog.GatewayMasterInvalidServices)
@@ -575,7 +603,9 @@ func (h *MasterHandler) CreateBooking(w http.ResponseWriter, r *http.Request) {
 		TimeTo          string `json:"time_to"`
 		Comment         string `json:"comment"`
 	}
-	if !readJSONOrRespond(w, r, &body) { return }
+	if !readJSONOrRespond(w, r, &body) {
+		return
+	}
 	grpcReq := &masterv1.CreateMasterBookingRequest{
 		ClientUserId: uid,
 		MasterSlug:   slug,
@@ -593,6 +623,21 @@ func (h *MasterHandler) CreateBooking(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	b := resp.GetBooking()
+
+	// Bell for the master (best-effort, never fails the booking). Skipped when
+	// the master books themselves. Fired before the response is written so
+	// r.Context() is still live.
+	if h.notifier != nil {
+		masterUserID := strings.TrimSpace(b.GetMasterUserId())
+		if masterUserID != "" && masterUserID != uid {
+			h.notifier.NotifyMasterBookingCreated(
+				r.Context(),
+				masterUserID, b.GetMasterId(), "",
+				b.GetId(), b.GetDate(), b.GetTimeFrom(), b.GetTimeTo(),
+			)
+		}
+	}
+
 	writeJSON(w, http.StatusCreated, map[string]any{
 		"id":                b.GetId(),
 		"master_id":         b.GetMasterId(),
@@ -649,7 +694,9 @@ func (h *MasterHandler) Moderate(w http.ResponseWriter, r *http.Request) {
 		Action  string `json:"action"`
 		Comment string `json:"comment"`
 	}
-	if !readJSONOrRespond(w, r, &body) { return }
+	if !readJSONOrRespond(w, r, &body) {
+		return
+	}
 	resp, err := h.client.ModerateMaster(r.Context(), &masterv1.ModerateMasterRequest{
 		MasterId:    id,
 		ModeratorId: modID,
@@ -660,6 +707,22 @@ func (h *MasterHandler) Moderate(w http.ResponseWriter, r *http.Request) {
 		grpcErrorToHTTP(w, err)
 		return
 	}
+
+	// Bell for the master on every moderation decision (best-effort, never
+	// fails the moderation). Fired before the response is written so
+	// r.Context() is still live.
+	if h.notifier != nil {
+		m := resp.GetMaster()
+		h.notifier.NotifyMasterModerated(
+			r.Context(),
+			strings.TrimSpace(m.GetUserId()),
+			m.GetId(),
+			strings.TrimSpace(m.GetDisplayName()),
+			body.Action,
+			strings.TrimSpace(body.Comment),
+		)
+	}
+
 	writeJSON(w, http.StatusOK, masterProtoToJSON(resp.GetMaster()))
 }
 

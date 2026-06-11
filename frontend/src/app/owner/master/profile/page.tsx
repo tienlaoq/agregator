@@ -176,8 +176,6 @@ function masterSubmitValidationMessage(body: Record<string, unknown>): string | 
   if (!["ip", "ooo", "individual", "self_employed"].includes(plf)) {
     return "Укажите форму получения выплат: ИП, ООО, физическое лицо или самозанятость";
   }
-  const sellerId = String(body.yookassa_seller_account_id ?? "").trim();
-  if (!sellerId) return "Укажите аккаунт получателя выплат ЮKassa";
   const legalName = String(body.payout_legal_name ?? "").trim();
   if (!legalName) return "Укажите ФИО или наименование получателя";
   const inn = String(body.payout_inn ?? "").replace(/\D/g, "");
@@ -271,7 +269,6 @@ export default function MasterProfilePage() {
   const [phone, setPhone] = useState("");
   const [city, setCity] = useState("");
   const [payoutLegalForm, setPayoutLegalForm] = useState("");
-  const [yookassaSellerAccountId, setYookassaSellerAccountId] = useState("");
   const [payoutLegalName, setPayoutLegalName] = useState("");
   const [payoutInn, setPayoutInn] = useState("");
   const [payoutKpp, setPayoutKpp] = useState("");
@@ -397,7 +394,6 @@ export default function MasterProfilePage() {
     );
     setCity(profile.city);
     setPayoutLegalForm(normalizePayoutLegalFormStored(profile.payout_legal_form));
-    setYookassaSellerAccountId(profile.yookassa_seller_account_id ?? "");
     setPayoutLegalName(profile.payout_legal_name ?? "");
     setPayoutInn(profile.payout_inn ?? "");
     setPayoutKpp(profile.payout_kpp ?? "");
@@ -488,7 +484,6 @@ export default function MasterProfilePage() {
       phone: getRawPhone(phone).trim(),
       city: city.trim(),
       payout_legal_form: normalizePayoutLegalFormStored(payoutLegalForm),
-      yookassa_seller_account_id: yookassaSellerAccountId.trim(),
       payout_legal_name: payoutLegalName.trim(),
       payout_inn: payoutInn.trim(),
       payout_kpp: payoutKpp.trim(),
@@ -842,14 +837,6 @@ export default function MasterProfilePage() {
                 </Select>
               </div>
               <div className="grid gap-4 rounded-md border border-border/70 p-3 sm:grid-cols-2">
-                <div className="space-y-2 sm:col-span-2">
-                  <Label>ЮKassa account_id</Label>
-                  <Input
-                    value={yookassaSellerAccountId}
-                    onChange={(e) => setYookassaSellerAccountId(e.target.value)}
-                    placeholder="Например: 1234567"
-                  />
-                </div>
                 <div className="space-y-2 sm:col-span-2">
                   <Label>ФИО / наименование получателя</Label>
                   <Input value={payoutLegalName} onChange={(e) => setPayoutLegalName(e.target.value)} />

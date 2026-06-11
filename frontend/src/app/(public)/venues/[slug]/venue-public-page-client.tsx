@@ -40,7 +40,7 @@ import {
   getVenueReviews,
   venueMediaUrl,
 } from "@/lib/api"
-import type { Venue, Review } from "@/lib/types"
+import type { Venue, Review, VenueHallPhoto } from "@/lib/types"
 import {
   VENUE_SOCIAL_PUBLIC_LABELS,
   VENUE_TYPE_LABELS,
@@ -86,6 +86,72 @@ function venueCarouselSlides(venue: Venue): { id: string; src: string }[] {
   }
 
   return out
+}
+
+/**
+ * Адаптивная раскладка фото зала: одно — широким баннером, дальше — мозаика
+ * «герой + сетка». Ряды всегда заполнены целиком (никакого пустого угла, как
+ * в прежней фикс-сетке col-4), лишние фото скрыты под «+N». Каждое фото видно
+ * целиком, без обрезки (FramedImg, как в основной галерее).
+ */
+function HallPhotos({ photos }: { photos: VenueHallPhoto[] }) {
+  const sorted = [...photos].sort((a, b) => {
+    if (Boolean(a.is_cover) !== Boolean(b.is_cover)) return a.is_cover ? -1 : 1
+    return (a.sort_order ?? 0) - (b.sort_order ?? 0)
+  })
+  const n = sorted.length
+  if (n === 0) return null
+
+  const tile = "relative overflow-hidden bg-muted"
+
+  // Одно фото — баннер во всю ширину карточки.
+  if (n === 1) {
+    return (
+      <div className={cn(tile, "aspect-[16/9]")}>
+        <FramedImg src={venueMediaUrl(sorted[0].url)} alt="" />
+      </div>
+    )
+  }
+
+  // Два или четыре — ровная сетка без героя (ряды заполнены полностью).
+  if (n === 2 || n === 4) {
+    return (
+      <div className={cn("grid gap-1", n === 2 ? "grid-cols-2" : "grid-cols-2 grid-rows-2")}>
+        {sorted.map((p) => (
+          <div key={p.id} className={cn(tile, "aspect-[4/3]")}>
+            <FramedImg src={venueMediaUrl(p.url)} alt="" />
+          </div>
+        ))}
+      </div>
+    )
+  }
+
+  // Три или пять+ — «герой + сетка». Герой 2×2, остаток ровно заполняет ряды.
+  const wide = n >= 5
+  const thumbs = sorted.slice(1, wide ? 5 : 3)
+  const hidden = n - 1 - thumbs.length
+  return (
+    <div
+      className={cn(
+        "grid aspect-[16/9] grid-rows-2 gap-1",
+        wide ? "grid-cols-4" : "grid-cols-3",
+      )}
+    >
+      <div className={cn(tile, "col-span-2 row-span-2")}>
+        <FramedImg src={venueMediaUrl(sorted[0].url)} alt="" />
+      </div>
+      {thumbs.map((p, i) => (
+        <div key={p.id} className={tile}>
+          <FramedImg src={venueMediaUrl(p.url)} alt="" />
+          {i === thumbs.length - 1 && hidden > 0 ? (
+            <div className="absolute inset-0 flex items-center justify-center bg-black/55 text-lg font-semibold text-white">
+              +{hidden}
+            </div>
+          ) : null}
+        </div>
+      ))}
+    </div>
+  )
 }
 
 export function VenuePublicPageClient({
@@ -480,10 +546,6 @@ export function VenuePublicPageClient({
                 </p>
                 <div className="space-y-6">
                   {venue.halls.map((hall) => {
-                    const hPhotos = [...(hall.photos ?? [])].sort(
-                      (a, b) =>
-                        (a.sort_order ?? 0) - (b.sort_order ?? 0),
-                    )
                     const hallSelected = selectedHallIds.includes(hall.id)
                     return (
                       <Card
@@ -524,22 +586,7 @@ export function VenuePublicPageClient({
                               <Check className="h-4 w-4" />
                             </div>
                           ) : null}
-                          {hPhotos.length > 0 ? (
-                            <div className="grid grid-cols-2 gap-0.5 sm:grid-cols-3 md:grid-cols-4">
-                              {hPhotos.slice(0, 8).map((p) => (
-                                <div
-                                  key={p.id}
-                                  className="relative aspect-[4/3] bg-muted"
-                                >
-                                  <img
-                                    src={venueMediaUrl(p.url)}
-                                    alt=""
-                                    className="h-full w-full object-cover"
-                                  />
-                                </div>
-                              ))}
-                            </div>
-                          ) : null}
+                          <HallPhotos photos={hall.photos ?? []} />
                           <div className="space-y-3 p-4 pr-14 sm:p-5 sm:pr-16">
                             <h3 className="text-lg font-semibold text-foreground">
                               {hall.name}

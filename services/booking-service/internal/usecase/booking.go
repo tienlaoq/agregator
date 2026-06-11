@@ -19,6 +19,7 @@ import (
 	venuev1 "github.com/tienlao/agregator/gen/go/venue/v1"
 	pkgerr "github.com/tienlao/agregator/pkg/errors"
 	"github.com/tienlao/agregator/services/booking-service/internal/domain"
+	"github.com/tienlao/agregator/services/booking-service/internal/kpi"
 )
 
 type EventPublisher interface {
@@ -73,6 +74,9 @@ func NewBookingUseCase(
 // лог позволяет обнаружить потерянные события по booking_id.
 // См. TECH_DEBT [BOOKING-PUBLISH-LOSS].
 func (uc *BookingUseCase) publishEvent(ctx context.Context, subject, bookingID string, fn func() error) {
+	// KPI counter records the domain transition itself — it already happened
+	// (DB committed), so a failed publish must not skip the increment.
+	kpi.BookingEvent(strings.TrimPrefix(subject, "booking."))
 	if err := fn(); err != nil {
 		uc.log.Error().Err(err).
 			Str("subject", subject).
@@ -645,6 +649,9 @@ func (uc *BookingUseCase) AutoCompletePastVisits(ctx context.Context) (int, erro
 	if err != nil {
 		return 0, err
 	}
+	// KPI: считаем переходы на шаге 1 (а не на publish), чтобы catch-up-повторы
+	// публикации не задваивали счётчик.
+	kpi.BookingEvents("completed", len(refs))
 
 	published := 0
 	// Шаг 2: publish + метка для только что завершённых броней.

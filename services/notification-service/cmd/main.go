@@ -13,6 +13,7 @@ import (
 	notificationv1 "github.com/tienlao/agregator/gen/go/notification/v1"
 	"github.com/tienlao/agregator/pkg/grpcutil"
 	"github.com/tienlao/agregator/pkg/logger"
+	"github.com/tienlao/agregator/pkg/metrics"
 	"github.com/tienlao/agregator/pkg/postgres"
 	"github.com/tienlao/agregator/services/notification-service/config"
 	delivery "github.com/tienlao/agregator/services/notification-service/internal/delivery/grpc"
@@ -46,6 +47,16 @@ func main() {
 	}
 	defer pgPool.Close()
 
+	m := metrics.New("notification-service")
+	m.RegisterPgxPool(pgPool)
+	go func() {
+		addr := metrics.AddrFromEnv()
+		log.Info().Str("addr", addr).Msg("metrics listener starting")
+		if err := m.Serve(ctx, addr, pgPool.Ping); err != nil {
+			log.Error().Err(err).Msg("metrics listener failed")
+		}
+	}()
+
 	repo := repository.New(pgPool)
 	// Advisory schema check (not a startup gate): a missing table is logged so
 	// ops can act, but queries fail loudly anyway if the schema is truly broken.
@@ -69,6 +80,7 @@ func main() {
 		log.Fatal().Err(err).Msg("gRPC server transport config error")
 	}
 	srvOpts = append(srvOpts, grpc.ChainUnaryInterceptor(
+		m.UnaryServerInterceptor(), // outermost: observes codes after PgError mapping
 		grpcutil.PgErrorUnaryInterceptor(),
 		grpcutil.ServiceTokenServerInterceptor(serviceToken),
 	))

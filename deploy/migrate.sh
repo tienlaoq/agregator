@@ -29,5 +29,6 @@ apply_migrations master-service master_db
 apply_migrations chat-service chat_db
 apply_migrations notification-service notification_db
 apply_migrations api-gateway support_db
+apply_migrations analytics-service analytics_db
 
 echo "All migrations applied."

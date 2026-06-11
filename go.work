@@ -3,6 +3,7 @@ go 1.25.5
 use (
 	./gen/go
 	./pkg
+	./services/analytics-service
 	./services/api-gateway
 	./services/auth-service
 	./services/booking-service

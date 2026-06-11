@@ -309,6 +309,25 @@ services:
       postgres:
         condition: service_healthy
 
+  # Sink продуктовой аналитики: durable consumer ANALYTICS → analytics_db.events.
+  # Без gRPC и без published-портов; метрики на внутреннем :9100.
+  analytics-service:
+    build:
+      context: ..
+      dockerfile: services/analytics-service/Dockerfile
+    container_name: banya-analytics
+    environment:
+      PG_HOST: postgres
+      PG_DB: analytics_db
+      PG_USER: banya
+      PG_PASSWORD: ${POSTGRES_PASSWORD}
+      NATS_URL: nats://nats:4222
+    depends_on:
+      postgres:
+        condition: service_healthy
+      nats:
+        condition: service_started
+
   api-gateway:
     build:
       context: ..
@@ -340,7 +359,7 @@ services:
       BASE_URL: ${BASE_URL:-http://localhost:8080}
       FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3000}
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-}
-      # Google / VK: задайте GOOGLE_* и VK_* в deploy/.env (см. env_file выше).
+      # VK / Yandex: задайте VK_*, YANDEX_* в deploy/.env (см. env_file выше).
       # Письма владельцу и CRM при приостановке / возобновлении заведения (все пять — иначе рассылка отключена).
       SMTP_HOST: ${SMTP_HOST:-}
       SMTP_PORT: ${SMTP_PORT:-587}
@@ -418,6 +437,50 @@ services:
       api-gateway:
         condition: service_started
 
+  # ── Edge reverse-proxy: Caddy + Cloudflare (профиль edge) ───────────────────
+  # TLS-терминация и единая точка входа. Маршрутизация по сабдоменам:
+  #   ${APP_DOMAIN} → frontend:3000    (Next.js)
+  #   ${API_DOMAIN} → api-gateway:8080 (chi /api/v1/*)
+  # Сертификаты Let's Encrypt через Cloudflare DNS-01 (см. deploy/Dockerfile.caddy),
+  # работает за оранжевым облаком CF. Cloudflare SSL/TLS mode: Full (strict).
+  # Прод-запуск: cd deploy && docker compose --profile frontend --profile edge up -d --build
+  caddy:
+    profiles:
+      - edge
+    build:
+      context: .
+      dockerfile: Dockerfile.caddy
+    container_name: banya-caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp" # HTTP/3 (QUIC)
+    # These four are required for the edge profile but use empty defaults so that
+    # plain `docker compose` invocations (local dev, other profiles) still parse —
+    # Compose interpolates the whole file before filtering profiles. Caddy fails
+    # fast at startup if ACME_EMAIL / CF_API_TOKEN / *_DOMAIN are blank, so the
+    # requirement is still enforced where it matters (under `--profile edge`).
+    environment:
+      ACME_EMAIL: ${ACME_EMAIL:-}
+      CF_API_TOKEN: ${CF_API_TOKEN:-}
+      APP_DOMAIN: ${APP_DOMAIN:-}
+      API_DOMAIN: ${API_DOMAIN:-}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # Persist issued certs + ACME account — losing this volume re-issues certs
+      # and can hit Let's Encrypt rate limits.
+      - caddy_data:/data
+      - caddy_config:/config
+    # No depends_on frontend (it lives behind the `frontend` profile); Caddy
+    # serves a 502 until the upstream is up, then recovers automatically. The
+    # api-gateway is a core service, so depending on it is safe.
+    depends_on:
+      api-gateway:
+        condition: service_started
+
 volumes:
   pgdata:
   gateway_uploads:
+  caddy_data:
+  caddy_config:

@@ -34,7 +34,6 @@ export const USER_FACING_MESSAGE_BY_GATEWAY_CODE: Record<string, string> = {
   "GATEWAY.REQUEST.METHOD_NOT_ALLOWED": "Это действие сейчас недоступно.",
   "GATEWAY.ANALYTICS.INVALID_EVENT_NAME": "Не удалось записать действие. Обновите страницу.",
   "GATEWAY.ANALYTICS.PROPS_INVALID_OR_TOO_LARGE": "Не удалось записать действие. Попробуйте позже.",
-  "GATEWAY.OAUTH.GOOGLE_NOT_CONFIGURED": "Вход через Google сейчас недоступен.",
   "GATEWAY.OAUTH.VK_NOT_CONFIGURED": "Вход через ВКонтакте сейчас недоступен.",
   "GATEWAY.CRM.STAFF_EMAIL_NOT_REGISTERED":
     "На этот email ещё нет аккаунта — человек должен сначала зарегистрироваться.",

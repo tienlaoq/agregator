@@ -102,10 +102,10 @@ var (
 	GatewayAnalyticsInvalidEventName = Entry{HTTP: 400, Code: "GATEWAY.ANALYTICS.INVALID_EVENT_NAME", Message: "Недопустимое имя события"}
 	// GatewayAnalyticsPropsInvalidOrTooLarge — GATEWAY.ANALYTICS.PROPS_INVALID_OR_TOO_LARGE
 	GatewayAnalyticsPropsInvalidOrTooLarge = Entry{HTTP: 400, Code: "GATEWAY.ANALYTICS.PROPS_INVALID_OR_TOO_LARGE", Message: "Слишком большой или некорректный объект props"}
-	// GatewayOauthGoogleNotConfigured — GATEWAY.OAUTH.GOOGLE_NOT_CONFIGURED
-	GatewayOauthGoogleNotConfigured = Entry{HTTP: 503, Code: "GATEWAY.OAUTH.GOOGLE_NOT_CONFIGURED", Message: "Вход через Google не настроен"}
 	// GatewayOauthVkNotConfigured — GATEWAY.OAUTH.VK_NOT_CONFIGURED
 	GatewayOauthVkNotConfigured = Entry{HTTP: 503, Code: "GATEWAY.OAUTH.VK_NOT_CONFIGURED", Message: "Вход через VK не настроен"}
+	// GatewayOauthYandexNotConfigured — GATEWAY.OAUTH.YANDEX_NOT_CONFIGURED
+	GatewayOauthYandexNotConfigured = Entry{HTTP: 503, Code: "GATEWAY.OAUTH.YANDEX_NOT_CONFIGURED", Message: "Вход через Яндекс не настроен"}
 	// GatewayCrmStaffEmailNotRegistered — GATEWAY.CRM.STAFF_EMAIL_NOT_REGISTERED
 	GatewayCrmStaffEmailNotRegistered = Entry{HTTP: 422, Code: "GATEWAY.CRM.STAFF_EMAIL_NOT_REGISTERED", Message: "No registered account for this email; the person must sign up first"}
 	// GatewayMasterInvalidServices — GATEWAY.MASTER.INVALID_SERVICES
@@ -207,10 +207,10 @@ func ByCode(code string) (Entry, bool) {
 		return GatewayAnalyticsInvalidEventName, true
 	case "GATEWAY.ANALYTICS.PROPS_INVALID_OR_TOO_LARGE":
 		return GatewayAnalyticsPropsInvalidOrTooLarge, true
-	case "GATEWAY.OAUTH.GOOGLE_NOT_CONFIGURED":
-		return GatewayOauthGoogleNotConfigured, true
 	case "GATEWAY.OAUTH.VK_NOT_CONFIGURED":
 		return GatewayOauthVkNotConfigured, true
+	case "GATEWAY.OAUTH.YANDEX_NOT_CONFIGURED":
+		return GatewayOauthYandexNotConfigured, true
 	case "GATEWAY.CRM.STAFF_EMAIL_NOT_REGISTERED":
 		return GatewayCrmStaffEmailNotRegistered, true
 	case "GATEWAY.MASTER.INVALID_SERVICES":

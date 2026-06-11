@@ -364,6 +364,12 @@ export function OwnerDashboardSection({
                               CRM
                             </Link>
                           </Button>
+                          <Button variant="outline" size="sm" className="gap-1" asChild>
+                            <Link href={`/owner/venues/${venue.id}/finance`}>
+                              <Wallet className="h-4 w-4" />
+                              Финансы
+                            </Link>
+                          </Button>
                           {canEditVenueCard ? (
                             <Button variant="outline" size="sm" className="gap-1" asChild>
                               <Link href={`/owner/venues/${venue.id}/edit`}>

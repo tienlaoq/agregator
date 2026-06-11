@@ -17,6 +17,7 @@ import (
 	crmv1 "github.com/tienlao/agregator/gen/go/crm/v1"
 	"github.com/tienlao/agregator/pkg/grpcutil"
 	"github.com/tienlao/agregator/pkg/logger"
+	"github.com/tienlao/agregator/pkg/metrics"
 	"github.com/tienlao/agregator/pkg/postgres"
 
 	"github.com/tienlao/agregator/services/crm-service/config"
@@ -49,6 +50,16 @@ func main() {
 		log.Fatal().Err(err).Str("dir", migDir).Msg("postgres migrations failed")
 	}
 
+	m := metrics.New("crm-service")
+	m.RegisterPgxPool(pgPool)
+	go func() {
+		addr := metrics.AddrFromEnv()
+		log.Info().Str("addr", addr).Msg("metrics listener starting")
+		if err := m.Serve(ctx, addr, pgPool.Ping); err != nil {
+			log.Error().Err(err).Msg("metrics listener failed")
+		}
+	}()
+
 	repo := repository.New(pgPool)
 	uc := usecase.New(repo)
 
@@ -57,6 +68,7 @@ func main() {
 		log.Fatal().Err(err).Msg("gRPC server transport config error")
 	}
 	srvOpts = append(srvOpts, grpc.ChainUnaryInterceptor(
+		m.UnaryServerInterceptor(), // outermost: observes codes after PgError mapping
 		grpcutil.SafePgErrorUnaryInterceptor(),
 	))
 	grpcServer := grpc.NewServer(srvOpts...)

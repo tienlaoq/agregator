@@ -26,3 +26,5 @@ tmp/
 .DS_Store
 *.cache
 *.cursor
+.vercel
+.env*

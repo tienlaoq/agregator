@@ -13,6 +13,7 @@ import (
 	chatv1 "github.com/tienlao/agregator/gen/go/chat/v1"
 	"github.com/tienlao/agregator/pkg/grpcutil"
 	"github.com/tienlao/agregator/pkg/logger"
+	"github.com/tienlao/agregator/pkg/metrics"
 	"github.com/tienlao/agregator/pkg/natsutil"
 	"github.com/tienlao/agregator/pkg/postgres"
 	"github.com/tienlao/agregator/services/chat-service/config"
@@ -52,6 +53,16 @@ func main() {
 		log.Fatal().Err(err).Msg("failed to connect to postgres")
 	}
 	defer pgPool.Close()
+
+	m := metrics.New("chat-service")
+	m.RegisterPgxPool(pgPool)
+	go func() {
+		addr := metrics.AddrFromEnv()
+		log.Info().Str("addr", addr).Msg("metrics listener starting")
+		if err := m.Serve(ctx, addr, pgPool.Ping); err != nil {
+			log.Error().Err(err).Msg("metrics listener failed")
+		}
+	}()
 
 	repo := repository.New(pgPool)
 	// P2#17: schema check is advisory, not a gate.  Killing the pod on a missing
@@ -115,6 +126,7 @@ func main() {
 		log.Fatal().Err(err).Msg("gRPC server transport config error")
 	}
 	srvOpts = append(srvOpts, grpc.ChainUnaryInterceptor(
+		m.UnaryServerInterceptor(), // outermost: observes codes after PgError mapping
 		grpcutil.PgErrorUnaryInterceptor(),
 		grpcutil.ServiceTokenServerInterceptor(serviceToken),
 	))

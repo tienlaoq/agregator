@@ -16,12 +16,14 @@ import (
 	venuev1 "github.com/tienlao/agregator/gen/go/venue/v1"
 	"github.com/tienlao/agregator/pkg/grpcutil"
 	"github.com/tienlao/agregator/pkg/logger"
+	"github.com/tienlao/agregator/pkg/metrics"
 	"github.com/tienlao/agregator/pkg/natsutil"
 	"github.com/tienlao/agregator/pkg/postgres"
 
 	"github.com/tienlao/agregator/services/booking-service/config"
 	delivery "github.com/tienlao/agregator/services/booking-service/internal/delivery/grpc"
 	"github.com/tienlao/agregator/services/booking-service/internal/events"
+	"github.com/tienlao/agregator/services/booking-service/internal/kpi"
 	"github.com/tienlao/agregator/services/booking-service/internal/repository"
 	"github.com/tienlao/agregator/services/booking-service/internal/usecase"
 )
@@ -43,6 +45,17 @@ func main() {
 	}
 	defer pgPool.Close()
 	log.Info().Msg("connected to postgres")
+
+	m := metrics.New("booking-service")
+	m.RegisterPgxPool(pgPool)
+	kpi.Register(m.Registry())
+	go func() {
+		addr := metrics.AddrFromEnv()
+		log.Info().Str("addr", addr).Msg("metrics listener starting")
+		if err := m.Serve(ctx, addr, pgPool.Ping); err != nil {
+			log.Error().Err(err).Msg("metrics listener failed")
+		}
+	}()
 
 	nc, js, err := natsutil.Connect(cfg.NATSURL)
 	if err != nil {
@@ -126,7 +139,7 @@ func main() {
 		}
 	}()
 
-	sub := events.NewSubscriber(js, uc, log)
+	sub := events.NewSubscriber(js, uc, log, m)
 	if err := sub.SubscribePaymentEvents(); err != nil {
 		log.Fatal().Err(err).Msg("failed to subscribe to payment events")
 	}
@@ -143,6 +156,7 @@ func main() {
 	//                             api-gateway after JWT verification) into context;
 	//                             handlers call grpcutil.CallerIDFromCtx(ctx) for authz.
 	srvOpts = append(srvOpts, grpc.ChainUnaryInterceptor(
+		m.UnaryServerInterceptor(), // outermost: observes codes after PgError mapping
 		grpcutil.PgErrorUnaryInterceptor(),
 		grpcutil.CallerIDServerInterceptor(),
 	))

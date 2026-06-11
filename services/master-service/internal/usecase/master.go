@@ -1162,6 +1162,19 @@ func (uc *MasterUseCase) MasterOwnerUserID(ctx context.Context, masterID uuid.UU
 	return m.UserID, nil
 }
 
+// GetByID returns the full master profile by id. Used for internal lookups
+// (e.g. resolving master_id → owner user_id + display_name for notifications).
+func (uc *MasterUseCase) GetByID(ctx context.Context, masterID uuid.UUID) (*domain.Master, error) {
+	m, err := uc.repo.GetByID(ctx, masterID)
+	if err != nil {
+		return nil, err
+	}
+	if m == nil {
+		return nil, pkgerrors.NotFound("master not found")
+	}
+	return m, nil
+}
+
 func (uc *MasterUseCase) HasCompletedBookingByClientMaster(ctx context.Context, clientUserID, masterID uuid.UUID) (bool, error) {
 	return uc.repo.HasCompletedBookingByClientMaster(ctx, clientUserID, masterID)
 }

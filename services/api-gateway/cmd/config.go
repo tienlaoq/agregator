@@ -40,10 +40,10 @@ type Config struct {
 	InternalServiceToken string
 
 	// OAuth
-	GoogleClientID     string
-	GoogleClientSecret string
 	VKClientID         string
 	VKClientSecret     string
+	YandexClientID     string
+	YandexClientSecret string
 
 	// URLs
 	BaseURL     string
@@ -113,6 +113,13 @@ type Config struct {
 	// that are allowed to call POST /payments/webhook (e.g. YooKassa IPs).
 	// Set via PAYMENT_WEBHOOK_IP_ALLOWLIST.  Empty disables IP verification.
 	PaymentWebhookIPAllowlist string
+
+	// EmailVerificationGateEnabled toggles the RequireEmailVerified middleware on
+	// partner write actions (venue / master-profile creation). Defaults to true.
+	// Set EMAIL_VERIFICATION_GATE_ENABLED=false to let unverified users publish —
+	// a temporary escape hatch (e.g. while email delivery is being fixed); the
+	// router logs a warning when it is off.
+	EmailVerificationGateEnabled bool
 }
 
 // LoadConfig reads all env-vars and returns a Config. No side effects.
@@ -134,10 +141,10 @@ func LoadConfig() (Config, error) {
 
 		InternalServiceToken: strings.TrimSpace(config.GetEnv("INTERNAL_SERVICE_TOKEN", "")),
 
-		GoogleClientID:     config.GetEnv("GOOGLE_CLIENT_ID", ""),
-		GoogleClientSecret: config.GetEnv("GOOGLE_CLIENT_SECRET", ""),
 		VKClientID:         config.GetEnv("VK_CLIENT_ID", ""),
 		VKClientSecret:     config.GetEnv("VK_CLIENT_SECRET", ""),
+		YandexClientID:     config.GetEnv("YANDEX_CLIENT_ID", ""),
+		YandexClientSecret: config.GetEnv("YANDEX_CLIENT_SECRET", ""),
 
 		BaseURL:     strings.TrimSpace(config.GetEnv("BASE_URL", "http://localhost:8080")),
 		FrontendURL: strings.TrimSpace(config.GetEnv("FRONTEND_URL", "http://localhost:3000")),
@@ -183,6 +190,8 @@ func LoadConfig() (Config, error) {
 
 		PaymentWebhookSecret:      strings.TrimSpace(config.GetEnv("PAYMENT_WEBHOOK_SECRET", "")),
 		PaymentWebhookIPAllowlist: strings.TrimSpace(config.GetEnv("PAYMENT_WEBHOOK_IP_ALLOWLIST", "")),
+
+		EmailVerificationGateEnabled: config.GetEnvBool("EMAIL_VERIFICATION_GATE_ENABLED", true),
 	}
 	// Parse the EC public key from env (file path or inline PEM).
 	pubPEM := pkgauth.LoadPEMFromEnv("JWT_EC_PUBLIC_KEY_FILE", "JWT_EC_PUBLIC_KEY")

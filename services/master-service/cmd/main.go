@@ -18,6 +18,7 @@ import (
 	masterv1 "github.com/tienlao/agregator/gen/go/master/v1"
 	"github.com/tienlao/agregator/pkg/grpcutil"
 	"github.com/tienlao/agregator/pkg/logger"
+	"github.com/tienlao/agregator/pkg/metrics"
 	"github.com/tienlao/agregator/pkg/postgres"
 
 	"github.com/tienlao/agregator/services/master-service/config"
@@ -50,6 +51,16 @@ func main() {
 		Dur("max_conn_idle_time", pCfg.MaxConnIdleTime).
 		Msg("connected to postgres")
 
+	m := metrics.New("master-service")
+	m.RegisterPgxPool(pgPool)
+	go func() {
+		addr := metrics.AddrFromEnv()
+		log.Info().Str("addr", addr).Msg("metrics listener starting")
+		if err := m.Serve(ctx, addr, pgPool.Ping); err != nil {
+			log.Error().Err(err).Msg("metrics listener failed")
+		}
+	}()
+
 	nc, js, err := natsutil.Connect(cfg.NATSURL)
 	if err != nil {
 		log.Fatal().Err(err).Msg("failed to connect to nats")
@@ -79,7 +90,7 @@ func main() {
 	paymentClient := paymentv1.NewPaymentServiceClient(paymentConn)
 
 	uc := usecase.NewMasterUseCase(repo, paymentClient, log)
-	sub := events.NewSubscriber(js, uc, log)
+	sub := events.NewSubscriber(js, uc, log, m)
 	// Subscriptions are drained via nc.Drain() on shutdown; we don't need
 	// to hold the individual *nats.Subscription handles after this point.
 	if _, err := sub.SubscribePaymentEvents(); err != nil {
@@ -91,6 +102,7 @@ func main() {
 		log.Fatal().Err(err).Msg("gRPC server transport config error")
 	}
 	srvOpts = append(srvOpts, grpc.ChainUnaryInterceptor(
+		m.UnaryServerInterceptor(), // outermost: observes codes after PgError mapping
 		grpcutil.CallerIDServerInterceptor(),
 		grpcutil.PgErrorUnaryInterceptor(),
 	))

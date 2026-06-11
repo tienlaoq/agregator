@@ -40,7 +40,9 @@ services:
       - loki
 
   jaeger:
-    image: jaegertracing/all-in-one:1.62
+    # 1.62 (и прочие теги без патч-версии) удалены с Docker Hub — пиновать
+    # только трёхкомпонентные версии (1.63.0+).
+    image: jaegertracing/all-in-one:1.76.0
     container_name: banya-jaeger
     environment:
       COLLECTOR_OTLP_ENABLED: "true"
@@ -56,6 +58,9 @@ services:
       GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?Set GRAFANA_ADMIN_PASSWORD in deploy/.env for Grafana}
       GF_USERS_DEFAULT_THEME: dark
+      # Пароль read-only роли для SQL-датасорсов (создаётся deploy/grafana-ro.sh);
+      # подставляется в provisioning/datasources/datasources.yml.
+      GRAFANA_RO_PASSWORD: ${GRAFANA_RO_PASSWORD:-}
     ports:
       - "3001:3000"
     volumes:
@@ -67,13 +72,12 @@ services:
       - loki
       - jaeger
 
-  analytics-nats-sub:
-    image: natsio/nats-box:0.14.5
-    container_name: banya-analytics-nats-sub
-    command:
-      - sh
-      - -c
-      - "nats sub analytics.web --server=nats://nats:4222"
+  # JetStream metrics for Prometheus: stream depth (DLQ alert) and consumer
+  # lag. Scrapes the NATS monitoring endpoint (http_port 8222, see base compose).
+  nats-exporter:
+    image: natsio/prometheus-nats-exporter:0.15.0
+    container_name: banya-nats-exporter
+    command: ["-jsz", "all", "http://nats:8222"]
     depends_on:
       nats:
         condition: service_started

@@ -17,12 +17,14 @@ import (
 	"github.com/tienlao/agregator/pkg/grpcutil"
 	"github.com/tienlao/agregator/pkg/logger"
 	pkgmail "github.com/tienlao/agregator/pkg/mail"
+	"github.com/tienlao/agregator/pkg/metrics"
 	"github.com/tienlao/agregator/pkg/postgres"
 	pkgtelegram "github.com/tienlao/agregator/pkg/telegram"
 
 	"github.com/tienlao/agregator/services/auth-service/config"
 	"github.com/tienlao/agregator/services/auth-service/internal/adapter"
 	delivery "github.com/tienlao/agregator/services/auth-service/internal/delivery/grpc"
+	"github.com/tienlao/agregator/services/auth-service/internal/kpi"
 	"github.com/tienlao/agregator/services/auth-service/internal/notify"
 	"github.com/tienlao/agregator/services/auth-service/internal/passwordmail"
 	"github.com/tienlao/agregator/services/auth-service/internal/repository"
@@ -72,6 +74,17 @@ func main() {
 	}
 	defer pgPool.Close()
 	log.Info().Msg("connected to postgres")
+
+	m := metrics.New("auth-service")
+	m.RegisterPgxPool(pgPool)
+	kpi.Register(m.Registry())
+	go func() {
+		addr := metrics.AddrFromEnv()
+		log.Info().Str("addr", addr).Msg("metrics listener starting")
+		if err := m.Serve(ctx, addr, pgPool.Ping); err != nil {
+			log.Error().Err(err).Msg("metrics listener failed")
+		}
+	}()
 
 	dialOpts, err := grpcutil.DialOptions()
 	if err != nil {
@@ -125,6 +138,7 @@ func main() {
 		log.Fatal().Err(err).Msg("gRPC server transport config error")
 	}
 	srvOpts = append(srvOpts, grpc.ChainUnaryInterceptor(
+		m.UnaryServerInterceptor(), // outermost: observes codes after PgError mapping
 		grpcutil.PgErrorUnaryInterceptor(),
 	))
 	grpcServer := grpc.NewServer(srvOpts...)

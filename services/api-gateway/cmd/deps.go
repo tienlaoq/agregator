@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/nats-io/nats.go"
@@ -20,6 +21,7 @@ import (
 	venuev1 "github.com/tienlao/agregator/gen/go/venue/v1"
 	"github.com/tienlao/agregator/pkg/config"
 	"github.com/tienlao/agregator/pkg/grpcutil"
+	"github.com/tienlao/agregator/pkg/natsutil"
 	"github.com/tienlao/agregator/pkg/storage"
 	"github.com/tienlao/agregator/services/api-gateway/internal/middleware"
 	"github.com/tienlao/agregator/services/api-gateway/internal/ratelimit"
@@ -246,6 +248,16 @@ func buildDeps(ctx context.Context, log zerolog.Logger, cfg Config) (*deps, func
 		d.NATS = nc
 		closers = append(closers, nc.Close)
 		log.Info().Str("nats_url", cfg.NATSUrl).Msg("NATS connected")
+
+		// ANALYTICS captures core-NATS publishes of analytics.web into
+		// JetStream: без стрима события живут только пока их кто-то слушает.
+		// MaxAge 30d — стрим лишь буфер, архив строит analytics-service в
+		// Postgres. Не фатально: гейтвей работает и без аналитики.
+		if js, jsErr := nc.JetStream(); jsErr != nil {
+			log.Warn().Err(jsErr).Msg("jetstream unavailable — analytics.web events will not be persisted")
+		} else if err := natsutil.EnsureStreamMaxAge(js, "ANALYTICS", []string{"analytics.>"}, 30*24*time.Hour); err != nil {
+			log.Warn().Err(err).Msg("ensure ANALYTICS stream failed — analytics.web events will not be persisted")
+		}
 	}
 
 	// ── Postgres for support tickets (optional) ────────────────────────────

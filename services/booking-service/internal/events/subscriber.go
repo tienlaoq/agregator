@@ -9,6 +9,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"github.com/tienlao/agregator/pkg/metrics"
 	"github.com/tienlao/agregator/pkg/natsutil"
 	"github.com/tienlao/agregator/services/booking-service/internal/usecase"
 )
@@ -28,10 +29,11 @@ type Subscriber struct {
 	js  nats.JetStreamContext
 	uc  *usecase.BookingUseCase
 	log zerolog.Logger
+	m   *metrics.Metrics
 }
 
-func NewSubscriber(js nats.JetStreamContext, uc *usecase.BookingUseCase, log zerolog.Logger) *Subscriber {
-	return &Subscriber{js: js, uc: uc, log: log}
+func NewSubscriber(js nats.JetStreamContext, uc *usecase.BookingUseCase, log zerolog.Logger, m *metrics.Metrics) *Subscriber {
+	return &Subscriber{js: js, uc: uc, log: log, m: m}
 }
 
 func (s *Subscriber) SubscribePaymentEvents() error {
@@ -49,6 +51,10 @@ func (s *Subscriber) SubscribePaymentEvents() error {
 }
 
 func (s *Subscriber) handlePaymentCompleted(msg *nats.Msg) {
+	start := time.Now()
+	result := metrics.NATSError
+	defer func() { s.m.ObserveNATS("payment.completed", result, time.Since(start)) }()
+
 	// MsgContext создаётся первым — msg_id доступен во всех лог-сообщениях включая ошибку парсинга.
 	ctx, cancel := natsutil.MsgContext(msg, handlerTimeout)
 	defer cancel()
@@ -64,6 +70,7 @@ func (s *Subscriber) handlePaymentCompleted(msg *nats.Msg) {
 	if err := s.uc.ConfirmBooking(ctx, evt.BookingID, evt.PaymentID); err != nil {
 		if st, ok := status.FromError(err); ok && (st.Code() == codes.InvalidArgument || st.Code() == codes.NotFound) {
 			s.log.Warn().Err(err).Str("msg_id", msgID).Str("booking_id", evt.BookingID).Msg("confirm booking skipped (terminal or invalid state)")
+			result = metrics.NATSOk
 			_ = msg.Ack()
 			return
 		}
@@ -73,10 +80,15 @@ func (s *Subscriber) handlePaymentCompleted(msg *nats.Msg) {
 	}
 
 	s.log.Info().Str("msg_id", msgID).Str("booking_id", evt.BookingID).Msg("booking confirmed via payment")
+	result = metrics.NATSOk
 	_ = msg.Ack()
 }
 
 func (s *Subscriber) handlePaymentFailed(msg *nats.Msg) {
+	start := time.Now()
+	result := metrics.NATSError
+	defer func() { s.m.ObserveNATS("payment.failed", result, time.Since(start)) }()
+
 	ctx, cancel := natsutil.MsgContext(msg, handlerTimeout)
 	defer cancel()
 	msgID := natsutil.MsgIDFromCtx(ctx)
@@ -95,5 +107,6 @@ func (s *Subscriber) handlePaymentFailed(msg *nats.Msg) {
 	}
 
 	s.log.Info().Str("msg_id", msgID).Str("booking_id", evt.BookingID).Msg("booking cancelled via payment failure")
+	result = metrics.NATSOk
 	_ = msg.Ack()
 }

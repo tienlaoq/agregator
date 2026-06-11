@@ -139,12 +139,12 @@ errors:
     message: "Слишком большой или некорректный объект props"
 
   - http_status: 503
-    code: GATEWAY.OAUTH.GOOGLE_NOT_CONFIGURED
-    message: "Вход через Google не настроен"
-
-  - http_status: 503
     code: GATEWAY.OAUTH.VK_NOT_CONFIGURED
     message: "Вход через VK не настроен"
+
+  - http_status: 503
+    code: GATEWAY.OAUTH.YANDEX_NOT_CONFIGURED
+    message: "Вход через Яндекс не настроен"
 
   - http_status: 422
     code: GATEWAY.CRM.STAFF_EMAIL_NOT_REGISTERED

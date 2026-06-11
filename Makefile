@@ -1,6 +1,6 @@
 .PHONY: proto-gen build build-linux docker-build docker-up docker-down test test-handler test-integration infra-up infra-down migrate help
 
-SERVICES = auth-service user-service venue-service booking-service review-service payment-service master-service crm-service notification-service api-gateway
+SERVICES = analytics-service auth-service user-service venue-service booking-service review-service payment-service master-service crm-service notification-service api-gateway
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'

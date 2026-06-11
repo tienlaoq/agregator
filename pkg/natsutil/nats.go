@@ -47,6 +47,25 @@ func EnsureStream(js nats.JetStreamContext, name string, subjects []string) erro
 	return nil
 }
 
+// EnsureStreamMaxAge is EnsureStream for streams whose messages expire after
+// maxAge. Use for buffer-style streams (ANALYTICS): the durable consumer mines
+// events into Postgres, the stream itself is not the archive.
+func EnsureStreamMaxAge(js nats.JetStreamContext, name string, subjects []string, maxAge time.Duration) error {
+	_, err := js.StreamInfo(name)
+	if err != nil {
+		_, err = js.AddStream(&nats.StreamConfig{
+			Name:     name,
+			Subjects: subjects,
+			Storage:  nats.FileStorage,
+			MaxAge:   maxAge,
+		})
+		if err != nil {
+			return fmt.Errorf("add stream %s: %w", name, err)
+		}
+	}
+	return nil
+}
+
 // EnsureConsumer creates or updates a durable push consumer on the given stream.
 // If a consumer with cfg.Durable already exists its configuration is updated;
 // if it does not exist it is created.  Only push consumers (with a DeliverSubject)
