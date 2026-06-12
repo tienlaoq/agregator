@@ -48,15 +48,15 @@ func Load() Config {
 	}
 
 	return Config{
-		GRPCPort:            config.GetEnv("GRPC_PORT", "50054"),
-		Postgres:            pg,
-		Redis:               config.NewRedisConfig(),
-		NATSURL:             config.GetEnv("NATS_URL", "nats://localhost:4222"),
-		VenueServiceAddr:    config.GetEnv("VENUE_SERVICE_ADDR", "localhost:50053"),
-		PaymentServiceAddr:  config.GetEnv("PAYMENT_SERVICE_ADDR", "localhost:50056"),
-		CRMServiceAddr:      config.GetEnv("CRM_SERVICE_ADDR", "localhost:50059"),
-		VisitTimeZone:       tz,
-		CancelDeadlineHours: cancelDeadlineHours,
+		GRPCPort:             config.GetEnv("GRPC_PORT", "50054"),
+		Postgres:             pg,
+		Redis:                config.NewRedisConfig(),
+		NATSURL:              config.GetEnv("NATS_URL", "nats://localhost:4222"),
+		VenueServiceAddr:     config.GetEnv("VENUE_SERVICE_ADDR", "localhost:50053"),
+		PaymentServiceAddr:   config.GetEnv("PAYMENT_SERVICE_ADDR", "localhost:50056"),
+		CRMServiceAddr:       config.GetEnv("CRM_SERVICE_ADDR", "localhost:50059"),
+		VisitTimeZone:        tz,
+		CancelDeadlineHours:  cancelDeadlineHours,
 		CursorHMACKey:        config.GetEnv("CURSOR_HMAC_KEY", ""),
 		InternalServiceToken: config.GetEnv("INTERNAL_SERVICE_TOKEN", ""),
 	}

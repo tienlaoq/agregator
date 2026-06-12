@@ -44,4 +44,3 @@ return 1
 	}
 	return v == 1, nil
 }
-

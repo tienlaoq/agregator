@@ -78,12 +78,12 @@ func TestFilterProps_allowsUtmKeys(t *testing.T) {
 
 func TestFilterProps_dropsPIIKeys(t *testing.T) {
 	in := map[string]any{
-		"email":       "user@example.com",
-		"phone":       "+79991234567",
-		"user_id":     "abc-123",
-		"name":        "Иван Иванов",
-		"page":        "/venues", // whitelisted — must survive
-		"utm_source":  "fb",      // utm — must survive
+		"email":      "user@example.com",
+		"phone":      "+79991234567",
+		"user_id":    "abc-123",
+		"name":       "Иван Иванов",
+		"page":       "/venues", // whitelisted — must survive
+		"utm_source": "fb",      // utm — must survive
 	}
 	out := filterProps(in)
 

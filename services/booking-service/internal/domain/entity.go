@@ -9,7 +9,8 @@ import (
 // BookingStatus — типизированные статусы брони.
 // Единственный источник правды: используется в usecase, repository, events.
 // Порядок переходов: Pending → PaymentPending → Confirmed → Completed
-//                                             ↘ Cancelled (из любого некомплетного)
+//
+//	↘ Cancelled (из любого некомплетного)
 type BookingStatus string
 
 const (
@@ -103,9 +104,9 @@ func (t *TimeOfDay) Scan(src any) error {
 }
 
 type Booking struct {
-	ID        string
-	UserID    string
-	VenueID   string
+	ID      string
+	UserID  string
+	VenueID string
 	// VenueName — намеренная денормализация: имя заведения копируется при создании брони
 	// и больше не синхронизируется с venue-service.
 	//

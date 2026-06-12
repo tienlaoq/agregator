@@ -124,6 +124,7 @@ func (noopVenueClient) ListVenues(context.Context, *venuev1.ListVenuesRequest, .
 func (noopVenueClient) SearchVenues(context.Context, *venuev1.SearchVenuesRequest, ...grpc.CallOption) (*venuev1.ListVenuesResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "not set up")
 }
+
 // ListOwnerVenues removed from venue.proto (gateway composes from CRM + venue).
 
 func (noopVenueClient) CheckSlotAvailability(context.Context, *venuev1.CheckSlotRequest, ...grpc.CallOption) (*venuev1.CheckSlotResponse, error) {
@@ -177,6 +178,7 @@ func (noopVenueClient) SetVenueHallCoverPhoto(context.Context, *venuev1.SetVenue
 func (noopVenueClient) SuspendVenuesByOwner(context.Context, *venuev1.SuspendVenuesByOwnerRequest, ...grpc.CallOption) (*venuev1.SuspendVenuesByOwnerResponse, error) {
 	return &venuev1.SuspendVenuesByOwnerResponse{}, nil
 }
+
 // CRM methods removed from venue.proto (now in proto/crm/v1/crm.proto).
 
 type noopUserClient struct{}

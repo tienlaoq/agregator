@@ -106,7 +106,7 @@ func TestValidateAccessToken_Malformed(t *testing.T) {
 		{"invalid base64 payload", "eyJhbGciOiJFUzI1NiJ9.!!!.sig"},
 		// alg-confusion attacks — any algorithm other than ES256 must be rejected
 		{"wrong alg HS256", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.e30.sig"},
-		{"wrong alg none", "eyJhbGciOiJub25lIn0.e30."},   // {"alg":"none"}
+		{"wrong alg none", "eyJhbGciOiJub25lIn0.e30."},      // {"alg":"none"}
 		{"wrong alg ES384", "eyJhbGciOiJFUzM4NCJ9.e30.sig"}, // {"alg":"ES384"}
 	}
 	for _, tc := range cases {

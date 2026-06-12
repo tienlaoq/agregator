@@ -119,4 +119,3 @@ func TestBroadcast_SlowClientDoesNotBlockOthers(t *testing.T) {
 		t.Fatal("slow client was unexpectedly dropped; batch overflowed the queue")
 	}
 }
-

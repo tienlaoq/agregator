@@ -31,9 +31,9 @@ import (
 )
 
 const (
-	defaultBatchSize    = 50
-	defaultInterval     = 5 * time.Second
-	staleSweepInterval  = time.Minute
+	defaultBatchSize   = 50
+	defaultInterval    = 5 * time.Second
+	staleSweepInterval = time.Minute
 )
 
 // Publisher is the subset of events.Publisher used by the worker.
@@ -43,10 +43,10 @@ type Publisher interface {
 
 // Worker polls the outbox table and publishes pending events to NATS.
 type Worker struct {
-	repo          domain.OutboxRepository
-	publisher     Publisher
-	interval      time.Duration
-	batchSize     int
+	repo           domain.OutboxRepository
+	publisher      Publisher
+	interval       time.Duration
+	batchSize      int
 	lastStaleSweep time.Time
 }
 

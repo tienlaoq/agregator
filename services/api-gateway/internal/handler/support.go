@@ -97,7 +97,9 @@ func (h *SupportHandler) Contact(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req supportContactRequest
-	if !readJSONOrRespond(w, r, &req) { return }
+	if !readJSONOrRespond(w, r, &req) {
+		return
+	}
 
 	req.Topic = strings.TrimSpace(req.Topic)
 	req.Message = strings.TrimSpace(req.Message)
@@ -237,7 +239,9 @@ type adminSupportReplyRequest struct {
 // AdminReply POST /api/v1/admin/support/reply — отправить ответ пользователю по обращению (только SMTP).
 func (h *SupportHandler) AdminReply(w http.ResponseWriter, r *http.Request) {
 	var req adminSupportReplyRequest
-	if !readJSONOrRespond(w, r, &req) { return }
+	if !readJSONOrRespond(w, r, &req) {
+		return
+	}
 
 	req.TicketNumber = clampString(strings.TrimSpace(req.TicketNumber), 48)
 	req.RequestID = clampString(strings.TrimSpace(req.RequestID), 48)

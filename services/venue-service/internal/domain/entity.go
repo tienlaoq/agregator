@@ -62,9 +62,9 @@ type Venue struct {
 	// marketplace-split to escrow + per-partner payouts.  The DB column lives on
 	// (default '') until a follow-up migration removes it; venue-service simply
 	// stops reading/writing it.  Partner payout rails now live in payment-service.
-	Services []VenueService
-	Photos            []VenuePhoto
-	Halls             []VenueHall
+	Services  []VenueService
+	Photos    []VenuePhoto
+	Halls     []VenueHall
 	CreatedAt time.Time
 	UpdatedAt time.Time
 }
@@ -99,14 +99,14 @@ type VenuePhoto struct {
 
 // VenueHall is a rentable space inside a venue (Russian: зал).
 type VenueHall struct {
-	ID          uuid.UUID
-	VenueID     uuid.UUID
-	Name        string
-	PriceFrom   int64
-	Capacity    int32
-	Amenities   []string
-	SortOrder   int32
-	Photos      []VenueHallPhoto
+	ID        uuid.UUID
+	VenueID   uuid.UUID
+	Name      string
+	PriceFrom int64
+	Capacity  int32
+	Amenities []string
+	SortOrder int32
+	Photos    []VenueHallPhoto
 }
 
 type VenueHallPhoto struct {

@@ -212,7 +212,7 @@ func (m *mockPasswordMail) SendPasswordReset(ctx context.Context, toEmail, rawTo
 
 type noopPasswordResetRepo struct{}
 
-func (noopPasswordResetRepo) InvalidateUnusedByUserID(context.Context, string) error { return nil }
+func (noopPasswordResetRepo) InvalidateUnusedByUserID(context.Context, string) error  { return nil }
 func (noopPasswordResetRepo) Create(context.Context, string, string, time.Time) error { return nil }
 func (noopPasswordResetRepo) ConsumeByTokenHash(context.Context, string) (string, error) {
 	return "", errors.New("noop reset repo")
@@ -288,7 +288,7 @@ func (noopEmailVerificationRepo) DeleteExpired(context.Context) (int64, error) {
 
 type noopVerifyMail struct{}
 
-func (noopVerifyMail) Enabled() bool                                       { return false }
+func (noopVerifyMail) Enabled() bool                                          { return false }
 func (noopVerifyMail) SendVerification(context.Context, string, string) error { return nil }
 
 // mockPartnerNotifier records Enqueue calls for assertions in tests.

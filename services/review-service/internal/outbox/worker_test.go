@@ -26,9 +26,9 @@ type mockTx struct {
 	rolledBack bool
 }
 
-func (m *mockTx) Begin(_ context.Context) (pgx.Tx, error)  { return m, nil }
-func (m *mockTx) Commit(_ context.Context) error           { m.committed = true; return m.commitErr }
-func (m *mockTx) Rollback(_ context.Context) error         { m.rolledBack = true; return nil }
+func (m *mockTx) Begin(_ context.Context) (pgx.Tx, error) { return m, nil }
+func (m *mockTx) Commit(_ context.Context) error          { m.committed = true; return m.commitErr }
+func (m *mockTx) Rollback(_ context.Context) error        { m.rolledBack = true; return nil }
 func (m *mockTx) CopyFrom(_ context.Context, _ pgx.Identifier, _ []string, _ pgx.CopyFromSource) (int64, error) {
 	return 0, nil
 }

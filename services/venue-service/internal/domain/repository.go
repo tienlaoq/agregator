@@ -14,8 +14,8 @@ type ListResult struct {
 }
 
 type SearchParams struct {
-	Query  string
-	Cities []string
+	Query     string
+	Cities    []string
 	Lat       float64
 	Lng       float64
 	RadiusKM  float64

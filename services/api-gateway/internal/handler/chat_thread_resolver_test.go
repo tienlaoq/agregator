@@ -78,9 +78,9 @@ func (f *resolverFakeVenue) GetVenuesBatch(_ context.Context, _ *venuev1.GetVenu
 // ── crm fake (mirrors the venue fake's access/staff fields) ───────────────────
 
 type resolverFakeCRM struct {
-	access      string
-	staff       []string
-	accessErr   error
+	access       string
+	staff        []string
+	accessErr    error
 	listStaffErr error
 }
 

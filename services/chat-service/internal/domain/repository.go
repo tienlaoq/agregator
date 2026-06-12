@@ -17,4 +17,3 @@ type Repository interface {
 	InsertMessage(ctx context.Context, threadID, authorUserID uuid.UUID, text, clientMsgID string) (*Message, *Thread, error)
 	MarkRead(ctx context.Context, threadID, userID uuid.UUID) error
 }
-

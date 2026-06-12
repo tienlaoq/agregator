@@ -55,16 +55,16 @@ func (h *UserHandler) GetMe(w http.ResponseWriter, r *http.Request) {
 
 // DeleteMe permanently deactivates the authenticated user's own account
 // (soft delete + anonymise) and cascades to their business data. Flow:
-//   1. Confirm the caller typed their exact account email (guards against
-//      accidental/CSRF-style deletion; the token alone is not enough).
-//   2. Block admin self-deletion — admins must be removed via admin tooling,
-//      never self-serve, so an attacker with a hijacked admin session can't
-//      destroy the account.
-//   3. Cascade-suspend owned venues / master profile so they leave public
-//      listings.
-//   4. Revoke all auth material (credential + refresh tokens) — kills every
-//      session immediately.
-//   5. Soft-delete + anonymise the user row.
+//  1. Confirm the caller typed their exact account email (guards against
+//     accidental/CSRF-style deletion; the token alone is not enough).
+//  2. Block admin self-deletion — admins must be removed via admin tooling,
+//     never self-serve, so an attacker with a hijacked admin session can't
+//     destroy the account.
+//  3. Cascade-suspend owned venues / master profile so they leave public
+//     listings.
+//  4. Revoke all auth material (credential + refresh tokens) — kills every
+//     session immediately.
+//  5. Soft-delete + anonymise the user row.
 //
 // Every downstream call is idempotent, so a client retry after a partial
 // failure converges. The refresh cookie is cleared by the frontend on logout.
@@ -146,7 +146,9 @@ func (h *UserHandler) UpdateMe(w http.ResponseWriter, r *http.Request) {
 		AvatarURL *string `json:"avatar_url"`
 		Bio       *string `json:"bio"`
 	}
-	if !readJSONOrRespond(w, r, &req) { return }
+	if !readJSONOrRespond(w, r, &req) {
+		return
+	}
 
 	grpcReq := &userv1.UpdateUserRequest{Id: userID}
 	if req.Name != nil {

@@ -145,4 +145,3 @@ func (c *Client) close() {
 		close(c.done)
 	}
 }
-

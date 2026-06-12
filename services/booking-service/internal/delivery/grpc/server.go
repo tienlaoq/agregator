@@ -153,12 +153,12 @@ func (s *Server) AddBookingStaffNote(ctx context.Context, req *bookingv1.AddBook
 	}
 	return &bookingv1.AddBookingStaffNoteResponse{
 		Note: &bookingv1.BookingStaffNote{
-			Id:            n.ID,
-			BookingId:     n.BookingID,
-			VenueId:       n.VenueID,
-			AuthorUserId:  n.AuthorUserID,
-			Body:          n.Body,
-			CreatedAt:     timestamppb.New(n.CreatedAt),
+			Id:           n.ID,
+			BookingId:    n.BookingID,
+			VenueId:      n.VenueID,
+			AuthorUserId: n.AuthorUserID,
+			Body:         n.Body,
+			CreatedAt:    timestamppb.New(n.CreatedAt),
 		},
 	}, nil
 }

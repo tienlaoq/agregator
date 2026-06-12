@@ -79,6 +79,7 @@ func (f *fakeVenueClient) GetVenue(context.Context, *venuev1.GetVenueRequest, ..
 func (f *fakeVenueClient) GetVenuesBatch(_ context.Context, in *venuev1.GetVenuesBatchRequest, _ ...grpc.CallOption) (*venuev1.GetVenuesBatchResponse, error) {
 	return &venuev1.GetVenuesBatchResponse{Venues: make(map[string]*venuev1.VenueResponse)}, nil
 }
+
 // Note: f.access / f.staff drive the resolverFakeCRM mirrored at the
 // NewChatHandler call site (see TestChatEnsureThread_ACLMatrix), since
 // CRM RPCs no longer live on venue.proto.

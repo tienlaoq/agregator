@@ -15,8 +15,8 @@ import (
 )
 
 type yamlRoot struct {
-	Version int        `yaml:"version"`
-	Errors  []yamlErr  `yaml:"errors"`
+	Version int       `yaml:"version"`
+	Errors  []yamlErr `yaml:"errors"`
 }
 
 type yamlErr struct {

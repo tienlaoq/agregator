@@ -59,7 +59,7 @@ func newStubRepo() *stubRepo {
 	}
 }
 
-func (r *stubRepo) addMaster(m *domain.Master) { r.masters[m.ID] = m }
+func (r *stubRepo) addMaster(m *domain.Master)         { r.masters[m.ID] = m }
 func (r *stubRepo) addBooking(b *domain.MasterBooking) { r.bookings[b.ID] = b }
 
 func (r *stubRepo) GetByID(_ context.Context, id uuid.UUID) (*domain.Master, error) {
@@ -299,10 +299,10 @@ func futureDate() string {
 // CreateBooking / moderation tests don't need to repeat all the fields.
 func activeMaster() *domain.Master {
 	return &domain.Master{
-		ID:      uuid.New(),
-		UserID:  uuid.New(),
-		Slug:    "test-slug",
-		Status:  domain.StatusActive,
+		ID:         uuid.New(),
+		UserID:     uuid.New(),
+		Slug:       "test-slug",
+		Status:     domain.StatusActive,
 		HourlyRate: 10_000,
 		Services: []domain.MasterService{
 			{ID: uuid.New(), Price: 5000},
@@ -327,12 +327,12 @@ func TestModerate_stateMachine(t *testing.T) {
 	moderatorID := uuid.New()
 
 	transitions := []struct {
-		name        string
-		fromStatus  string
-		action      string
-		comment     string
-		wantStatus  string
-		wantErr     bool
+		name       string
+		fromStatus string
+		action     string
+		comment    string
+		wantStatus string
+		wantErr    bool
 	}{
 		// valid transitions
 		{name: "pending_review → approve → active", fromStatus: domain.StatusPendingReview, action: "approve", wantStatus: domain.StatusActive},
@@ -673,11 +673,11 @@ func Test_normalizeRussianMobileDigits(t *testing.T) {
 		{"8 (999) 123-45-67", "79991234567"},
 		{"89991234567", "79991234567"},
 		{"79991234567", "79991234567"},
-		{"9991234567", "79991234567"},  // 10 digits — prepend 7
+		{"9991234567", "79991234567"}, // 10 digits — prepend 7
 		{"+7(999)1234567", "79991234567"},
 		{"", ""},
-		{"123", ""},       // too short
-		{"1234567890123", ""},  // too long
+		{"123", ""},           // too short
+		{"1234567890123", ""}, // too long
 		{"not-a-phone", ""},
 	}
 	for _, tt := range tests {

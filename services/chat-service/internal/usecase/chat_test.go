@@ -11,7 +11,7 @@ import (
 )
 
 type mockRepo struct {
-	thread           *domain.Thread
+	thread          *domain.Thread
 	lastClientMsgID string
 }
 

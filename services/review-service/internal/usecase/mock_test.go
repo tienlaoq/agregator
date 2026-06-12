@@ -22,9 +22,9 @@ type mockTx struct {
 	commitErr  error
 }
 
-func (m *mockTx) Begin(ctx context.Context) (pgx.Tx, error)  { return m, nil }
-func (m *mockTx) Commit(ctx context.Context) error           { m.committed = true; return m.commitErr }
-func (m *mockTx) Rollback(ctx context.Context) error         { m.rolledBack = true; return nil }
+func (m *mockTx) Begin(ctx context.Context) (pgx.Tx, error) { return m, nil }
+func (m *mockTx) Commit(ctx context.Context) error          { m.committed = true; return m.commitErr }
+func (m *mockTx) Rollback(ctx context.Context) error        { m.rolledBack = true; return nil }
 func (m *mockTx) CopyFrom(ctx context.Context, tableName pgx.Identifier, columnNames []string, rowSrc pgx.CopyFromSource) (int64, error) {
 	return 0, nil
 }

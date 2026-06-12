@@ -348,7 +348,9 @@ func (h *ChatHandler) EnsureThread(w http.ResponseWriter, r *http.Request) {
 		Kind  string `json:"kind"`
 		RefID string `json:"ref_id"`
 	}
-	if !readJSONOrRespond(w, r, &body) { return }
+	if !readJSONOrRespond(w, r, &body) {
+		return
+	}
 	var (
 		t   *chatv1.ChatThread
 		err error
@@ -442,7 +444,9 @@ func (h *ChatHandler) SendMessage(w http.ResponseWriter, r *http.Request) {
 		Text        string `json:"text"`
 		ClientMsgID string `json:"client_msg_id"`
 	}
-	if !readJSONOrRespond(w, r, &body) { return }
+	if !readJSONOrRespond(w, r, &body) {
+		return
+	}
 	resp, err := h.client.SendMessage(r.Context(), &chatv1.SendMessageRequest{
 		ThreadId:    threadID,
 		UserId:      userID,

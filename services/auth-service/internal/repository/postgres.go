@@ -123,7 +123,7 @@ func (r *CredentialRepo) SetEmailVerified(ctx context.Context, userID string, ve
 }
 
 // PromoteOAuthEmail updates a previously-empty email on an OAuth-only credential
-// row. Only touches rows where email IS NULL or '' to avoid clobbering a
+// row. Only touches rows where email IS NULL or ” to avoid clobbering a
 // legitimately set address that might have arrived via a concurrent request.
 func (r *CredentialRepo) PromoteOAuthEmail(ctx context.Context, userID, email string) error {
 	tag, err := r.pool.Exec(ctx,
@@ -140,7 +140,7 @@ func (r *CredentialRepo) PromoteOAuthEmail(ctx context.Context, userID, email st
 }
 
 // DeleteOrphanOAuthAccounts removes unverified-email OAuth-only credential rows
-// (email = '', password_hash IS NULL) that are older than minAge and have no
+// (email = ”, password_hash IS NULL) that are older than minAge and have no
 // associated active refresh tokens. This prevents unbounded accumulation of
 // accounts created when a provider sent EmailVerified=false.
 //

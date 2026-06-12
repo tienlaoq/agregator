@@ -70,7 +70,9 @@ func (h *BookingHandler) Create(w http.ResponseWriter, r *http.Request) {
 		Guests     int32    `json:"guests"`
 		Comment    string   `json:"comment"`
 	}
-	if !readJSONOrRespond(w, r, &req) { return }
+	if !readJSONOrRespond(w, r, &req) {
+		return
+	}
 
 	timeFrom := req.TimeFrom
 	if timeFrom == "" {
@@ -348,7 +350,9 @@ func (h *BookingHandler) AddBookingStaffNote(w http.ResponseWriter, r *http.Requ
 	var req struct {
 		Body string `json:"body"`
 	}
-	if !readJSONOrRespond(w, r, &req) { return }
+	if !readJSONOrRespond(w, r, &req) {
+		return
+	}
 
 	resp, err := h.client.AddBookingStaffNote(r.Context(), &bookingv1.AddBookingStaffNoteRequest{
 		BookingId:       bookingID,

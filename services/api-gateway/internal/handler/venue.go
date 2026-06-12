@@ -331,28 +331,28 @@ func (h *VenueHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		Name                    string                `json:"name"`
-		Type                    string                `json:"type"`
-		Description             string                `json:"description"`
-		Address                 string                `json:"address"`
-		City                    string                `json:"city"`
-		Latitude                float64               `json:"latitude"`
-		Longitude               float64               `json:"longitude"`
-		PriceFrom               int64                 `json:"price_from"`
-		Capacity                int32                 `json:"capacity"`
-		Amenities               []string              `json:"amenities"`
-		WorkingHours            string                `json:"working_hours"`
-		Phone                   string                `json:"phone"`
-		Services                []venueServiceItemReq `json:"services"`
-		LegalEntityName         string                `json:"legal_entity_name"`
-		INN                     string                `json:"inn"`
-		OGRN                    string                `json:"ogrn"`
-		PublicListingURL        string                `json:"public_listing_url"`
-		VerificationNote        string                `json:"verification_note"`
-		SocialLinks             json.RawMessage       `json:"social_links"`
-		Halls                   []venueHallItemReq    `json:"halls"`
-		StartAsDraft            bool                  `json:"start_as_draft"`
-		PayoutLegalForm         string                `json:"payout_legal_form"`
+		Name             string                `json:"name"`
+		Type             string                `json:"type"`
+		Description      string                `json:"description"`
+		Address          string                `json:"address"`
+		City             string                `json:"city"`
+		Latitude         float64               `json:"latitude"`
+		Longitude        float64               `json:"longitude"`
+		PriceFrom        int64                 `json:"price_from"`
+		Capacity         int32                 `json:"capacity"`
+		Amenities        []string              `json:"amenities"`
+		WorkingHours     string                `json:"working_hours"`
+		Phone            string                `json:"phone"`
+		Services         []venueServiceItemReq `json:"services"`
+		LegalEntityName  string                `json:"legal_entity_name"`
+		INN              string                `json:"inn"`
+		OGRN             string                `json:"ogrn"`
+		PublicListingURL string                `json:"public_listing_url"`
+		VerificationNote string                `json:"verification_note"`
+		SocialLinks      json.RawMessage       `json:"social_links"`
+		Halls            []venueHallItemReq    `json:"halls"`
+		StartAsDraft     bool                  `json:"start_as_draft"`
+		PayoutLegalForm  string                `json:"payout_legal_form"`
 	}
 	if !readJSONOrRespond(w, r, &req) {
 		return
@@ -379,29 +379,29 @@ func (h *VenueHandler) Create(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp, err := h.client.CreateVenue(r.Context(), &venuev1.CreateVenueRequest{
-		OwnerId:                 userID,
-		Name:                    req.Name,
-		Type:                    req.Type,
-		Description:             req.Description,
-		Address:                 req.Address,
-		City:                    req.City,
-		Latitude:                req.Latitude,
-		Longitude:               req.Longitude,
-		PriceFrom:               req.PriceFrom,
-		Capacity:                req.Capacity,
-		Amenities:               req.Amenities,
-		WorkingHours:            req.WorkingHours,
-		Phone:                   req.Phone,
-		Services:                grpcServices,
-		LegalEntityName:         req.LegalEntityName,
-		Inn:                     req.INN,
-		Ogrn:                    req.OGRN,
-		PublicListingUrl:        req.PublicListingURL,
-		VerificationNote:        req.VerificationNote,
-		SocialLinks:             socialJSON,
-		Halls:                   grpcHalls,
-		StartAsDraft:            req.StartAsDraft,
-		PayoutLegalForm:         req.PayoutLegalForm,
+		OwnerId:          userID,
+		Name:             req.Name,
+		Type:             req.Type,
+		Description:      req.Description,
+		Address:          req.Address,
+		City:             req.City,
+		Latitude:         req.Latitude,
+		Longitude:        req.Longitude,
+		PriceFrom:        req.PriceFrom,
+		Capacity:         req.Capacity,
+		Amenities:        req.Amenities,
+		WorkingHours:     req.WorkingHours,
+		Phone:            req.Phone,
+		Services:         grpcServices,
+		LegalEntityName:  req.LegalEntityName,
+		Inn:              req.INN,
+		Ogrn:             req.OGRN,
+		PublicListingUrl: req.PublicListingURL,
+		VerificationNote: req.VerificationNote,
+		SocialLinks:      socialJSON,
+		Halls:            grpcHalls,
+		StartAsDraft:     req.StartAsDraft,
+		PayoutLegalForm:  req.PayoutLegalForm,
 	})
 	if err != nil {
 		grpcErrorToHTTP(w, err)
@@ -438,26 +438,26 @@ func (h *VenueHandler) Update(w http.ResponseWriter, r *http.Request) {
 	venueID := chi.URLParam(r, "id")
 
 	var req struct {
-		Name                    *string                `json:"name"`
-		Description             *string                `json:"description"`
-		Address                 *string                `json:"address"`
-		City                    *string                `json:"city"`
-		Latitude                *float64               `json:"latitude"`
-		Longitude               *float64               `json:"longitude"`
-		PriceFrom               *int64                 `json:"price_from"`
-		Capacity                *int32                 `json:"capacity"`
-		Amenities               *[]string              `json:"amenities"`
-		WorkingHours            *string                `json:"working_hours"`
-		Phone                   *string                `json:"phone"`
-		LegalEntityName         *string                `json:"legal_entity_name"`
-		INN                     *string                `json:"inn"`
-		OGRN                    *string                `json:"ogrn"`
-		PublicListingURL        *string                `json:"public_listing_url"`
-		VerificationNote        *string                `json:"verification_note"`
-		SocialLinks             *json.RawMessage       `json:"social_links"`
-		Services                *[]venueServiceItemReq `json:"services"`
-		Halls                   *[]venueHallItemReq    `json:"halls"`
-		PayoutLegalForm         *string                `json:"payout_legal_form"`
+		Name             *string                `json:"name"`
+		Description      *string                `json:"description"`
+		Address          *string                `json:"address"`
+		City             *string                `json:"city"`
+		Latitude         *float64               `json:"latitude"`
+		Longitude        *float64               `json:"longitude"`
+		PriceFrom        *int64                 `json:"price_from"`
+		Capacity         *int32                 `json:"capacity"`
+		Amenities        *[]string              `json:"amenities"`
+		WorkingHours     *string                `json:"working_hours"`
+		Phone            *string                `json:"phone"`
+		LegalEntityName  *string                `json:"legal_entity_name"`
+		INN              *string                `json:"inn"`
+		OGRN             *string                `json:"ogrn"`
+		PublicListingURL *string                `json:"public_listing_url"`
+		VerificationNote *string                `json:"verification_note"`
+		SocialLinks      *json.RawMessage       `json:"social_links"`
+		Services         *[]venueServiceItemReq `json:"services"`
+		Halls            *[]venueHallItemReq    `json:"halls"`
+		PayoutLegalForm  *string                `json:"payout_legal_form"`
 	}
 	if !readJSONOrRespond(w, r, &req) {
 		return
