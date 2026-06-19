@@ -84,7 +84,7 @@ export default function PartnerPage() {
     setError("")
     setLoading(true)
     try {
-      const rawPhone = isMasterTrack ? "" : getRawPhone(contactPhone)
+      const rawPhone = getRawPhone(contactPhone)
       const res = await register({
         name: contactName,
         email: contactEmail,
@@ -353,7 +353,7 @@ export default function PartnerPage() {
                 <CardTitle className="text-2xl text-card-foreground">Контактные данные</CardTitle>
                 <CardDescription>
                   {isMasterTrack
-                    ? "Создадим аккаунт пар-мастера. Номер телефона для клиентов укажите один раз — в карточке профиля в кабинете."
+                    ? "Создадим аккаунт пар-мастера. Телефон укажите здесь — он подставится в карточку профиля, повторно вводить не нужно."
                     : "Создадим аккаунт владельца и свяжемся, если будут вопросы"}
                 </CardDescription>
               </CardHeader>
@@ -381,17 +381,20 @@ export default function PartnerPage() {
                   />
                 </div>
 
-                {!isMasterTrack && (
-                  <div className="space-y-2">
-                    <Label htmlFor="contactPhone">Телефон</Label>
-                    <PhoneInput
-                      id="contactPhone"
-                      value={contactPhone}
-                      onChange={setContactPhone}
-                      required
-                    />
-                  </div>
-                )}
+                <div className="space-y-2">
+                  <Label htmlFor="contactPhone">Телефон</Label>
+                  <PhoneInput
+                    id="contactPhone"
+                    value={contactPhone}
+                    onChange={setContactPhone}
+                    required
+                  />
+                  {isMasterTrack && (
+                    <p className="text-xs text-muted-foreground">
+                      Этот номер увидят клиенты. Он автоматически появится в карточке профиля.
+                    </p>
+                  )}
+                </div>
 
                 <div className="space-y-2">
                   <Label htmlFor="contactPassword">Придумайте пароль</Label>
@@ -423,7 +426,13 @@ export default function PartnerPage() {
                     <Button
                       className="flex-1 gap-2"
                       onClick={handleSubmit}
-                      disabled={loading || !contactName || !contactEmail || !passwordValid}
+                      disabled={
+                        loading ||
+                        !contactName ||
+                        !contactEmail ||
+                        !passwordValid ||
+                        !getRawPhone(contactPhone).trim()
+                      }
                     >
                       {loading ? "Регистрация..." : "Зарегистрироваться"}
                       {!loading && <CheckCircle2 className="h-4 w-4" />}

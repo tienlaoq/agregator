@@ -373,6 +373,10 @@ export default function MasterProfilePage() {
   // useState вместо useRef: ref нельзя писать во время рендера, а гидрация
   // теперь делается render-time (см. ниже), не в useEffect.
   const [hydratedProfileId, setHydratedProfileId] = useState<string | null>(null);
+  // Одноразовый флаг: для нового мастера (профиля ещё нет) подставляем телефон
+  // из аккаунта — он был указан при регистрации. Без этого блок гидрации из
+  // профиля ниже не сработает (профиля нет), и номер пришлось бы вводить заново.
+  const [newMasterPhoneSeeded, setNewMasterPhoneSeeded] = useState(false);
 
   useEffect(() => {
     if (hydrated && (!token || user?.role !== "master")) {
@@ -519,6 +523,17 @@ export default function MasterProfilePage() {
       setTravelExcludeZones([]);
     }
     setExcludePlacementMode(false);
+  }
+
+  // Новый мастер (сохранённого профиля ещё нет): телефон, указанный при
+  // регистрации, лежит на аккаунте. Подставляем его один раз, чтобы не вводить
+  // повторно. Блок гидрации выше для этого случая не запускается (profile = null).
+  if (notFound && !newMasterPhoneSeeded) {
+    setNewMasterPhoneSeeded(true);
+    const registeredPhone = user?.role === "master" ? user.phone?.trim() : "";
+    if (registeredPhone) {
+      setPhone(displayPhoneFromStored(registeredPhone));
+    }
   }
 
   // Имя берём из регистрации (user.name) — отдельно спрашивать его на этом шаге
