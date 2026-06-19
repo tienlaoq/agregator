@@ -2,7 +2,6 @@
 
 import { useEffect, useState } from "react";
 import Image from "next/image";
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
@@ -20,9 +19,14 @@ import { useAuthStore } from "@/store/auth";
 import {
   getAdminMasters,
   moderateMaster,
-  getMasterModerationHistory,
   venueMediaUrl,
 } from "@/lib/api";
+import {
+  Dialog,
+  DialogContent,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { MasterPublicPageClient } from "@/app/(public)/masters/[slug]/master-public-page-client";
 import { MasterTravelBaseMap } from "@/components/banya/master-travel-base-map";
 import type { MasterPhoto, MasterProfile, MasterTravelExcludeZone } from "@/lib/types";
 import {
@@ -34,11 +38,10 @@ import {
   ChevronDown,
   Shield,
   Users,
-  History,
+  Eye,
   MapPin,
   Phone,
   Clock,
-  ExternalLink,
   CheckCircle2,
   XCircle,
   Pause,
@@ -396,7 +399,10 @@ export default function AdminMastersPage() {
   const [filterStatus, setFilterStatus] = useState("pending_review");
   const [comment, setComment] = useState("");
   const [pending, setPending] = useState<{ id: string; action: ModerationAction } | null>(null);
-  const [expandedId, setExpandedId] = useState<string | null>(null);
+  // Карточка, открытая в превью. Рендерим публичный компонент из уже загруженных
+  // данных мастера — публичный эндпоинт отдаёт 404 для немодерированных профилей,
+  // поэтому показываем из списка, без сетевого запроса.
+  const [previewMaster, setPreviewMaster] = useState<MasterProfile | null>(null);
 
   useEffect(() => {
     if (hydrated && (!token || user?.role !== "admin")) {
@@ -408,12 +414,6 @@ export default function AdminMastersPage() {
     queryKey: ["admin-masters", filterStatus],
     queryFn: () => getAdminMasters({ status: filterStatus, limit: 100 }),
     enabled: !!token && user?.role === "admin",
-  });
-
-  const historyQuery = useQuery({
-    queryKey: ["admin-master-history", expandedId],
-    queryFn: () => getMasterModerationHistory(expandedId!, 50),
-    enabled: !!expandedId && user?.role === "admin",
   });
 
   const mutation = useMutation({
@@ -600,12 +600,15 @@ export default function AdminMastersPage() {
 
                 {pending?.id !== m.id && (
                   <div className="flex flex-wrap gap-2">
-                    {m.status === "active" && m.slug && (
-                      <Button size="sm" variant="outline" className="gap-1.5" asChild>
-                        <Link href={`/masters/${m.slug}`} target="_blank" rel="noopener noreferrer">
-                          <ExternalLink className="h-4 w-4" />
-                          Просмотр карточки
-                        </Link>
+                    {m.slug && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="gap-1.5"
+                        onClick={() => setPreviewMaster(m)}
+                      >
+                        <Eye className="h-4 w-4" />
+                        Просмотр карточки
                       </Button>
                     )}
                     {m.status === "pending_review" && (
@@ -676,35 +679,31 @@ export default function AdminMastersPage() {
                         </Button>
                       </>
                     )}
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      className="gap-1.5"
-                      onClick={() => setExpandedId(expandedId === m.id ? null : m.id)}
-                    >
-                      <History className="h-3.5 w-3.5" />
-                      История
-                    </Button>
                   </div>
-                )}
-                {expandedId === m.id && historyQuery.data && (
-                  <ul className="mt-2 space-y-2 border-t border-border pt-3 text-xs">
-                    {historyQuery.data.entries.map((e) => (
-                      <li key={e.id} className="text-muted-foreground">
-                        <span className="font-medium text-foreground">
-                          {e.old_status} → {e.new_status}
-                        </span>{" "}
-                        · {e.created_at}
-                        {e.comment && <span className="block mt-1">{e.comment}</span>}
-                      </li>
-                    ))}
-                  </ul>
                 )}
               </CardContent>
             </Card>
           );
         })}
       </div>
+
+      <Dialog
+        open={previewMaster !== null}
+        onOpenChange={(open) => !open && setPreviewMaster(null)}
+      >
+        <DialogContent
+          className="max-w-5xl max-h-[90vh] overflow-y-auto p-0"
+          aria-describedby={undefined}
+        >
+          <DialogTitle className="sr-only">Просмотр карточки мастера</DialogTitle>
+          {previewMaster && (
+            <MasterPublicPageClient
+              slug={previewMaster.slug}
+              initialMaster={previewMaster}
+            />
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
