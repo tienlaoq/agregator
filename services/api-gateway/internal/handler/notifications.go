@@ -517,24 +517,10 @@ func (h *NotificationHandler) WS(w http.ResponseWriter, r *http.Request) {
 	c := h.hub.Add(userID, rawConn)
 	defer h.hub.Remove(userID, c)
 
-	done := make(chan struct{})
-	defer close(done)
-
-	ticker := time.NewTicker(wsPingInterval)
-	defer ticker.Stop()
-	go func() {
-		for {
-			select {
-			case <-ticker.C:
-				_ = rawConn.SetWriteDeadline(time.Now().Add(wsWriteWait))
-				if err := rawConn.WriteMessage(websocket.PingMessage, nil); err != nil {
-					return
-				}
-			case <-done:
-				return
-			}
-		}
-	}()
+	// Keepalive pings are emitted by the hub's writeLoop (the single writer to
+	// this connection). gorilla/websocket panics on concurrent writes, so the
+	// ping must NOT run in a separate goroutine here — that panic fires outside
+	// the HTTP recoverer and crashes the whole gateway process.
 
 	_ = c.SendJSON(map[string]any{"event": "notification.connected"})
 

@@ -13,6 +13,12 @@ import (
 var (
 	defaultQueueSize = limits.ChatHubQueueSize
 	writeTimeout     = limits.ChatHubWriteTimeout
+	// pingInterval drives the keepalive Ping emitted by writeLoop. It lives in
+	// the hub so writeLoop is the single goroutine that writes to the
+	// connection — gorilla/websocket panics on concurrent writes, so the ping
+	// must share the writer goroutine with text frames rather than run in a
+	// separate goroutine of its own.
+	pingInterval = limits.ChatWSPingInterval
 )
 
 type wsConn interface {
@@ -125,10 +131,22 @@ func (c *Client) SendJSON(v any) error {
 }
 
 func (c *Client) writeLoop() {
+	ticker := time.NewTicker(pingInterval)
+	defer ticker.Stop()
 	for {
 		select {
 		case <-c.done:
 			return
+		case <-ticker.C:
+			// Keepalive ping. Emitted from this goroutine — the sole writer to
+			// the connection — so it never races a text-frame write (gorilla
+			// panics on concurrent writes, which previously crashed the whole
+			// process from a separate per-handler ping goroutine).
+			_ = c.conn.SetWriteDeadline(time.Now().Add(writeTimeout))
+			if err := c.conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+				c.close()
+				return
+			}
 		case msg := <-c.sendCh:
 			_ = c.conn.SetWriteDeadline(time.Now().Add(writeTimeout))
 			if err := c.conn.WriteMessage(websocket.TextMessage, msg); err != nil {

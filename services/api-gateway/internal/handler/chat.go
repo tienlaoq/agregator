@@ -547,34 +547,10 @@ func (h *ChatHandler) WS(w http.ResponseWriter, r *http.Request) {
 	c := h.hub.Add(userID, rawConn)
 	defer h.hub.Remove(userID, c)
 
-	// N9: use a local done channel rather than r.Context().Done() to signal the
-	// ping goroutine.  r.Context() is cancelled by the HTTP server sometime after
-	// WS() returns — there is a window where the read loop has already exited but
-	// the goroutine is still alive and may attempt a WriteMessage on the closed
-	// connection.  Closing done via defer guarantees the goroutine exits at most
-	// one ticker period after the read loop, without relying on HTTP server
-	// internals.
-	done := make(chan struct{})
-	defer close(done)
-
-	ticker := time.NewTicker(wsPingInterval)
-	defer ticker.Stop()
-
-	// Run the ping loop in a separate goroutine so it doesn't block the read
-	// loop below.
-	go func() {
-		for {
-			select {
-			case <-ticker.C:
-				_ = rawConn.SetWriteDeadline(time.Now().Add(wsWriteWait))
-				if err := rawConn.WriteMessage(websocket.PingMessage, nil); err != nil {
-					return
-				}
-			case <-done:
-				return
-			}
-		}
-	}()
+	// Keepalive pings are emitted by the hub's writeLoop (the single writer to
+	// this connection). gorilla/websocket panics on concurrent writes, so the
+	// ping must NOT run in a separate goroutine here — that panic fires outside
+	// the HTTP recoverer and crashes the whole gateway process.
 
 	// best-effort: SendJSON returns non-nil only when json.Marshal fails, which
 	// cannot happen for the map[string]any literals below (all primitive types).
