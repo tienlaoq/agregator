@@ -43,6 +43,7 @@ import { Badge } from "@/components/ui/badge";
 import { redirectToLogin } from "@/lib/auth-redirect";
 import {
   addBookingStaffNote,
+  cancelVenueCrmTask,
   completeVenueCrmTask,
   createVenueCrmTask,
   formatApiErrorMessage,
@@ -53,18 +54,24 @@ import {
   listVenueCrmTasks,
   listVenueStaff,
   removeVenueStaff,
+  reopenVenueCrmTask,
+  updateVenueCrmTask,
 } from "@/lib/api";
 import { useAuthStore } from "@/store/auth";
 import type { Booking, Venue, VenueCrmTask, VenueStaffRow } from "@/lib/types";
 import { BOOKING_STATUS_LABELS, VENUE_TYPE_LABELS } from "@/lib/types";
 import {
   ArrowLeft,
+  Ban,
   CheckCircle2,
   ChevronDown,
+  Clock,
   Loader2,
   Pencil,
+  RotateCcw,
   Trash2,
   UserPlus,
+  Users,
 } from "lucide-react";
 import { BookingChatPanel } from "@/components/banya/booking-chat-panel";
 
@@ -98,6 +105,60 @@ const VENUE_CRM_ROLE_LABELS: Record<string, string> = {
 
 function venueCrmRoleLabel(role: string): string {
   return VENUE_CRM_ROLE_LABELS[role] ?? role;
+}
+
+const TASK_PRIORITY_LABELS: Record<string, string> = {
+  low: "Низкий",
+  normal: "Обычный",
+  high: "Высокий",
+};
+
+function taskPriorityLabel(p: string): string {
+  return TASK_PRIORITY_LABELS[p] ?? p;
+}
+
+/** Редактирование/переоткрытие/отмену задач может только владелец или менеджер. */
+function canManageVenueTasks(venue: Venue, userId: string | undefined): boolean {
+  if (!userId) return false;
+  if (venue.management_access === "owner" || venue.management_access === "manager") {
+    return true;
+  }
+  if (!venue.management_access && venue.owner_id === userId) return true;
+  return false;
+}
+
+/** Открытая задача с прошедшим сроком. */
+function isTaskOverdue(t: VenueCrmTask): boolean {
+  if (t.status !== "open" || !t.due_at) return false;
+  const d = new Date(t.due_at);
+  return !Number.isNaN(d.getTime()) && d.getTime() < Date.now();
+}
+
+/** Подпись исполнителя: имя из команды, иначе обобщённая отметка. */
+function taskAssigneeLabel(
+  userId: string,
+  staffById: Map<string, VenueStaffRow>,
+): string {
+  const s = staffById.get(userId);
+  return s ? venueStaffMemberPrimary(s) : "вне команды";
+}
+
+/** ISO → значение для <input type="datetime-local"> (локальное время). */
+function isoToDateTimeLocal(iso: string | undefined): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+/** datetime-local → RFC3339 (UTC); пусто → undefined (срок не задан / снят). */
+function dateTimeLocalToISO(v: string): string | undefined {
+  const s = v.trim();
+  if (!s) return undefined;
+  const d = new Date(s);
+  if (Number.isNaN(d.getTime())) return undefined;
+  return d.toISOString();
 }
 
 /** Имя из профиля пользователя; иначе email; иначе подсказка (не нейтральная «команда»). */
@@ -142,6 +203,10 @@ export default function OwnerVenueCrmPage() {
   const [taskTitle, setTaskTitle] = useState("");
   const [taskBody, setTaskBody] = useState("");
   const [taskBookingId, setTaskBookingId] = useState("");
+  const [taskPriority, setTaskPriority] = useState("normal");
+  const [taskDueAt, setTaskDueAt] = useState("");
+  const [taskAssignee, setTaskAssignee] = useState("");
+  const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
   const [pageError, setPageError] = useState("");
   const [inviteError, setInviteError] = useState("");
   const [taskError, setTaskError] = useState("");
@@ -180,6 +245,11 @@ export default function OwnerVenueCrmPage() {
     queryFn: () => listVenueStaff(venueId as string),
     enabled: !!token && validId && !!venue,
   });
+
+  const staffById = useMemo(
+    () => new Map(staff.map((s) => [s.user_id, s] as const)),
+    [staff],
+  );
 
   const { data: tasks = [], isLoading: tasksLoading } = useQuery({
     queryKey: ["venue-crm-tasks", venueId, taskFilter],
@@ -224,22 +294,62 @@ export default function OwnerVenueCrmPage() {
     },
   });
 
-  const createTaskMu = useMutation({
-    mutationFn: () =>
-      createVenueCrmTask(venueId as string, {
+  const resetTaskForm = () => {
+    setEditingTaskId(null);
+    setTaskTitle("");
+    setTaskBody("");
+    setTaskBookingId("");
+    setTaskPriority("normal");
+    setTaskDueAt("");
+    setTaskAssignee("");
+    setTaskError("");
+  };
+
+  const startEditTask = (t: VenueCrmTask) => {
+    setEditingTaskId(t.id);
+    setTaskTitle(t.title);
+    setTaskBody(t.body ?? "");
+    setTaskBookingId(t.booking_id ?? "");
+    setTaskPriority(t.priority || "normal");
+    setTaskDueAt(isoToDateTimeLocal(t.due_at));
+    setTaskAssignee(t.assignee_user_id ?? "");
+    setTaskError("");
+  };
+
+  // Single mutation backs both the create and edit forms — editingTaskId decides.
+  const saveTaskMu = useMutation({
+    mutationFn: () => {
+      const dueAt = dateTimeLocalToISO(taskDueAt);
+      const assignee = taskAssignee || undefined;
+      if (editingTaskId) {
+        return updateVenueCrmTask(venueId as string, editingTaskId, {
+          title: taskTitle.trim(),
+          body: taskBody.trim(),
+          priority: taskPriority,
+          assignee_user_id: assignee,
+          due_at: dueAt,
+        });
+      }
+      return createVenueCrmTask(venueId as string, {
         title: taskTitle.trim(),
         body: taskBody.trim(),
         booking_id: taskBookingId.trim() || undefined,
-      }),
+        assignee_user_id: assignee,
+        priority: taskPriority,
+        due_at: dueAt,
+      });
+    },
     onSuccess: () => {
-      setTaskError("");
-      setTaskTitle("");
-      setTaskBody("");
-      setTaskBookingId("");
+      resetTaskForm();
       void queryClient.invalidateQueries({ queryKey: ["venue-crm-tasks", venueId] });
     },
     onError: (e: unknown) => {
-      setTaskError(formatApiErrorMessage(e, "Не удалось создать задачу."));
+      setTaskError(
+        formatApiErrorMessage(
+          e,
+          editingTaskId ? "Не удалось сохранить задачу." : "Не удалось создать задачу.",
+        ),
+      );
     },
   });
 
@@ -251,6 +361,27 @@ export default function OwnerVenueCrmPage() {
     },
     onError: (e: unknown) => {
       setPageError(formatApiErrorMessage(e, "Не удалось закрыть задачу."));
+    },
+  });
+
+  const reopenTaskMu = useMutation({
+    mutationFn: (taskId: string) => reopenVenueCrmTask(venueId as string, taskId),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["venue-crm-tasks", venueId] });
+    },
+    onError: (e: unknown) => {
+      setPageError(formatApiErrorMessage(e, "Не удалось переоткрыть задачу."));
+    },
+  });
+
+  const cancelTaskMu = useMutation({
+    mutationFn: (taskId: string) => cancelVenueCrmTask(venueId as string, taskId),
+    onSuccess: (_, taskId) => {
+      if (editingTaskId === taskId) resetTaskForm();
+      void queryClient.invalidateQueries({ queryKey: ["venue-crm-tasks", venueId] });
+    },
+    onError: (e: unknown) => {
+      setPageError(formatApiErrorMessage(e, "Не удалось отменить задачу."));
     },
   });
 
@@ -322,6 +453,7 @@ export default function OwnerVenueCrmPage() {
   }
 
   const staffManage = canManageVenueStaff(venue, user?.id);
+  const canManageTasks = canManageVenueTasks(venue, user?.id);
 
   return (
     <section className="min-h-screen bg-muted/30 py-8 md:py-10">
@@ -344,14 +476,22 @@ export default function OwnerVenueCrmPage() {
               <Badge variant="outline">{venue.management_access}</Badge>
             ) : null}
           </div>
-          {canEditVenueCard ? (
+          <div className="flex flex-wrap items-center gap-2">
             <Button variant="outline" size="sm" className="gap-1" asChild>
-              <Link href={`/owner/venues/${venue.id}/edit`}>
-                <Pencil className="h-4 w-4" />
-                Карточка заведения
+              <Link href={`/owner/venues/${venue.id}/crm/guests`}>
+                <Users className="h-4 w-4" />
+                Гости
               </Link>
             </Button>
-          ) : null}
+            {canEditVenueCard ? (
+              <Button variant="outline" size="sm" className="gap-1" asChild>
+                <Link href={`/owner/venues/${venue.id}/edit`}>
+                  <Pencil className="h-4 w-4" />
+                  Карточка заведения
+                </Link>
+              </Button>
+            ) : null}
+          </div>
         </div>
 
         {pageError ? (
@@ -383,6 +523,7 @@ export default function OwnerVenueCrmPage() {
                       <SelectItem value="all">Все</SelectItem>
                       <SelectItem value="open">Открытые</SelectItem>
                       <SelectItem value="done">Закрытые</SelectItem>
+                      <SelectItem value="cancelled">Отменённые</SelectItem>
                     </SelectContent>
                   </Select>
                 </div>
@@ -406,48 +547,129 @@ export default function OwnerVenueCrmPage() {
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {tasks.map((t: VenueCrmTask) => (
-                        <TableRow key={t.id}>
-                          <TableCell>
-                            <div className="font-medium">{t.title}</div>
-                            {t.body ? (
-                              <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">
-                                {t.body}
-                              </p>
-                            ) : null}
-                          </TableCell>
-                          <TableCell>
-                            <Badge
-                              variant={
-                                t.status === "done" ? "secondary" : "default"
-                              }
-                            >
-                              {t.status === "done" ? "Готово" : "Открыта"}
-                            </Badge>
-                          </TableCell>
-                          <TableCell className="text-right">
-                            {t.status === "open" ? (
-                              <Button
-                                type="button"
-                                size="sm"
-                                variant="outline"
-                                disabled={completeTaskMu.isPending}
-                                onClick={() => completeTaskMu.mutate(t.id)}
+                      {tasks.map((t: VenueCrmTask) => {
+                        const overdue = isTaskOverdue(t);
+                        return (
+                          <TableRow key={t.id}>
+                            <TableCell>
+                              <div className="font-medium">{t.title}</div>
+                              {t.body ? (
+                                <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">
+                                  {t.body}
+                                </p>
+                              ) : null}
+                              <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+                                {t.priority && t.priority !== "normal" ? (
+                                  <Badge
+                                    variant={
+                                      t.priority === "high"
+                                        ? "destructive"
+                                        : "outline"
+                                    }
+                                    className="font-normal"
+                                  >
+                                    {taskPriorityLabel(t.priority)}
+                                  </Badge>
+                                ) : null}
+                                {t.due_at ? (
+                                  <span
+                                    className={`inline-flex items-center gap-1 ${
+                                      overdue ? "font-medium text-destructive" : ""
+                                    }`}
+                                  >
+                                    <Clock className="h-3 w-3" />
+                                    {formatDt(t.due_at)}
+                                    {overdue ? " · просрочено" : ""}
+                                  </span>
+                                ) : null}
+                                {t.assignee_user_id ? (
+                                  <span>
+                                    Исполнитель:{" "}
+                                    {taskAssigneeLabel(t.assignee_user_id, staffById)}
+                                  </span>
+                                ) : null}
+                              </div>
+                            </TableCell>
+                            <TableCell>
+                              <Badge
+                                variant={
+                                  t.status === "done"
+                                    ? "secondary"
+                                    : t.status === "cancelled"
+                                      ? "outline"
+                                      : "default"
+                                }
                               >
-                                <CheckCircle2 className="mr-1 h-3.5 w-3.5" />
-                                Закрыть
-                              </Button>
-                            ) : null}
-                          </TableCell>
-                        </TableRow>
-                      ))}
+                                {t.status === "done"
+                                  ? "Готово"
+                                  : t.status === "cancelled"
+                                    ? "Отменена"
+                                    : "Открыта"}
+                              </Badge>
+                            </TableCell>
+                            <TableCell className="text-right">
+                              <div className="flex flex-wrap justify-end gap-1.5">
+                                {t.status === "open" ? (
+                                  <>
+                                    <Button
+                                      type="button"
+                                      size="sm"
+                                      variant="outline"
+                                      disabled={completeTaskMu.isPending}
+                                      onClick={() => completeTaskMu.mutate(t.id)}
+                                    >
+                                      <CheckCircle2 className="mr-1 h-3.5 w-3.5" />
+                                      Закрыть
+                                    </Button>
+                                    {canManageTasks ? (
+                                      <>
+                                        <Button
+                                          type="button"
+                                          size="sm"
+                                          variant="ghost"
+                                          onClick={() => startEditTask(t)}
+                                          title="Редактировать"
+                                        >
+                                          <Pencil className="h-3.5 w-3.5" />
+                                        </Button>
+                                        <Button
+                                          type="button"
+                                          size="sm"
+                                          variant="ghost"
+                                          className="text-destructive hover:text-destructive"
+                                          disabled={cancelTaskMu.isPending}
+                                          onClick={() => cancelTaskMu.mutate(t.id)}
+                                          title="Отменить задачу"
+                                        >
+                                          <Ban className="h-3.5 w-3.5" />
+                                        </Button>
+                                      </>
+                                    ) : null}
+                                  </>
+                                ) : t.status === "done" && canManageTasks ? (
+                                  <Button
+                                    type="button"
+                                    size="sm"
+                                    variant="outline"
+                                    disabled={reopenTaskMu.isPending}
+                                    onClick={() => reopenTaskMu.mutate(t.id)}
+                                  >
+                                    <RotateCcw className="mr-1 h-3.5 w-3.5" />
+                                    Переоткрыть
+                                  </Button>
+                                ) : null}
+                              </div>
+                            </TableCell>
+                          </TableRow>
+                        );
+                      })}
                     </TableBody>
                   </Table>
                 )}
               </div>
 
               <div className="space-y-3 border-t border-border pt-4">
-                <Label>Новая задача</Label>
+                <Label>{editingTaskId ? "Редактировать задачу" : "Новая задача"}</Label>
                 {taskError ? (
                   <p className="text-sm text-destructive">{taskError}</p>
                 ) : null}
@@ -462,39 +684,91 @@ export default function OwnerVenueCrmPage() {
                   onChange={(e) => setTaskBody(e.target.value)}
                   className="min-h-[80px]"
                 />
-                <div className="space-y-2">
-                  <Label htmlFor="task-booking-id" className="text-foreground">
-                    Задача про конкретное бронирование?
-                  </Label>
-                  <p className="text-xs text-muted-foreground">
-                    Оставьте пустым — задача общая по заведению. Если нужно привязать к одному визиту,
-                    вставьте технический номер брони (UUID), например из письма поддержки или
-                    внутренних инструментов — в списке броней ниже этот номер не показывается.
-                  </p>
-                  <Input
-                    id="task-booking-id"
-                    placeholder="Технический номер брони — только если известен"
-                    value={taskBookingId}
-                    onChange={(e) => setTaskBookingId(e.target.value)}
-                    autoComplete="off"
-                  />
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div className="space-y-2">
+                    <Label htmlFor="task-priority">Приоритет</Label>
+                    <Select value={taskPriority} onValueChange={setTaskPriority}>
+                      <SelectTrigger id="task-priority">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="low">Низкий</SelectItem>
+                        <SelectItem value="normal">Обычный</SelectItem>
+                        <SelectItem value="high">Высокий</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="task-due">Срок</Label>
+                    <Input
+                      id="task-due"
+                      type="datetime-local"
+                      value={taskDueAt}
+                      onChange={(e) => setTaskDueAt(e.target.value)}
+                    />
+                  </div>
                 </div>
-                <Button
-                  type="button"
-                  disabled={
-                    createTaskMu.isPending || !taskTitle.trim()
-                  }
-                  onClick={() => createTaskMu.mutate()}
-                >
-                  {createTaskMu.isPending ? (
-                    <>
-                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                      Создание…
-                    </>
-                  ) : (
-                    "Создать задачу"
-                  )}
-                </Button>
+                <div className="space-y-2">
+                  <Label htmlFor="task-assignee">Исполнитель</Label>
+                  <Select
+                    value={taskAssignee || "none"}
+                    onValueChange={(v) => setTaskAssignee(v === "none" ? "" : v)}
+                  >
+                    <SelectTrigger id="task-assignee">
+                      <SelectValue placeholder="Не назначена" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="none">Не назначена</SelectItem>
+                      {staff.map((s: VenueStaffRow) => (
+                        <SelectItem key={s.user_id} value={s.user_id}>
+                          {venueStaffMemberPrimary(s)}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                {!editingTaskId ? (
+                  <div className="space-y-2">
+                    <Label htmlFor="task-booking-id" className="text-foreground">
+                      Задача про конкретное бронирование?
+                    </Label>
+                    <p className="text-xs text-muted-foreground">
+                      Оставьте пустым — задача общая по заведению. Если нужно привязать к одному визиту,
+                      вставьте технический номер брони (UUID), например из письма поддержки или
+                      внутренних инструментов — в списке броней ниже этот номер не показывается.
+                    </p>
+                    <Input
+                      id="task-booking-id"
+                      placeholder="Технический номер брони — только если известен"
+                      value={taskBookingId}
+                      onChange={(e) => setTaskBookingId(e.target.value)}
+                      autoComplete="off"
+                    />
+                  </div>
+                ) : null}
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    type="button"
+                    disabled={saveTaskMu.isPending || !taskTitle.trim()}
+                    onClick={() => saveTaskMu.mutate()}
+                  >
+                    {saveTaskMu.isPending ? (
+                      <>
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        {editingTaskId ? "Сохранение…" : "Создание…"}
+                      </>
+                    ) : editingTaskId ? (
+                      "Сохранить"
+                    ) : (
+                      "Создать задачу"
+                    )}
+                  </Button>
+                  {editingTaskId ? (
+                    <Button type="button" variant="ghost" onClick={resetTaskForm}>
+                      Отмена
+                    </Button>
+                  ) : null}
+                </div>
               </div>
             </CardContent>
           </Card>

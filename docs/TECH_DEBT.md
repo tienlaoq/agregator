@@ -101,17 +101,28 @@ venue-service.
 
 ## [BOOKING-PUBLISH-LOSS] — NATS publish без транзакционного outbox
 
-**File**: `services/booking-service/internal/usecase/booking.go` — `publishEvent()`
+**Status: РЕШЕНО для `booking.created` / `booking.confirmed` / `booking.cancelled`**
+(transactional outbox реализован). `booking.completed` по-прежнему использует
+собственный механизм `completed_event_sent_at` и в outbox не входит — он уже
+at-least-once, переносить его незачем.
 
-**Current behaviour**  
-Четыре события (`booking.created`, `booking.cancelled` ×2, `booking.confirmed`)
-публикуются через `publishEvent()` после успешной операции с БД. При недоступном
-NATS ошибка логируется (`log.Error`), но не возвращается вызывающему — операция
-уже совершена и откатить её нельзя. Downstream-консьюмеры (review, notification)
-не получают триггер.
+**Реализация**
+- Таблица `outbox_events` + partial-индекс (migration `009_outbox_events`).
+- Смена статуса брони и `INSERT` события происходят в ОДНОЙ транзакции:
+  `repo.SetPaymentAndStatus` (created), `repo.CancelWithEvent` (cancelled),
+  `repo.ConfirmPayment` (confirmed). Прямые `publisher.Publish*` из usecase убраны.
+- Выделенный поллер `BookingUseCase.ProcessOutbox` (отдельный короткий тикер в
+  `cmd/main.go`, не 2-минутный AutoComplete) читает неотправленные строки,
+  публикует через `Publisher.PublishRaw`, затем `MarkOutboxSent`. Publish раньше
+  mark = at-least-once; консьюмеры (review/notification) идемпотентны по `booking_id`.
+- Формат события — единый `domain.NewBookingEvent` (и outbox, и прямой
+  `PublishBookingCompleted` маршалят через него — byte-совместимость с консьюмерами).
 
-Исключение: `booking.completed` в `AutoCompletePastVisits` уже частично защищён
-catch-up паттерном через `completed_event_sent_at` (см. миграцию 007).
+**Было (до выноса в outbox)**  
+Четыре события публиковались через `publishEvent()` после коммита в БД. При
+недоступном NATS ошибка логировалась, но не возвращалась — операция уже совершена,
+downstream-консьюмеры (review, notification) триггер не получали (потеря рефанда/
+уведомления навсегда).
 
 **Accepted residual risk**  
 При кратковременном сбое NATS событие теряется навсегда. Для `booking.created`
@@ -202,16 +213,25 @@ writing uploaded files to the local filesystem (`UPLOAD_ROOT`). This works
 for single-replica local development but is incompatible with horizontal
 scaling or container restarts that do not preserve the volume.
 
-**Accepted residual risk**  
-Dev/staging data loss on container restart. No production risk as long as
-`MINIO_ENDPOINT` is always set in production deploys (enforced by
-`deploy/.env.example`).
+**Hardening (done)**  
+The silent prod fallback is now closed by a startup gate in
+`cmd/deps.go`: when `isProductionEnv(cfg.ChatAddr)` is true and
+`MINIO_ENDPOINT` is empty, `setupDependencies` returns an error and the
+gateway refuses to start instead of serving the local-disk uploader. This
+matches the existing `REDIS_ADDR` / `INTERNAL_SERVICE_TOKEN` prod gates.
+The decision function `isProductionEnv` is covered by `cmd/config_test.go`.
 
-**Upgrade path**  
+**Accepted residual risk**  
+Dev/staging data loss on container restart remains (DiskUploader is still
+the local default outside production). There is no longer a path to silently
+run on local disk in production — a misconfigured prod deploy fails loudly at
+boot.
+
+**Upgrade path (remaining)**  
 Set `MINIO_ENDPOINT`, `MINIO_ACCESS_KEY`, `MINIO_SECRET_KEY`,
 `MINIO_BUCKET`, and `MINIO_PUBLIC_BASE_URL` in `deploy/.env` and restart.
-No code changes required. Remove `DiskUploader` entirely once all
-environments are confirmed to use MinIO.
+Remove `DiskUploader` entirely once all environments are confirmed to use
+MinIO — at that point this entry can be closed.
 
 ---
 

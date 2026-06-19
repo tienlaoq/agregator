@@ -33,6 +33,8 @@ import {
 } from "@/lib/api";
 import { EmailVerificationNotice } from "@/components/banya/email-verification-notice";
 import type {
+  MasterCredentialItem,
+  MasterCredentialKind,
   MasterPhoto,
   MasterProfile,
   MasterServiceItem,
@@ -42,7 +44,17 @@ import { excludeZoneContainedInTravelRadius, haversineKm } from "@/lib/geo";
 import { MASTER_PROFILE_STATUS_LABELS } from "@/lib/types";
 import { MasterTravelBaseMap } from "@/components/banya/master-travel-base-map";
 import { PhoneInput, getRawPhone, displayPhoneFromStored } from "@/components/banya/phone-input";
-import { Plus, Trash2, ArrowLeft, Send, Upload, CircleAlert } from "lucide-react";
+import {
+  Plus,
+  Trash2,
+  ArrowLeft,
+  Send,
+  Upload,
+  CircleAlert,
+  Award,
+  CheckCircle2,
+  Circle,
+} from "lucide-react";
 
 function kopecksToRub(k: number) {
   return k / 100;
@@ -130,6 +142,31 @@ function servicesFromProfile(s: MasterServiceItem[]): ServiceLine[] {
   }));
 }
 
+type CredentialLine = {
+  key: string;
+  kind: MasterCredentialKind;
+  title: string;
+  issuer: string;
+  /** Год получения как строка для удобного ввода; пусто = не указан. */
+  year: string;
+};
+
+function newCredentialLine(kind: MasterCredentialKind = "certificate"): CredentialLine {
+  return { key: crypto.randomUUID(), kind, title: "", issuer: "", year: "" };
+}
+
+function credentialsFromProfile(items: MasterCredentialItem[]): CredentialLine[] {
+  return items.map((x) => ({
+    key: x.id || crypto.randomUUID(),
+    kind: x.kind === "award" ? "award" : "certificate",
+    title: x.title,
+    issuer: x.issuer ?? "",
+    year: x.year && x.year > 0 ? String(x.year) : "",
+  }));
+}
+
+const MAX_CREDENTIALS = 50;
+
 const MAX_MASTER_PHOTOS = 12;
 
 /** Старое значение из БД (до миграции) и единый регистр slug для формы/API. */
@@ -154,6 +191,49 @@ function normalizeRussianMobileDigits(phone: string): string {
   }
   if (d.length === 10) return "7" + d;
   return "";
+}
+
+type ChecklistItem = { label: string; done: boolean; optional?: boolean };
+
+/** Пункты готовности профиля к модерации. Зеркалит обязательные проверки из
+ *  masterSubmitValidationMessage, но как независимые булевы флаги — чтобы каждый
+ *  пункт чек-листа подсвечивался отдельно. Авторитетный гейт на отправку
+ *  остаётся в masterSubmitValidationMessage. */
+function masterReadinessChecklist(
+  body: Record<string, unknown>,
+  photoCount: number,
+): ChecklistItem[] {
+  const digits = (v: unknown) => String(v ?? "").replace(/\D/g, "");
+  const plf = String(body.payout_legal_form ?? "").trim().toLowerCase();
+  const innLen = digits(body.payout_inn).length;
+  const innOk = plf === "ooo" ? innLen === 10 : innLen === 12;
+  let payoutExtraOk = true;
+  if (plf === "ooo") {
+    payoutExtraOk =
+      digits(body.payout_kpp).length === 9 && digits(body.payout_ogrn).length === 13;
+  } else if (plf === "ip") {
+    payoutExtraOk = digits(body.payout_ogrnip).length === 15;
+  }
+  const payoutOk =
+    ["ip", "ooo", "individual", "self_employed"].includes(plf) &&
+    String(body.payout_legal_name ?? "").trim() !== "" &&
+    innOk &&
+    payoutExtraOk &&
+    String(body.payout_bank_name ?? "").trim() !== "" &&
+    digits(body.payout_bik).length === 9 &&
+    digits(body.payout_settlement_account).length === 20 &&
+    digits(body.payout_correspondent_account).length === 20;
+  const bio = String(body.bio ?? "").trim();
+  const svc = body.services;
+  return [
+    { label: "Имя на платформе", done: String(body.display_name ?? "").trim() !== "" },
+    { label: "Город", done: String(body.city ?? "").trim() !== "" },
+    { label: "Телефон", done: normalizeRussianMobileDigits(String(body.phone ?? "")) !== "" },
+    { label: "О себе — от 20 символов", done: [...bio].length >= 20 },
+    { label: "Хотя бы одна услуга", done: Array.isArray(svc) && svc.length > 0 },
+    { label: "Реквизиты для выплат", done: payoutOk },
+    { label: "Фото профиля", done: photoCount > 0, optional: true },
+  ];
 }
 
 function masterSubmitValidationMessage(body: Record<string, unknown>): string | null {
@@ -258,7 +338,6 @@ export default function MasterProfilePage() {
   const router = useRouter();
   const qc = useQueryClient();
   const { token, user, hydrated } = useAuthStore();
-  const [createName, setCreateName] = useState("");
   const [error, setError] = useState("");
   const [emailNotVerified, setEmailNotVerified] = useState(false);
   const [submitWarning, setSubmitWarning] = useState("");
@@ -290,6 +369,7 @@ export default function MasterProfilePage() {
   const [specText, setSpecText] = useState("");
   const [availabilityNote, setAvailabilityNote] = useState("");
   const [services, setServices] = useState<ServiceLine[]>([newServiceLine()]);
+  const [credentials, setCredentials] = useState<CredentialLine[]>([]);
   // useState вместо useRef: ref нельзя писать во время рендера, а гидрация
   // теперь делается render-time (см. ниже), не в useEffect.
   const [hydratedProfileId, setHydratedProfileId] = useState<string | null>(null);
@@ -421,6 +501,9 @@ export default function MasterProfilePage() {
     setServices(
       profile.services?.length ? servicesFromProfile(profile.services) : [newServiceLine()],
     );
+    setCredentials(
+      profile.credentials?.length ? credentialsFromProfile(profile.credentials) : [],
+    );
     const wf = profile.work_format || "both";
     if (wf === "mobile" || wf === "both") {
       setTravelExcludeZones(
@@ -438,16 +521,23 @@ export default function MasterProfilePage() {
     setExcludePlacementMode(false);
   }
 
+  // Имя берём из регистрации (user.name) — отдельно спрашивать его на этом шаге
+  // не нужно. Его всегда можно изменить ниже в поле «Имя на платформе».
+  const defaultMasterName = (
+    user?.name?.trim() ||
+    user?.email?.split("@")[0] ||
+    "Мастер"
+  ).trim();
+
   const createMut = useMutation({
-    mutationFn: () => createMasterProfile(createName.trim()),
+    mutationFn: () => createMasterProfile(defaultMasterName),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["my-master-profile"] });
       setError("");
       setEmailNotVerified(false);
     },
     onError: (e) => {
-      // Email-gate: show the resend block instead of the generic error; the
-      // typed name is preserved so the partner can retry after verifying.
+      // Email-gate: show the resend block instead of the generic error.
       if (isEmailNotVerifiedError(e)) {
         setEmailNotVerified(true);
         setError("");
@@ -457,6 +547,15 @@ export default function MasterProfilePage() {
       }
     },
   });
+
+  // Профиль создаётся автоматически, как только выясняется, что его ещё нет:
+  // имя уже известно из регистрации, поэтому повторный ввод не нужен. isIdle
+  // не даёт повторно дёргать создание после ошибки (в т.ч. email-gate).
+  useEffect(() => {
+    if (notFound && !emailNotVerified && createMut.isIdle) {
+      createMut.mutate();
+    }
+  }, [notFound, emailNotVerified, createMut]);
 
   const buildMasterPatchBody = (): Record<string, unknown> => {
     const specs = specText
@@ -477,6 +576,17 @@ export default function MasterProfilePage() {
         };
         if (l.id) row.id = l.id;
         return row;
+      });
+    const credPayload = credentials
+      .filter((c) => c.title.trim())
+      .map((c) => {
+        const yearNum = parseInt(c.year, 10);
+        return {
+          kind: c.kind,
+          title: c.title.trim(),
+          issuer: c.issuer.trim(),
+          year: Number.isFinite(yearNum) && yearNum > 0 ? yearNum : 0,
+        };
       });
     const body: Record<string, unknown> = {
       display_name: displayName.trim(),
@@ -500,6 +610,7 @@ export default function MasterProfilePage() {
       availability_json: mergeAvailabilityWithNote(profile?.availability_json, availabilityNote),
       specializations: specs,
       services: svcPayload,
+      credentials: credPayload,
     };
     if (workFormat === "mobile" || workFormat === "both") {
       const lat = travelBasePinLat;
@@ -611,8 +722,12 @@ export default function MasterProfilePage() {
   const masterPhotoCount = sortedMasterPhotos.length;
   const canAddMasterPhotos = masterPhotoCount < MAX_MASTER_PHOTOS;
 
+  const checklistBody = buildMasterPatchBody();
+  const checklist = masterReadinessChecklist(checklistBody, masterPhotoCount);
+  const checklistDone = checklist.filter((i) => i.done).length;
+
   return (
-    <div className="container mx-auto max-w-2xl px-4 py-10">
+    <div className="container mx-auto max-w-6xl px-4 py-10">
       <Button variant="ghost" asChild className="mb-6 gap-2">
         <Link href="/owner/master">
           <ArrowLeft className="h-4 w-4" />
@@ -631,35 +746,23 @@ export default function MasterProfilePage() {
 
       {notFound && (
         <Card>
-          <CardHeader>
-            <CardTitle>Создать профиль</CardTitle>
-            <CardDescription>Как к вам обращаться на платформе</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
+          <CardContent className="space-y-4 py-6">
             {emailNotVerified && user?.email ? (
               <EmailVerificationNotice email={user.email} />
-            ) : null}
-            <div className="space-y-2">
-              <Label htmlFor="createName">Отображаемое имя</Label>
-              <Input
-                id="createName"
-                value={createName}
-                onChange={(e) => setCreateName(e.target.value)}
-                placeholder="Например: Пармастер Алексей"
-              />
-            </div>
-            <Button
-              disabled={!createName.trim() || createMut.isPending}
-              onClick={() => createMut.mutate()}
-            >
-              {createMut.isPending ? "Создание..." : "Создать профиль"}
-            </Button>
+            ) : error ? (
+              <Button onClick={() => createMut.mutate()} disabled={createMut.isPending}>
+                {createMut.isPending ? "Создание..." : "Повторить"}
+              </Button>
+            ) : (
+              <p className="text-muted-foreground">Готовим ваш профиль…</p>
+            )}
           </CardContent>
         </Card>
       )}
 
       {!profileQuery.isLoading && profile && (
-        <>
+        <div className="lg:grid lg:grid-cols-[minmax(0,1fr)_300px] lg:items-start lg:gap-8">
+          <div className="min-w-0">
           <div className="mb-6 flex flex-wrap items-center gap-2">
             <span className="text-sm text-muted-foreground">Статус:</span>
             <Badge>{meta?.label ?? profile.status}</Badge>
@@ -1239,6 +1342,111 @@ export default function MasterProfilePage() {
                 ))}
               </div>
 
+              <div className="space-y-3">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <Award className="h-4 w-4 text-muted-foreground" />
+                    <Label>Сертификаты и награды</Label>
+                  </div>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="gap-1"
+                    disabled={credentials.length >= MAX_CREDENTIALS}
+                    onClick={() => setCredentials((c) => [...c, newCredentialLine()])}
+                  >
+                    <Plus className="h-4 w-4" />
+                    Добавить
+                  </Button>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Необязательно. Дипломы, сертификаты об обучении и награды повышают
+                  доверие клиентов — они отображаются в вашей карточке.
+                </p>
+                {credentials.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">Пока ничего не добавлено.</p>
+                ) : (
+                  credentials.map((line, idx) => (
+                    <div key={line.key} className="space-y-2 rounded-lg border border-border p-3">
+                      <div className="flex items-center justify-between gap-2">
+                        <Select
+                          value={line.kind}
+                          onValueChange={(v) =>
+                            setCredentials((c) =>
+                              c.map((x, i) =>
+                                i === idx ? { ...x, kind: v as MasterCredentialKind } : x,
+                              ),
+                            )
+                          }
+                        >
+                          <SelectTrigger className="h-9 w-[170px]">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="certificate">Сертификат</SelectItem>
+                            <SelectItem value="award">Награда</SelectItem>
+                          </SelectContent>
+                        </Select>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className="h-8 w-8 text-destructive"
+                          onClick={() =>
+                            setCredentials((c) => c.filter((_, i) => i !== idx))
+                          }
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </div>
+                      <Input
+                        placeholder={
+                          line.kind === "award"
+                            ? "Название награды"
+                            : "Название сертификата / диплома"
+                        }
+                        value={line.title}
+                        onChange={(e) =>
+                          setCredentials((c) =>
+                            c.map((x, i) =>
+                              i === idx ? { ...x, title: e.target.value } : x,
+                            ),
+                          )
+                        }
+                      />
+                      <div className="grid grid-cols-1 gap-2 sm:grid-cols-[1fr_110px]">
+                        <Input
+                          placeholder="Кем выдан (необязательно)"
+                          value={line.issuer}
+                          onChange={(e) =>
+                            setCredentials((c) =>
+                              c.map((x, i) =>
+                                i === idx ? { ...x, issuer: e.target.value } : x,
+                              ),
+                            )
+                          }
+                        />
+                        <Input
+                          inputMode="numeric"
+                          placeholder="Год"
+                          value={line.year}
+                          onChange={(e) =>
+                            setCredentials((c) =>
+                              c.map((x, i) =>
+                                i === idx
+                                  ? { ...x, year: e.target.value.replace(/\D/g, "").slice(0, 4) }
+                                  : x,
+                              ),
+                            )
+                          }
+                        />
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+
               <div className="flex flex-col gap-3 pt-4 sm:flex-row">
                 <Button
                   className="flex-1"
@@ -1282,7 +1490,45 @@ export default function MasterProfilePage() {
               )}
             </CardContent>
           </Card>
-        </>
+          </div>
+
+          <aside className="mt-6 lg:mt-0 lg:sticky lg:top-20 lg:max-h-[calc(100vh-6rem)] lg:self-start lg:overflow-y-auto">
+            <Card className="border-border">
+              <CardHeader className="pb-3">
+                <CardTitle className="text-base">Чек-лист профиля</CardTitle>
+                <CardDescription>
+                  Выполнено {checklistDone} из {checklist.length}. Заполните
+                  обязательные пункты, чтобы отправить профиль на модерацию.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <ul className="space-y-2.5">
+                  {checklist.map((item) => (
+                    <li key={item.label} className="flex items-start gap-2.5 text-sm">
+                      {item.done ? (
+                        <CheckCircle2
+                          className="mt-0.5 h-4 w-4 shrink-0 text-green-600 dark:text-green-500"
+                          aria-hidden
+                        />
+                      ) : (
+                        <Circle
+                          className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground/40"
+                          aria-hidden
+                        />
+                      )}
+                      <span className={item.done ? "text-foreground" : "text-muted-foreground"}>
+                        {item.label}
+                        {item.optional ? (
+                          <span className="text-muted-foreground"> · необязательно</span>
+                        ) : null}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </CardContent>
+            </Card>
+          </aside>
+        </div>
       )}
     </div>
   );

@@ -18,11 +18,13 @@ import (
 	"github.com/tienlao/agregator/pkg/grpcutil"
 	"github.com/tienlao/agregator/pkg/logger"
 	"github.com/tienlao/agregator/pkg/metrics"
+	"github.com/tienlao/agregator/pkg/natsutil"
 	"github.com/tienlao/agregator/pkg/postgres"
 
 	"github.com/tienlao/agregator/services/crm-service/config"
 	"github.com/tienlao/agregator/services/crm-service/internal/dbmigrate"
 	delivery "github.com/tienlao/agregator/services/crm-service/internal/delivery/grpc"
+	crmevents "github.com/tienlao/agregator/services/crm-service/internal/events"
 	"github.com/tienlao/agregator/services/crm-service/internal/repository"
 	"github.com/tienlao/agregator/services/crm-service/internal/usecase"
 )
@@ -61,7 +63,24 @@ func main() {
 	}()
 
 	repo := repository.New(pgPool)
-	uc := usecase.New(repo)
+	uc := usecase.New(repo, usecase.WithVIPThreshold(cfg.VIPSpentThreshold))
+
+	// Guest-projection consumer: subscribe to booking.* on the BOOKINGS stream
+	// and maintain the Customer 360 read model. The stream is owned by
+	// booking-service; EnsureStream is a no-op when it already exists.
+	nc, js, err := natsutil.Connect(cfg.NATSURL)
+	if err != nil {
+		log.Fatal().Err(err).Msg("failed to connect to nats")
+	}
+	log.Info().Msg("connected to nats")
+	if err := natsutil.EnsureStream(js, crmevents.StreamName, []string{"booking.>"}); err != nil {
+		log.Fatal().Err(err).Msg("ensure BOOKINGS stream failed")
+	}
+	guestSub := crmevents.NewSubscriber(js, repo, log, m)
+	if err := guestSub.Subscribe(); err != nil {
+		log.Fatal().Err(err).Msg("subscribe to booking events failed")
+	}
+	log.Info().Msg("guest-projection consumer started")
 
 	srvOpts, err := grpcutil.ServerOptionsFromEnv()
 	if err != nil {
@@ -135,6 +154,10 @@ func main() {
 	}
 
 	grpcServer.GracefulStop()
+	// Drain waits for in-flight booking-event handlers to finish (DrainTimeout).
+	if err := nc.Drain(); err != nil {
+		log.Warn().Err(err).Msg("nats drain error")
+	}
 	cancel()
 	log.Info().Msg("crm-service stopped")
 }

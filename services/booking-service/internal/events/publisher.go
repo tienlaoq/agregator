@@ -2,8 +2,6 @@ package events
 
 import (
 	"context"
-	"encoding/json"
-	"fmt"
 
 	"github.com/nats-io/nats.go"
 
@@ -18,42 +16,23 @@ func NewPublisher(js nats.JetStreamContext) *Publisher {
 	return &Publisher{js: js}
 }
 
-type bookingEvent struct {
-	BookingID string `json:"booking_id"`
-	UserID    string `json:"user_id"`
-	VenueID   string `json:"venue_id"`
-	Status    string `json:"status"`
-}
-
-func (p *Publisher) PublishBookingCreated(ctx context.Context, b *domain.Booking) error {
-	return p.publish(ctx, "booking.created", b)
-}
-
-func (p *Publisher) PublishBookingConfirmed(ctx context.Context, b *domain.Booking) error {
-	return p.publish(ctx, "booking.confirmed", b)
-}
-
-func (p *Publisher) PublishBookingCancelled(ctx context.Context, b *domain.Booking) error {
-	return p.publish(ctx, "booking.cancelled", b)
-}
-
+// PublishBookingCompleted публикует booking.completed напрямую. Этот путь не
+// идёт через outbox — он защищён собственным механизмом completed_event_sent_at
+// (см. AutoCompletePastVisits, migration 007).
 func (p *Publisher) PublishBookingCompleted(ctx context.Context, b *domain.Booking) error {
-	return p.publish(ctx, "booking.completed", b)
+	ev, err := domain.NewBookingEvent("booking.completed", b)
+	if err != nil {
+		return err
+	}
+	return p.PublishRaw(ctx, ev.Subject, ev.Payload)
 }
 
-// publish отправляет событие в JetStream синхронно, уважая дедлайн/отмену ctx.
-// nats.Context(ctx) позволяет js.PublishMsg вернуть ошибку немедленно если
-// контекст отменён или истёк — без зависания на залипшей шине.
-func (p *Publisher) publish(ctx context.Context, subject string, b *domain.Booking) error {
-	data, err := json.Marshal(bookingEvent{
-		BookingID: b.ID,
-		UserID:    b.UserID,
-		VenueID:   b.VenueID,
-		Status:    string(b.Status),
-	})
-	if err != nil {
-		return fmt.Errorf("marshal event: %w", err)
-	}
-	_, err = p.js.PublishMsg(&nats.Msg{Subject: subject, Data: data}, nats.Context(ctx))
+// PublishRaw отправляет уже сериализованное тело события в subject синхронно,
+// уважая дедлайн/отмену ctx. nats.Context(ctx) позволяет js.PublishMsg вернуть
+// ошибку немедленно если контекст отменён — без зависания на залипшей шине.
+// Используется поллером outbox (ProcessOutbox) для доставки staged-событий
+// booking.created/confirmed/cancelled. См. TECH_DEBT [BOOKING-PUBLISH-LOSS].
+func (p *Publisher) PublishRaw(ctx context.Context, subject string, payload []byte) error {
+	_, err := p.js.PublishMsg(&nats.Msg{Subject: subject, Data: payload}, nats.Context(ctx))
 	return err
 }

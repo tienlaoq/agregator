@@ -371,9 +371,37 @@ ORDER BY master_id, sort_order ASC, id ASC`, ids)
 	return out, rows.Err()
 }
 
-// attachAssociations populates Services and Photos on every element of list
-// using exactly two batch queries regardless of list length. It mutates list
-// in-place and is safe to call with an empty slice (no queries are issued).
+// batchLoadCredentials fetches certificates/awards for a set of masters in a
+// single query and returns them grouped by master ID, ordered by sort_order ASC
+// then id so callers do not need to re-sort.
+func (r *MasterRepo) batchLoadCredentials(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID][]domain.MasterCredential, error) {
+	out := make(map[uuid.UUID][]domain.MasterCredential, len(ids))
+	if len(ids) == 0 {
+		return out, nil
+	}
+	rows, err := r.pool.Query(ctx, `
+SELECT id, master_id, kind, title, issuer, year, sort_order
+FROM master_credentials
+WHERE master_id = ANY($1::uuid[])
+ORDER BY master_id, sort_order, id`, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var c domain.MasterCredential
+		if err := rows.Scan(&c.ID, &c.MasterID, &c.Kind, &c.Title, &c.Issuer, &c.Year, &c.SortOrder); err != nil {
+			return nil, err
+		}
+		out[c.MasterID] = append(out[c.MasterID], c)
+	}
+	return out, rows.Err()
+}
+
+// attachAssociations populates Services, Photos and Credentials on every element
+// of list using a fixed number of batch queries regardless of list length. It
+// mutates list in-place and is safe to call with an empty slice (no queries are
+// issued).
 func (r *MasterRepo) attachAssociations(ctx context.Context, list []domain.Master) error {
 	if len(list) == 0 {
 		return nil
@@ -390,13 +418,18 @@ func (r *MasterRepo) attachAssociations(ctx context.Context, list []domain.Maste
 	if err != nil {
 		return err
 	}
+	credMap, err := r.batchLoadCredentials(ctx, ids)
+	if err != nil {
+		return err
+	}
 	// Index-based loop is intentional: list is a []domain.Master value slice
 	// (not a pointer slice), so `for _, m := range list { m.Services = ... }`
 	// would mutate a copy and the caller would see no change. list[i].Field = …
 	// addresses the actual element in the backing array.
 	for i := range list {
-		list[i].Services = svcsMap[list[i].ID] // nil if master has no services
-		list[i].Photos = phMap[list[i].ID]     // nil if master has no photos
+		list[i].Services = svcsMap[list[i].ID]    // nil if master has no services
+		list[i].Photos = phMap[list[i].ID]        // nil if master has no photos
+		list[i].Credentials = credMap[list[i].ID] // nil if master has no credentials
 	}
 	return nil
 }
@@ -686,6 +719,38 @@ RETURNING id, master_id, name, description, duration_min, price, sort_order`,
 			return nil, err
 		}
 		out = append(out, s)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// ReplaceCredentials atomically swaps a master's full credential list. Like
+// ReplaceServices it DELETEs the existing rows and re-INSERTs the supplied
+// items inside one transaction, so a failed save never leaves a partial list.
+func (r *MasterRepo) ReplaceCredentials(ctx context.Context, masterID uuid.UUID, items []domain.MasterCredentialUpsert) ([]domain.MasterCredential, error) {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `DELETE FROM master_credentials WHERE master_id = $1`, masterID); err != nil {
+		return nil, err
+	}
+	out := make([]domain.MasterCredential, 0, len(items))
+	for i, it := range items {
+		var c domain.MasterCredential
+		err := tx.QueryRow(ctx, `
+INSERT INTO master_credentials (id, master_id, kind, title, issuer, year, sort_order)
+VALUES ($1,$2,$3,$4,$5,$6,$7)
+RETURNING id, master_id, kind, title, issuer, year, sort_order`,
+			uuid.New(), masterID, it.Kind, it.Title, it.Issuer, it.Year, int32(i),
+		).Scan(&c.ID, &c.MasterID, &c.Kind, &c.Title, &c.Issuer, &c.Year, &c.SortOrder)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, c)
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return nil, err

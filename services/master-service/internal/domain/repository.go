@@ -33,6 +33,10 @@ type MasterRepository interface {
 	ListByStatus(ctx context.Context, statusFilter string, limit, offset int32) ([]Master, int32, error)
 	ListPublic(ctx context.Context, params ListPublicMastersParams) ([]Master, int32, error)
 	ReplaceServices(ctx context.Context, masterID uuid.UUID, items []MasterServiceUpsert) ([]MasterService, error)
+	// ReplaceCredentials deletes all of a master's certificates/awards and
+	// re-inserts the supplied list in a single transaction. An empty list
+	// clears the credentials. SortOrder falls back to list index when unset.
+	ReplaceCredentials(ctx context.Context, masterID uuid.UUID, items []MasterCredentialUpsert) ([]MasterCredential, error)
 	InsertModerationHistory(ctx context.Context, e *ModerationHistoryEntry) error
 	// UpdateStatusWithHistory atomically updates masters.status and appends a
 	// ModerationHistoryEntry in a single transaction. Use this instead of calling

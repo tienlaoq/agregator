@@ -202,6 +202,19 @@ func buildDeps(ctx context.Context, log zerolog.Logger, cfg Config) (*deps, func
 			Str("bucket", cfg.MinIOBucket).
 			Msg("storage: MinIO uploader active")
 	} else {
+		// ── Production gate: object storage required ─────────────────────────
+		// DiskUploader writes to the container's local filesystem, which does
+		// not survive restarts and is not shared across replicas — uploaded
+		// photos would be lost or unreachable behind a load balancer. Fail fast
+		// in production rather than silently serving a fallback that drops
+		// files. See TECH_DEBT [STORAGE-01].
+		if isProductionEnv(cfg.ChatAddr) {
+			return nil, cleanup, fmt.Errorf(
+				"MINIO_ENDPOINT is required in production: the local-disk uploader " +
+					"is single-replica and loses files on container restart; set " +
+					"MINIO_ENDPOINT, MINIO_ACCESS_KEY, MINIO_SECRET_KEY and MINIO_BUCKET",
+			)
+		}
 		diskUploader, err := storage.NewDiskUploader(cfg.UploadRoot, "/api/v1/uploads")
 		if err != nil {
 			return nil, cleanup, fmt.Errorf("storage: disk init: %w", err)

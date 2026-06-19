@@ -4,6 +4,7 @@ import { FormEvent, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useMutation } from "@tanstack/react-query";
 import Link from "next/link";
+import { AlertCircle } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -142,6 +143,37 @@ function AdminSupportRedirect() {
   );
 }
 
+function SupportAuthRequired() {
+  return (
+    <section className="bg-background py-10 md:py-16">
+      <div className="container mx-auto max-w-2xl px-4">
+        <Card>
+          <CardHeader>
+            <div className="flex items-center gap-2 text-destructive">
+              <AlertCircle className="h-5 w-5 shrink-0" />
+              <CardTitle>Требуется вход в аккаунт</CardTitle>
+            </div>
+            <CardDescription>
+              Обращения в поддержку доступны только авторизованным пользователям — так мы свяжем заявку
+              с вашим аккаунтом и сможем ответить. Войдите или зарегистрируйтесь, чтобы продолжить.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="flex flex-wrap gap-2">
+              <Button asChild>
+                <Link href="/auth/login?next=/support">Войти</Link>
+              </Button>
+              <Button asChild variant="outline">
+                <Link href="/auth/register?next=/support">Зарегистрироваться</Link>
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+    </section>
+  );
+}
+
 export default function SupportPage() {
   const hydrated = useAuthStore((s) => s.hydrated);
   const user = useAuthStore((s) => s.user);
@@ -156,6 +188,10 @@ export default function SupportPage() {
 
   if (user?.role === "admin") {
     return <AdminSupportRedirect />;
+  }
+
+  if (!user) {
+    return <SupportAuthRequired />;
   }
 
   return <SupportUserForm />;

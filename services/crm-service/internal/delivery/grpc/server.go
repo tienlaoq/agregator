@@ -3,6 +3,7 @@ package grpc
 import (
 	"context"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/rs/zerolog"
@@ -228,11 +229,152 @@ func (s *Server) CreateTask(ctx context.Context, req *crmv1.CreateTaskRequest) (
 	if err != nil {
 		return nil, err
 	}
-	t, err := s.uc.CreateTask(ctx, venueID, actorID, req.GetTitle(), req.GetBody(), bookingID, assignee)
+	t, err := s.uc.CreateTask(ctx, venueID, actorID, req.GetTitle(), req.GetBody(), bookingID, assignee, req.GetPriority(), protoToTimePtr(req.GetDueAt()))
 	if err != nil {
 		return nil, s.passthroughOrInternal(err, "create task failed")
 	}
 	return &crmv1.CreateTaskResponse{Task: taskToProto(t)}, nil
+}
+
+func (s *Server) UpdateTask(ctx context.Context, req *crmv1.UpdateTaskRequest) (*crmv1.UpdateTaskResponse, error) {
+	venueID, err := parseUUIDArg(req.GetVenueId(), "venue_id")
+	if err != nil {
+		return nil, err
+	}
+	actorID, err := parseUUIDArg(req.GetActorId(), "actor_id")
+	if err != nil {
+		return nil, err
+	}
+	taskID, err := parseUUIDArg(req.GetTaskId(), "task_id")
+	if err != nil {
+		return nil, err
+	}
+	assignee, err := optionalUUIDArg(req.GetAssigneeUserId(), "assignee_user_id")
+	if err != nil {
+		return nil, err
+	}
+	t, err := s.uc.UpdateTask(ctx, venueID, actorID, taskID, req.GetTitle(), req.GetBody(), assignee, req.GetPriority(), protoToTimePtr(req.GetDueAt()))
+	if err != nil {
+		return nil, s.passthroughOrInternal(err, "update task failed")
+	}
+	return &crmv1.UpdateTaskResponse{Task: taskToProto(t)}, nil
+}
+
+func (s *Server) ReopenTask(ctx context.Context, req *crmv1.ReopenTaskRequest) (*crmv1.ReopenTaskResponse, error) {
+	venueID, err := parseUUIDArg(req.GetVenueId(), "venue_id")
+	if err != nil {
+		return nil, err
+	}
+	actorID, err := parseUUIDArg(req.GetActorId(), "actor_id")
+	if err != nil {
+		return nil, err
+	}
+	taskID, err := parseUUIDArg(req.GetTaskId(), "task_id")
+	if err != nil {
+		return nil, err
+	}
+	t, err := s.uc.ReopenTask(ctx, venueID, actorID, taskID)
+	if err != nil {
+		return nil, s.passthroughOrInternal(err, "reopen task failed")
+	}
+	return &crmv1.ReopenTaskResponse{Task: taskToProto(t)}, nil
+}
+
+func (s *Server) CancelTask(ctx context.Context, req *crmv1.CancelTaskRequest) (*crmv1.CancelTaskResponse, error) {
+	venueID, err := parseUUIDArg(req.GetVenueId(), "venue_id")
+	if err != nil {
+		return nil, err
+	}
+	actorID, err := parseUUIDArg(req.GetActorId(), "actor_id")
+	if err != nil {
+		return nil, err
+	}
+	taskID, err := parseUUIDArg(req.GetTaskId(), "task_id")
+	if err != nil {
+		return nil, err
+	}
+	if err := s.uc.CancelTask(ctx, venueID, actorID, taskID); err != nil {
+		return nil, s.passthroughOrInternal(err, "cancel task failed")
+	}
+	return &crmv1.CancelTaskResponse{}, nil
+}
+
+func (s *Server) ListGuests(ctx context.Context, req *crmv1.ListGuestsRequest) (*crmv1.ListGuestsResponse, error) {
+	venueID, err := parseUUIDArg(req.GetVenueId(), "venue_id")
+	if err != nil {
+		return nil, err
+	}
+	actorID, err := parseUUIDArg(req.GetActorId(), "actor_id")
+	if err != nil {
+		return nil, err
+	}
+	views, total, err := s.uc.ListGuests(ctx, venueID, actorID,
+		req.GetSegment(), req.GetSort(), int(req.GetLimit()), int(req.GetOffset()))
+	if err != nil {
+		return nil, s.passthroughOrInternal(err, "list guests failed")
+	}
+	out := &crmv1.ListGuestsResponse{
+		Guests: make([]*crmv1.GuestProfile, len(views)),
+		Total:  int32(total),
+	}
+	for i := range views {
+		out.Guests[i] = guestViewToProto(&views[i])
+	}
+	return out, nil
+}
+
+func (s *Server) GetGuest(ctx context.Context, req *crmv1.GetGuestRequest) (*crmv1.GetGuestResponse, error) {
+	venueID, err := parseUUIDArg(req.GetVenueId(), "venue_id")
+	if err != nil {
+		return nil, err
+	}
+	actorID, err := parseUUIDArg(req.GetActorId(), "actor_id")
+	if err != nil {
+		return nil, err
+	}
+	userID, err := parseUUIDArg(req.GetUserId(), "user_id")
+	if err != nil {
+		return nil, err
+	}
+	view, bookings, err := s.uc.GetGuest(ctx, venueID, actorID, userID)
+	if err != nil {
+		return nil, s.passthroughOrInternal(err, "get guest failed")
+	}
+	out := &crmv1.GetGuestResponse{
+		Profile:        guestViewToProto(view),
+		RecentBookings: make([]*crmv1.GuestBookingSummary, len(bookings)),
+	}
+	for i := range bookings {
+		out.RecentBookings[i] = guestBookingToProto(&bookings[i])
+	}
+	return out, nil
+}
+
+func guestViewToProto(v *usecase.GuestView) *crmv1.GuestProfile {
+	p := &v.Profile
+	return &crmv1.GuestProfile{
+		VenueId:            p.VenueID.String(),
+		UserId:             p.UserID.String(),
+		BookingsCount:      p.BookingsCount,
+		VisitsCount:        p.VisitsCount,
+		CancellationsCount: p.CancellationsCount,
+		NoShowCount:        p.NoShowCount,
+		TotalSpent:         p.TotalSpent,
+		FirstVisitAt:       timePtrToProto(p.FirstVisitAt),
+		LastVisitAt:        timePtrToProto(p.LastVisitAt),
+		LastBookingAt:      timePtrToProto(p.LastBookingAt),
+		Segments:           v.Segments,
+	}
+}
+
+func guestBookingToProto(b *domain.GuestBookingSummary) *crmv1.GuestBookingSummary {
+	return &crmv1.GuestBookingSummary{
+		BookingId:  b.BookingID.String(),
+		Status:     b.Status,
+		TotalPrice: b.TotalPrice,
+		VisitDate:  timePtrToProto(b.VisitDate),
+		Guests:     b.Guests,
+	}
 }
 
 func (s *Server) CompleteTask(ctx context.Context, req *crmv1.CompleteTaskRequest) (*crmv1.CompleteTaskResponse, error) {
@@ -256,14 +398,17 @@ func (s *Server) CompleteTask(ctx context.Context, req *crmv1.CompleteTaskReques
 
 func taskToProto(t *domain.Task) *crmv1.Task {
 	p := &crmv1.Task{
-		Id:        t.ID.String(),
-		VenueId:   t.VenueID.String(),
-		Title:     t.Title,
-		Body:      t.Body,
-		Status:    t.Status,
-		CreatedBy: t.CreatedBy.String(),
-		CreatedAt: timestamppb.New(t.CreatedAt),
-		UpdatedAt: timestamppb.New(t.UpdatedAt),
+		Id:          t.ID.String(),
+		VenueId:     t.VenueID.String(),
+		Title:       t.Title,
+		Body:        t.Body,
+		Status:      t.Status,
+		Priority:    t.Priority,
+		CreatedBy:   t.CreatedBy.String(),
+		CreatedAt:   timestamppb.New(t.CreatedAt),
+		UpdatedAt:   timestamppb.New(t.UpdatedAt),
+		DueAt:       timePtrToProto(t.DueAt),
+		CompletedAt: timePtrToProto(t.CompletedAt),
 	}
 	if t.BookingID != nil {
 		s := t.BookingID.String()
@@ -273,5 +418,25 @@ func taskToProto(t *domain.Task) *crmv1.Task {
 		s := t.AssigneeUserID.String()
 		p.AssigneeUserId = &s
 	}
+	if t.CompletedBy != nil {
+		p.CompletedBy = t.CompletedBy.String()
+	}
 	return p
+}
+
+// protoToTimePtr converts an optional proto timestamp to *time.Time (nil-safe).
+func protoToTimePtr(ts *timestamppb.Timestamp) *time.Time {
+	if ts == nil {
+		return nil
+	}
+	t := ts.AsTime()
+	return &t
+}
+
+// timePtrToProto converts an optional time to a proto timestamp (nil-safe).
+func timePtrToProto(t *time.Time) *timestamppb.Timestamp {
+	if t == nil {
+		return nil
+	}
+	return timestamppb.New(*t)
 }

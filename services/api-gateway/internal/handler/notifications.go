@@ -305,6 +305,22 @@ func (h *NotificationHandler) NotifyStaffInvited(ctx context.Context, userID, ve
 	)
 }
 
+// NotifyTaskAssigned delivers the "a CRM task was assigned to you" bell to the
+// assignee. Implements the crmTaskNotifier interface consumed by VenueHandler's
+// task create/update paths. Best-effort: failures are logged, never surfaced.
+func (h *NotificationHandler) NotifyTaskAssigned(ctx context.Context, assigneeID, venueID, taskID, title string) {
+	data, _ := json.Marshal(map[string]string{
+		"kind":     "crm_task_assigned",
+		"venue_id": venueID,
+		"task_id":  taskID,
+	})
+	body := "Вам назначена задача по заведению. Откройте CRM, чтобы посмотреть детали."
+	if t := strings.TrimSpace(title); t != "" {
+		body = "Вам назначена задача «" + t + "». Откройте CRM, чтобы посмотреть детали."
+	}
+	h.Notify(ctx, assigneeID, "crm_task_assigned", "Новая задача в CRM", body, string(data))
+}
+
 // ── Venue-owner notifications ────────────────────────────────────────────────
 // Владелец может иметь несколько заведений, поэтому каждое уведомление
 // называет заведение по имени и несёт venue_id в data.

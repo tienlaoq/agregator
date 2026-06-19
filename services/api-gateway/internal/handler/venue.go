@@ -29,6 +29,7 @@ type VenueHandler struct {
 	storage            storage.Uploader
 	suspendNotifier    *suspendnotify.Sender   // optional; письма владельцу и персоналу при приостановке (SMTP)
 	staffNotifier      staffInviteNotifier     // optional; in-app "колокольчик" при добавлении в персонал
+	taskNotifier       crmTaskNotifier         // optional; "колокольчик" исполнителю при назначении CRM-задачи
 	moderationNotifier venueModerationNotifier // optional; "колокольчик" владельцу о решении модерации
 }
 
@@ -37,6 +38,13 @@ type VenueHandler struct {
 // implemented by *NotificationHandler.
 type staffInviteNotifier interface {
 	NotifyStaffInvited(ctx context.Context, userID, venueID, role string)
+}
+
+// crmTaskNotifier delivers the in-app "a CRM task was assigned to you" bell to
+// a task's assignee. Defined at the consumer site; implemented by
+// *NotificationHandler.
+type crmTaskNotifier interface {
+	NotifyTaskAssigned(ctx context.Context, assigneeID, venueID, taskID, title string)
 }
 
 // venueModerationNotifier delivers the in-app "your venue's listing status
@@ -59,6 +67,15 @@ func WithSuspendNotifier(n *suspendnotify.Sender) VenueHandlerOption {
 func WithStaffInviteNotifier(n staffInviteNotifier) VenueHandlerOption {
 	return func(h *VenueHandler) {
 		h.staffNotifier = n
+	}
+}
+
+// WithCRMTaskNotifier wires the bell notification sent when a CRM task is
+// assigned to someone other than its author. Optional: when unset, tasks still
+// save silently.
+func WithCRMTaskNotifier(n crmTaskNotifier) VenueHandlerOption {
+	return func(h *VenueHandler) {
+		h.taskNotifier = n
 	}
 }
 

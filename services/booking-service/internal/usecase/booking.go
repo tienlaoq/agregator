@@ -23,10 +23,11 @@ import (
 )
 
 type EventPublisher interface {
-	PublishBookingCreated(ctx context.Context, b *domain.Booking) error
-	PublishBookingConfirmed(ctx context.Context, b *domain.Booking) error
-	PublishBookingCancelled(ctx context.Context, b *domain.Booking) error
+	// PublishBookingCompleted — прямой путь для booking.completed (защищён
+	// completed_event_sent_at, не идёт через outbox).
 	PublishBookingCompleted(ctx context.Context, b *domain.Booking) error
+	// PublishRaw публикует staged-событие из outbox (booking.created/confirmed/cancelled).
+	PublishRaw(ctx context.Context, subject string, payload []byte) error
 }
 
 type BookingUseCase struct {
@@ -68,21 +69,44 @@ func NewBookingUseCase(
 	}
 }
 
-// publishEvent вызывает fn и логирует ошибку если NATS недоступен.
-// Ошибка не возвращается вызывающему: операция с БД уже совершена,
-// откатить её нельзя. Правильное решение — outbox; до его реализации
-// лог позволяет обнаружить потерянные события по booking_id.
-// См. TECH_DEBT [BOOKING-PUBLISH-LOSS].
-func (uc *BookingUseCase) publishEvent(ctx context.Context, subject, bookingID string, fn func() error) {
-	// KPI counter records the domain transition itself — it already happened
-	// (DB committed), so a failed publish must not skip the increment.
-	kpi.BookingEvent(strings.TrimPrefix(subject, "booking."))
-	if err := fn(); err != nil {
-		uc.log.Error().Err(err).
-			Str("subject", subject).
-			Str("booking_id", bookingID).
-			Msg("NATS publish failed — event lost until outbox is implemented")
+// outboxBatchSize — сколько неотправленных событий поллер забирает за тик.
+const outboxBatchSize = 100
+
+// ProcessOutbox публикует staged-события booking.* из транзакционного outbox.
+// Запускается на отдельном коротком тикере (см. cmd/main.go). Каждое событие
+// публикуется в NATS ДО того как его строка помечается sent — поэтому падение
+// между publish и mark приводит лишь к повторной публикации на следующем тике
+// (at-least-once; консьюмеры идемпотентны по booking_id).
+//
+// При ошибке publish цикл прерывается: NATS вероятно недоступен, а порядок FIFO
+// требует не перескакивать через застрявшее событие. Уже опубликованный префикс
+// помечается sent; остальное повторится. См. TECH_DEBT [BOOKING-PUBLISH-LOSS].
+func (uc *BookingUseCase) ProcessOutbox(ctx context.Context, limit int) (int, error) {
+	events, err := uc.repo.FetchUnsentOutbox(ctx, limit)
+	if err != nil {
+		return 0, err
 	}
+	sent := make([]int64, 0, len(events))
+	for _, ev := range events {
+		if perr := uc.publisher.PublishRaw(ctx, ev.Subject, ev.Payload); perr != nil {
+			uc.log.Error().Err(perr).
+				Str("subject", ev.Subject).
+				Int64("outbox_id", ev.ID).
+				Msg("booking: outbox publish failed — will retry next tick")
+			break
+		}
+		sent = append(sent, ev.ID)
+	}
+	if len(sent) == 0 {
+		return 0, nil
+	}
+	if err := uc.repo.MarkOutboxSent(ctx, sent); err != nil {
+		// События опубликованы, но не помечены — повторятся на следующем тике.
+		uc.log.Error().Err(err).Int("count", len(sent)).
+			Msg("booking: outbox mark-sent failed — events will be republished")
+		return len(sent), err
+	}
+	return len(sent), nil
 }
 
 type CreateBookingInput struct {
@@ -258,9 +282,24 @@ func (uc *BookingUseCase) CreateBooking(ctx context.Context, in CreateBookingInp
 		return nil, fmt.Errorf("create payment: %w", err)
 	}
 
-	// Шаг 4: один атомарный UPDATE — payment_id и status за один round-trip.
-	// Заменяет два последовательных SetPaymentID + UpdateStatus.
-	if err := uc.repo.SetPaymentAndStatus(ctx, b.ID, payResp.Id, payResp.PaymentUrl, string(domain.StatusPaymentPending)); err != nil {
+	b.Status = domain.StatusPaymentPending
+	b.PaymentID = payResp.Id
+	b.PaymentURL = payResp.PaymentUrl
+
+	// booking.created пишется в outbox в той же транзакции, что и финализирующий
+	// UPDATE — событие не может потеряться при недоступном NATS.
+	createdEvent, err := domain.NewBookingEvent("booking.created", b)
+	if err != nil {
+		_, _ = uc.venueClient.ReleaseSlot(ctx, &venuev1.ReleaseSlotRequest{
+			VenueId:   in.VenueID,
+			BookingId: b.ID,
+		})
+		_ = uc.repo.Delete(ctx, b.ID)
+		return nil, fmt.Errorf("build created event: %w", err)
+	}
+
+	// Шаг 4: один атомарный UPDATE (payment_id + status) + INSERT в outbox.
+	if err := uc.repo.SetPaymentAndStatus(ctx, b.ID, payResp.Id, payResp.PaymentUrl, string(domain.StatusPaymentPending), createdEvent); err != nil {
 		_, _ = uc.venueClient.ReleaseSlot(ctx, &venuev1.ReleaseSlotRequest{
 			VenueId:   in.VenueID,
 			BookingId: b.ID,
@@ -268,14 +307,8 @@ func (uc *BookingUseCase) CreateBooking(ctx context.Context, in CreateBookingInp
 		_ = uc.repo.Delete(ctx, b.ID)
 		return nil, fmt.Errorf("finalize booking: %w", err)
 	}
-
-	b.Status = domain.StatusPaymentPending
-	b.PaymentID = payResp.Id
-	b.PaymentURL = payResp.PaymentUrl
-
-	uc.publishEvent(ctx, "booking.created", b.ID, func() error {
-		return uc.publisher.PublishBookingCreated(ctx, b)
-	})
+	// KPI считает доменный переход (БД закоммичена), независимо от факта публикации.
+	kpi.BookingEvent("created")
 
 	return b, nil
 }
@@ -394,19 +427,21 @@ func (uc *BookingUseCase) CancelBooking(ctx context.Context, id, userID string) 
 		}
 	}
 
-	if err := uc.repo.UpdateStatus(ctx, id, string(domain.StatusCancelled)); err != nil {
+	b.Status = domain.StatusCancelled
+	// booking.cancelled триггерит рефанд в payment-service — пишем его в outbox в
+	// той же транзакции, что и UPDATE, чтобы рефанд не потерялся при сбое NATS.
+	cancelledEvent, err := domain.NewBookingEvent("booking.cancelled", b)
+	if err != nil {
+		return nil, fmt.Errorf("build cancelled event: %w", err)
+	}
+	if err := uc.repo.CancelWithEvent(ctx, id, cancelledEvent); err != nil {
 		return nil, err
 	}
-	b.Status = domain.StatusCancelled
+	kpi.BookingEvent("cancelled")
 
 	_, _ = uc.venueClient.ReleaseSlot(ctx, &venuev1.ReleaseSlotRequest{
 		VenueId:   b.VenueID,
 		BookingId: b.ID,
-	})
-
-	// PublishBookingCancelled триггерит рефанд в payment-service (subscriber booking.cancelled).
-	uc.publishEvent(ctx, "booking.cancelled", b.ID, func() error {
-		return uc.publisher.PublishBookingCancelled(ctx, b)
 	})
 
 	return b, nil
@@ -418,17 +453,17 @@ func (uc *BookingUseCase) CancelBooking(ctx context.Context, id, userID string) 
 // Атомарность: один UPDATE … WHERE status='payment_pending' исключает двойное подтверждение
 // при параллельных вызовах (второй UPDATE даст RowsAffected=0 и не опубликует событие).
 func (uc *BookingUseCase) ConfirmBooking(ctx context.Context, id, paymentID string) error {
-	b, confirmed, err := uc.repo.ConfirmPayment(ctx, id, paymentID)
+	// При успешном переходе ConfirmPayment пишет booking.confirmed в outbox в той
+	// же транзакции, что и UPDATE status='confirmed'.
+	_, confirmed, err := uc.repo.ConfirmPayment(ctx, id, paymentID, "booking.confirmed")
 	if err != nil {
 		return err
 	}
 	if !confirmed {
-		// Бронь уже в терминальном статусе — publish не делаем (идемпотентность).
+		// Бронь уже в терминальном статусе — событие не пишем (идемпотентность).
 		return nil
 	}
-	uc.publishEvent(ctx, "booking.confirmed", b.ID, func() error {
-		return uc.publisher.PublishBookingConfirmed(ctx, b)
-	})
+	kpi.BookingEvent("confirmed")
 	return nil
 }
 
@@ -460,18 +495,19 @@ func (uc *BookingUseCase) CancelBookingByPayment(ctx context.Context, bookingID 
 		return nil
 	}
 
-	if err := uc.repo.UpdateStatus(ctx, bookingID, string(domain.StatusCancelled)); err != nil {
+	b.Status = domain.StatusCancelled
+	cancelledEvent, err := domain.NewBookingEvent("booking.cancelled", b)
+	if err != nil {
+		return fmt.Errorf("build cancelled event: %w", err)
+	}
+	if err := uc.repo.CancelWithEvent(ctx, bookingID, cancelledEvent); err != nil {
 		return err
 	}
-	b.Status = domain.StatusCancelled
+	kpi.BookingEvent("cancelled")
 
 	_, _ = uc.venueClient.ReleaseSlot(ctx, &venuev1.ReleaseSlotRequest{
 		VenueId:   b.VenueID,
 		BookingId: b.ID,
-	})
-
-	uc.publishEvent(ctx, "booking.cancelled", b.ID, func() error {
-		return uc.publisher.PublishBookingCancelled(ctx, b)
 	})
 	return nil
 }

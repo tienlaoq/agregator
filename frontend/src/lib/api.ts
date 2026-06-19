@@ -10,6 +10,8 @@ import type {
   RegisterRequest,
   Review,
   VenueCrmTask,
+  VenueGuest,
+  GuestBookingSummary,
   VenueStaffRow,
   VenueUpdatePayload,
   User,
@@ -637,12 +639,33 @@ export async function createVenueCrmTask(
     body: string;
     booking_id?: string;
     assignee_user_id?: string;
+    priority?: string;
+    /** ISO-8601 / RFC3339; опустите, если дедлайна нет. */
+    due_at?: string;
   },
 ): Promise<{ task: VenueCrmTask }> {
   return fetchAPI(`/api/v1/owner/venues/${encodeURIComponent(venueId)}/crm/tasks`, {
     method: "POST",
     body: JSON.stringify(body),
   });
+}
+
+export async function updateVenueCrmTask(
+  venueId: string,
+  taskId: string,
+  body: {
+    title: string;
+    body: string;
+    priority?: string;
+    assignee_user_id?: string;
+    /** RFC3339; опустите, чтобы снять дедлайн. */
+    due_at?: string;
+  },
+): Promise<{ task: VenueCrmTask }> {
+  return fetchAPI(
+    `/api/v1/owner/venues/${encodeURIComponent(venueId)}/crm/tasks/${encodeURIComponent(taskId)}`,
+    { method: "PATCH", body: JSON.stringify(body) },
+  );
 }
 
 export async function completeVenueCrmTask(
@@ -653,6 +676,55 @@ export async function completeVenueCrmTask(
     `/api/v1/owner/venues/${encodeURIComponent(venueId)}/crm/tasks/${encodeURIComponent(taskId)}/complete`,
     { method: "POST" },
   );
+}
+
+export async function reopenVenueCrmTask(
+  venueId: string,
+  taskId: string,
+): Promise<{ task: VenueCrmTask }> {
+  return fetchAPI(
+    `/api/v1/owner/venues/${encodeURIComponent(venueId)}/crm/tasks/${encodeURIComponent(taskId)}/reopen`,
+    { method: "POST" },
+  );
+}
+
+export async function cancelVenueCrmTask(
+  venueId: string,
+  taskId: string,
+): Promise<void> {
+  return fetchAPI<void>(
+    `/api/v1/owner/venues/${encodeURIComponent(venueId)}/crm/tasks/${encodeURIComponent(taskId)}`,
+    { method: "DELETE" },
+  );
+}
+
+export async function listVenueGuests(
+  venueId: string,
+  params?: { segment?: string; sort?: string; limit?: number; offset?: number },
+): Promise<{ guests: VenueGuest[]; total: number }> {
+  const q = new URLSearchParams();
+  if (params?.segment) q.set("segment", params.segment);
+  if (params?.sort) q.set("sort", params.sort);
+  if (params?.limit != null) q.set("limit", String(params.limit));
+  if (params?.offset != null) q.set("offset", String(params.offset));
+  const qs = q.toString();
+  const data = await fetchAPI<{ guests: VenueGuest[]; total: number }>(
+    `/api/v1/owner/venues/${encodeURIComponent(venueId)}/crm/guests${qs ? `?${qs}` : ""}`,
+  );
+  return { guests: data.guests ?? [], total: data.total ?? 0 };
+}
+
+export async function getVenueGuest(
+  venueId: string,
+  userId: string,
+): Promise<{ guest: VenueGuest; recent_bookings: GuestBookingSummary[] }> {
+  const data = await fetchAPI<{
+    guest: VenueGuest;
+    recent_bookings: GuestBookingSummary[];
+  }>(
+    `/api/v1/owner/venues/${encodeURIComponent(venueId)}/crm/guests/${encodeURIComponent(userId)}`,
+  );
+  return { guest: data.guest, recent_bookings: data.recent_bookings ?? [] };
 }
 
 export async function listBookingStaffNotes(

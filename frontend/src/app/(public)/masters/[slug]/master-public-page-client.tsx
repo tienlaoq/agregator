@@ -36,6 +36,7 @@ import {
 import { ReviewList } from "@/components/review-list";
 import { FramedImage } from "@/components/banya/framed-image";
 import type { MasterPhoto, MasterProfile, MasterTravelExcludeZone, Review } from "@/lib/types";
+import { MASTER_CREDENTIAL_KIND_LABELS } from "@/lib/types";
 import { MasterTravelBaseMap } from "@/components/banya/master-travel-base-map";
 import {
   defaultEndTimeForDuration,
@@ -55,6 +56,7 @@ import {
   Phone,
   Plus,
   Users,
+  Award,
 } from "lucide-react";
 
 function sortMasterPhotosPublic(photos?: MasterPhoto[]): MasterPhoto[] {
@@ -484,6 +486,34 @@ export function MasterPublicPageClient({
                     ))}
                   </div>
                 ) : null}
+              </div>
+            ) : null}
+
+            {master.credentials && master.credentials.length > 0 ? (
+              <div className="mb-8">
+                <h2 className="mb-4 text-xl font-semibold text-foreground">
+                  Сертификаты и награды
+                </h2>
+                <ul className="space-y-2">
+                  {[...master.credentials]
+                    .sort((a, b) => a.sort_order - b.sort_order)
+                    .map((c) => (
+                      <li
+                        key={c.id}
+                        className="flex items-start gap-3 rounded-lg border border-border bg-card p-3"
+                      >
+                        <Award className="mt-0.5 h-5 w-5 shrink-0 text-primary" aria-hidden />
+                        <div className="min-w-0">
+                          <p className="font-medium text-foreground">{c.title}</p>
+                          <p className="text-sm text-muted-foreground">
+                            {MASTER_CREDENTIAL_KIND_LABELS[c.kind] ?? c.kind}
+                            {c.issuer ? ` · ${c.issuer}` : ""}
+                            {c.year && c.year > 0 ? ` · ${c.year}` : ""}
+                          </p>
+                        </div>
+                      </li>
+                    ))}
+                </ul>
               </div>
             ) : null}
 

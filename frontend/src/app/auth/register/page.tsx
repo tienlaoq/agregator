@@ -1,7 +1,7 @@
 "use client"
 
-import { useState } from "react"
-import { useRouter } from "next/navigation"
+import { Suspense, useState } from "react"
+import { useRouter, useSearchParams } from "next/navigation"
 import Link from "next/link"
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080"
@@ -11,6 +11,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Separator } from "@/components/ui/separator"
 import { register, userFromRegisterResponse, ApiError, formatApiErrorMessage } from "@/lib/api"
+import { safeNextPath } from "@/lib/safe-redirect"
 import { useAuthStore } from "@/store/auth"
 import { PasswordStrength } from "@/components/banya/password-strength"
 import { isPasswordValid, PASSWORD_MIN_LENGTH } from "@/lib/password"
@@ -33,8 +34,28 @@ function YandexIcon({ className }: { className?: string }) {
   )
 }
 
+function RegisterSuspenseFallback() {
+  return (
+    <div className="flex min-h-[70vh] items-center justify-center px-4 text-sm text-muted-foreground">
+      Загрузка…
+    </div>
+  )
+}
+
 export default function RegisterPage() {
+  return (
+    <Suspense fallback={<RegisterSuspenseFallback />}>
+      <RegisterForm />
+    </Suspense>
+  )
+}
+
+function RegisterForm() {
   const router = useRouter()
+  const searchParams = useSearchParams()
+  // Where to land after a successful registration (validated against open redirects).
+  const nextPath = safeNextPath(searchParams.get("next"))
+  const oauthNextQuery = nextPath ? `?next=${encodeURIComponent(nextPath)}` : ""
   const authLogin = useAuthStore((s) => s.login)
   const [name, setName] = useState("")
   const [email, setEmail] = useState("")
@@ -52,7 +73,7 @@ export default function RegisterPage() {
       localStorage.setItem("refresh_token", res.refresh_token)
       const user = userFromRegisterResponse(res, { name, email, role: "user" })
       await authLogin(res.access_token, res.refresh_token, user)
-      router.push("/")
+      router.push(nextPath ?? "/")
     } catch (err) {
       if (err instanceof ApiError) {
         setError(formatApiErrorMessage(err, "Не удалось зарегистрироваться"))
@@ -78,13 +99,13 @@ export default function RegisterPage() {
           {/* OAuth Buttons */}
           <div className="grid grid-cols-2 gap-3">
             <Button variant="outline" className="min-w-0 gap-2" type="button" asChild>
-              <a href={`${API_URL}/api/v1/auth/vk`}>
+              <a href={`${API_URL}/api/v1/auth/vk${oauthNextQuery}`}>
                 <VKIcon className="h-5 w-5 shrink-0" />
                 ВК
               </a>
             </Button>
             <Button variant="outline" className="min-w-0 gap-2" type="button" asChild>
-              <a href={`${API_URL}/api/v1/auth/yandex`}>
+              <a href={`${API_URL}/api/v1/auth/yandex${oauthNextQuery}`}>
                 <YandexIcon className="h-5 w-5 shrink-0" />
                 Яндекс
               </a>

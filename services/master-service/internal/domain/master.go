@@ -85,6 +85,27 @@ const (
 	MaxSpecializationLength = 100 // maximum characters per item
 )
 
+// Credential (certificate / award) field limits. Enforced in
+// usecase.ValidateMasterCredentialUpserts and mirrored by CHECK constraints in
+// migration 021.
+const (
+	MaxCredentialTitle      = 200
+	MaxCredentialIssuer     = 200
+	MaxCredentialsPerMaster = 50
+	// MinCredentialYear / MaxCredentialYear bound the optional year-of-issue.
+	// A zero year means "not specified" and is always allowed.
+	MinCredentialYear = 1900
+	MaxCredentialYear = 2100
+)
+
+// Credential kinds. A master profile can list both professional certificates
+// and awards/achievements; the kind discriminates which section the catalogue
+// renders the item in.
+const (
+	CredentialKindCertificate = "certificate"
+	CredentialKindAward       = "award"
+)
+
 // Booking comment limit. Enforced in usecase.CreateBooking.
 // The DB column (TEXT) has no length constraint; the limit is applied in the
 // usecase layer before the row is inserted.
@@ -173,6 +194,7 @@ type Master struct {
 	ModeratedAt                *time.Time
 	Services                   []MasterService
 	Photos                     []MasterPhoto
+	Credentials                []MasterCredential
 	CreatedAt                  time.Time
 	UpdatedAt                  time.Time
 }
@@ -219,6 +241,30 @@ type MasterServiceUpsert struct {
 	// index so that omitting sort_order and sending sort_order=0 have different
 	// meanings: "let me be wherever I fall" vs "put me first".
 	SortOrderSet bool
+}
+
+// MasterCredential is a certificate or award shown on the master's public
+// profile. Kind is one of CredentialKindCertificate / CredentialKindAward.
+// Issuer (кем выдан) and Year are optional; Year == 0 means "not specified".
+type MasterCredential struct {
+	ID        uuid.UUID
+	MasterID  uuid.UUID
+	Kind      string
+	Title     string
+	Issuer    string
+	Year      int32
+	SortOrder int32
+}
+
+// MasterCredentialUpsert is the input shape for ReplaceCredentials. Unlike
+// services, credentials are fully replaced on every save (no per-item id is
+// needed to preserve identity), so the struct carries only the editable fields.
+type MasterCredentialUpsert struct {
+	Kind      string
+	Title     string
+	Issuer    string
+	Year      int32
+	SortOrder int32
 }
 
 type ModerationHistoryEntry struct {

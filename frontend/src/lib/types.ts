@@ -330,12 +330,49 @@ export interface VenueCrmTask {
   venue_id: string;
   title: string;
   body: string;
+  /** open | done | cancelled */
   status: string;
+  /** low | normal | high */
+  priority: string;
   created_by: string;
   created_at: string;
   updated_at: string;
   booking_id?: string;
   assignee_user_id?: string;
+  /** ISO-срок; отсутствует, если дедлайна нет. */
+  due_at?: string;
+  /** Кто и когда закрыл (присутствуют только у выполненных задач). */
+  completed_by?: string;
+  completed_at?: string;
+}
+
+/** Профиль гостя заведения (Customer 360) — проекция из событий бронирований. */
+export interface VenueGuest {
+  user_id: string;
+  venue_id: string;
+  bookings_count: number;
+  visits_count: number;
+  cancellations_count: number;
+  no_show_count: number;
+  /** LTV в той же единице, что и total_price брони. */
+  total_spent: number;
+  /** Вычисляемые сегменты: new | regular | vip | at_risk. */
+  segments: string[];
+  first_visit_at?: string;
+  last_visit_at?: string;
+  last_booking_at?: string;
+  /** Имя/email из user-service (в crm-service не хранятся). */
+  user_name?: string;
+  user_email?: string;
+}
+
+/** Компактная строка брони для ленты в карточке гостя. */
+export interface GuestBookingSummary {
+  booking_id: string;
+  status: string;
+  total_price: number;
+  guests: number;
+  visit_date?: string;
 }
 
 /** Внутренняя заметка по брони (не для гостя). */
@@ -560,6 +597,25 @@ export interface MasterPhoto {
   is_cover: boolean;
 }
 
+/** Сертификат или награда мастера. kind: "certificate" | "award". */
+export type MasterCredentialKind = "certificate" | "award";
+
+export interface MasterCredentialItem {
+  id: string;
+  kind: MasterCredentialKind | string;
+  title: string;
+  /** Кем выдан (организация). Необязательно. */
+  issuer: string;
+  /** Год получения. 0 — не указан. */
+  year: number;
+  sort_order: number;
+}
+
+export const MASTER_CREDENTIAL_KIND_LABELS: Record<string, string> = {
+  certificate: "Сертификат",
+  award: "Награда",
+};
+
 /** Как мастер принимает выплаты с платформы (ИП / ООО / физлицо / самозанятость). */
 export const PAYOUT_LEGAL_FORM_LABELS: Record<string, string> = {
   ip: "Индивидуальный предприниматель (ИП)",
@@ -606,6 +662,7 @@ export interface MasterProfile {
   moderated_at?: string;
   services: MasterServiceItem[];
   photos?: MasterPhoto[];
+  credentials?: MasterCredentialItem[];
   created_at?: string;
   updated_at?: string;
 }

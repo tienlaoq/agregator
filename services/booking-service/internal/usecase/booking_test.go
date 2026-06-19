@@ -2,6 +2,7 @@ package usecase
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -41,7 +42,7 @@ func TestCreateBooking_Success(t *testing.T) {
 			b.CreatedAt = time.Now()
 			b.UpdatedAt = time.Now()
 		}).Return(nil)
-	repo.EXPECT().SetPaymentAndStatus(mock.Anything, bookingID, paymentID, paymentURL, string(domain.StatusPaymentPending)).
+	repo.EXPECT().SetPaymentAndStatus(mock.Anything, bookingID, paymentID, paymentURL, string(domain.StatusPaymentPending), mock.Anything).
 		Return(nil)
 	repo.EXPECT().DeleteOrphanPending(mock.Anything, mock.Anything).
 		Return(int64(0), nil).Maybe()
@@ -85,15 +86,9 @@ func TestCreateBooking_Success(t *testing.T) {
 		},
 	}
 
-	pub := &mockEventPublisher{
-		PublishBookingCreatedFunc: func(_ context.Context, b *domain.Booking) error {
-			require.Equal(t, bookingID, b.ID)
-			require.Equal(t, domain.StatusPaymentPending, b.Status)
-			return nil
-		},
-	}
-
-	uc := NewBookingUseCase(repo, venue, &mockCRMClient{}, payment, pub, zerolog.Nop(), "Europe/Moscow", 0)
+	// booking.created больше не публикуется синхронно — пишется в outbox через
+	// SetPaymentAndStatus (см. отдельные TestNewBookingEvent / TestProcessOutbox).
+	uc := NewBookingUseCase(repo, venue, &mockCRMClient{}, payment, &mockEventPublisher{}, zerolog.Nop(), "Europe/Moscow", 0)
 
 	out, err := uc.CreateBooking(ctx, CreateBookingInput{
 		UserID:    "user-1",
@@ -197,7 +192,11 @@ func TestCancelBooking_Success(t *testing.T) {
 
 	repo := NewMockBookingRepository(t)
 	repo.EXPECT().GetByID(mock.Anything, bookingID).Return(b, nil)
-	repo.EXPECT().UpdateStatus(mock.Anything, bookingID, string(domain.StatusCancelled)).Return(nil)
+	// booking.cancelled пишется в outbox в той же транзакции, что и смена статуса.
+	var capturedEvent domain.OutboxEvent
+	repo.EXPECT().CancelWithEvent(mock.Anything, bookingID, mock.Anything).
+		Run(func(_ context.Context, _ string, ev domain.OutboxEvent) { capturedEvent = ev }).
+		Return(nil)
 
 	var released bool
 	venue := &mockVenueClient{
@@ -209,22 +208,14 @@ func TestCancelBooking_Success(t *testing.T) {
 		},
 	}
 
-	var published bool
-	pub := &mockEventPublisher{
-		PublishBookingCancelledFunc: func(_ context.Context, got *domain.Booking) error {
-			published = true
-			assert.Equal(t, domain.StatusCancelled, got.Status)
-			return nil
-		},
-	}
-
-	uc := NewBookingUseCase(repo, venue, &mockCRMClient{}, &mockPaymentClient{}, pub, zerolog.Nop(), "Europe/Moscow", 0)
+	uc := NewBookingUseCase(repo, venue, &mockCRMClient{}, &mockPaymentClient{}, &mockEventPublisher{}, zerolog.Nop(), "Europe/Moscow", 0)
 	out, err := uc.CancelBooking(ctx, bookingID, userID)
 	require.NoError(t, err)
 	require.NotNil(t, out)
 	assert.Equal(t, domain.StatusCancelled, out.Status)
 	assert.True(t, released)
-	assert.True(t, published)
+	assert.Equal(t, "booking.cancelled", capturedEvent.Subject)
+	assert.Contains(t, string(capturedEvent.Payload), bookingID)
 }
 
 func TestCancelBooking_NotOwner(t *testing.T) {
@@ -265,22 +256,12 @@ func TestConfirmBooking_Success(t *testing.T) {
 	confirmed := &domain.Booking{ID: bookingID, Status: domain.StatusConfirmed, PaymentID: paymentID}
 
 	repo := NewMockBookingRepository(t)
-	repo.EXPECT().ConfirmPayment(mock.Anything, bookingID, paymentID).Return(confirmed, true, nil)
+	// booking.confirmed пишется в outbox внутри ConfirmPayment (та же транзакция);
+	// usecase больше не публикует его сам.
+	repo.EXPECT().ConfirmPayment(mock.Anything, bookingID, paymentID, "booking.confirmed").Return(confirmed, true, nil)
 
-	var published bool
-	pub := &mockEventPublisher{
-		PublishBookingConfirmedFunc: func(_ context.Context, b *domain.Booking) error {
-			published = true
-			assert.Equal(t, domain.StatusConfirmed, b.Status)
-			return nil
-		},
-	}
-	repo.EXPECT().MarkCompletedEventSent(mock.Anything, mock.Anything).Return(nil).Maybe()
-
-	uc := NewBookingUseCase(repo, &mockVenueClient{}, &mockCRMClient{}, &mockPaymentClient{}, pub, zerolog.Nop(), "Europe/Moscow", 0)
-	err := uc.ConfirmBooking(ctx, bookingID, paymentID)
-	require.NoError(t, err)
-	assert.True(t, published)
+	uc := NewBookingUseCase(repo, &mockVenueClient{}, &mockCRMClient{}, &mockPaymentClient{}, &mockEventPublisher{}, zerolog.Nop(), "Europe/Moscow", 0)
+	require.NoError(t, uc.ConfirmBooking(ctx, bookingID, paymentID))
 }
 
 func TestConfirmBooking_IdempotentWhenConfirmed(t *testing.T) {
@@ -289,7 +270,7 @@ func TestConfirmBooking_IdempotentWhenConfirmed(t *testing.T) {
 	already := &domain.Booking{ID: "b1", Status: domain.StatusConfirmed, PaymentID: "p1"}
 
 	repo := NewMockBookingRepository(t)
-	repo.EXPECT().ConfirmPayment(mock.Anything, "b1", "p1").Return(already, false, nil)
+	repo.EXPECT().ConfirmPayment(mock.Anything, "b1", "p1", mock.Anything).Return(already, false, nil)
 
 	uc := NewBookingUseCase(repo, &mockVenueClient{}, &mockCRMClient{}, &mockPaymentClient{}, &mockEventPublisher{}, zerolog.Nop(), "Europe/Moscow", 0)
 	require.NoError(t, uc.ConfirmBooking(ctx, "b1", "p1"))
@@ -377,4 +358,72 @@ func TestBookingIdempotencyKey(t *testing.T) {
 		k2 := bookingIdempotencyKey("bbbbb", "aaaaa")
 		assert.NotEqual(t, k1, k2)
 	})
+}
+
+func TestProcessOutbox_PublishesAllAndMarksSent(t *testing.T) {
+	ctx := context.Background()
+	events := []domain.OutboxEvent{
+		{ID: 1, Subject: "booking.created", Payload: []byte(`{"booking_id":"b1"}`)},
+		{ID: 2, Subject: "booking.confirmed", Payload: []byte(`{"booking_id":"b2"}`)},
+	}
+
+	repo := NewMockBookingRepository(t)
+	repo.EXPECT().FetchUnsentOutbox(mock.Anything, 100).Return(events, nil)
+	repo.EXPECT().MarkOutboxSent(mock.Anything, []int64{1, 2}).Return(nil)
+
+	var publishedSubjects []string
+	pub := &mockEventPublisher{
+		PublishRawFunc: func(_ context.Context, subject string, _ []byte) error {
+			publishedSubjects = append(publishedSubjects, subject)
+			return nil
+		},
+	}
+
+	uc := NewBookingUseCase(repo, &mockVenueClient{}, &mockCRMClient{}, &mockPaymentClient{}, pub, zerolog.Nop(), "Europe/Moscow", 0)
+	n, err := uc.ProcessOutbox(ctx, 100)
+	require.NoError(t, err)
+	assert.Equal(t, 2, n)
+	assert.Equal(t, []string{"booking.created", "booking.confirmed"}, publishedSubjects)
+}
+
+// On a publish failure the poller stops (FIFO) and marks only the prefix that
+// was published; the rest retries next tick (at-least-once).
+func TestProcessOutbox_StopsOnPublishFailureMarksPrefix(t *testing.T) {
+	ctx := context.Background()
+	events := []domain.OutboxEvent{
+		{ID: 1, Subject: "booking.created", Payload: []byte(`{}`)},
+		{ID: 2, Subject: "booking.confirmed", Payload: []byte(`{}`)},
+		{ID: 3, Subject: "booking.cancelled", Payload: []byte(`{}`)},
+	}
+
+	repo := NewMockBookingRepository(t)
+	repo.EXPECT().FetchUnsentOutbox(mock.Anything, 100).Return(events, nil)
+	repo.EXPECT().MarkOutboxSent(mock.Anything, []int64{1}).Return(nil)
+
+	pub := &mockEventPublisher{
+		PublishRawFunc: func(_ context.Context, subject string, _ []byte) error {
+			if subject == "booking.confirmed" {
+				return errors.New("nats unavailable")
+			}
+			return nil
+		},
+	}
+
+	uc := NewBookingUseCase(repo, &mockVenueClient{}, &mockCRMClient{}, &mockPaymentClient{}, pub, zerolog.Nop(), "Europe/Moscow", 0)
+	n, err := uc.ProcessOutbox(ctx, 100)
+	require.NoError(t, err) // publish error is logged, not returned; prefix mark succeeded
+	assert.Equal(t, 1, n)
+}
+
+// When nothing is published, MarkOutboxSent must not be called (no expectation set).
+func TestProcessOutbox_EmptyDoesNotMark(t *testing.T) {
+	ctx := context.Background()
+
+	repo := NewMockBookingRepository(t)
+	repo.EXPECT().FetchUnsentOutbox(mock.Anything, 100).Return(nil, nil)
+
+	uc := NewBookingUseCase(repo, &mockVenueClient{}, &mockCRMClient{}, &mockPaymentClient{}, &mockEventPublisher{}, zerolog.Nop(), "Europe/Moscow", 0)
+	n, err := uc.ProcessOutbox(ctx, 100)
+	require.NoError(t, err)
+	assert.Equal(t, 0, n)
 }

@@ -207,6 +207,17 @@ func (s *Server) UpdateMyProfile(ctx context.Context, req *masterv1.UpdateMyProf
 			in.ServicesReplace = append(in.ServicesReplace, u)
 		}
 	}
+	if req.GetApplyCredentials() {
+		in.ApplyCredentialsReplace = true
+		for _, it := range req.GetCredentialsReplace() {
+			in.CredentialsReplace = append(in.CredentialsReplace, domain.MasterCredentialUpsert{
+				Kind:   it.GetKind(),
+				Title:  it.GetTitle(),
+				Issuer: it.GetIssuer(),
+				Year:   it.GetYear(),
+			})
+		}
+	}
 	m, err := s.uc.UpdateMyProfile(ctx, uid, in)
 	if err != nil {
 		return nil, err
@@ -604,6 +615,18 @@ func masterToProto(m *domain.Master) *masterv1.Master {
 			IsCover:   p.IsCover,
 		})
 	}
+	creds := make([]*masterv1.MasterCredentialItem, 0, len(m.Credentials))
+	for i := range m.Credentials {
+		c := &m.Credentials[i]
+		creds = append(creds, &masterv1.MasterCredentialItem{
+			Id:        c.ID.String(),
+			Kind:      c.Kind,
+			Title:     c.Title,
+			Issuer:    c.Issuer,
+			Year:      c.Year,
+			SortOrder: c.SortOrder,
+		})
+	}
 	pb := &masterv1.Master{
 		Id:                         m.ID.String(),
 		UserId:                     m.UserID.String(),
@@ -634,6 +657,7 @@ func masterToProto(m *domain.Master) *masterv1.Master {
 		ModerationComment:          m.ModerationComment,
 		Services:                   svcs,
 		Photos:                     ph,
+		Credentials:                creds,
 		CreatedAt:                  timestamppb.New(m.CreatedAt),
 		UpdatedAt:                  timestamppb.New(m.UpdatedAt),
 	}

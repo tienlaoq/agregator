@@ -12,6 +12,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	masterv1 "github.com/tienlao/agregator/gen/go/master/v1"
+	userv1 "github.com/tienlao/agregator/gen/go/user/v1"
 	pkgcities "github.com/tienlao/agregator/pkg/cities"
 	"github.com/tienlao/agregator/pkg/storage"
 	"github.com/tienlao/agregator/services/api-gateway/internal/apicatalog"
@@ -23,9 +24,10 @@ import (
 )
 
 type MasterHandler struct {
-	client   masterv1.MasterServiceClient
-	storage  storage.Uploader
-	notifier masterOwnerNotifier // optional; «колокольчик» мастеру о брони и модерации
+	client     masterv1.MasterServiceClient
+	storage    storage.Uploader
+	notifier   masterOwnerNotifier      // optional; «колокольчик» мастеру о брони и модерации
+	userClient userv1.UserServiceClient // optional; для ленивого создания профиля при загрузке фото
 }
 
 // masterOwnerNotifier delivers in-app bells to a master: new booking and
@@ -43,6 +45,15 @@ type MasterHandlerOption func(*MasterHandler)
 func WithMasterOwnerNotifier(n masterOwnerNotifier) MasterHandlerOption {
 	return func(h *MasterHandler) {
 		h.notifier = n
+	}
+}
+
+// WithMasterUserClient wires the user-service client used to look up the owner's
+// name when lazily creating a master profile on first photo upload. Optional:
+// when unset, photo upload still requires a pre-existing profile.
+func WithMasterUserClient(c userv1.UserServiceClient) MasterHandlerOption {
+	return func(h *MasterHandler) {
+		h.userClient = c
 	}
 }
 
@@ -78,6 +89,17 @@ func masterProtoToJSON(m *masterv1.Master) map[string]any {
 			"is_cover":   p.GetIsCover(),
 		})
 	}
+	creds := make([]map[string]any, 0, len(m.GetCredentials()))
+	for _, c := range m.GetCredentials() {
+		creds = append(creds, map[string]any{
+			"id":         c.GetId(),
+			"kind":       c.GetKind(),
+			"title":      c.GetTitle(),
+			"issuer":     c.GetIssuer(),
+			"year":       c.GetYear(),
+			"sort_order": c.GetSortOrder(),
+		})
+	}
 	out := map[string]any{
 		"id":                           m.GetId(),
 		"user_id":                      m.GetUserId(),
@@ -108,6 +130,7 @@ func masterProtoToJSON(m *masterv1.Master) map[string]any {
 		"moderation_comment":           m.GetModerationComment(),
 		"services":                     svcs,
 		"photos":                       photos,
+		"credentials":                  creds,
 	}
 	if m.GetCreatedAt() != nil {
 		out["created_at"] = m.GetCreatedAt().AsTime().Format("2006-01-02T15:04:05Z07:00")
@@ -311,6 +334,13 @@ type masterServicePatch struct {
 	SortOrder   int32  `json:"sort_order"`
 }
 
+type masterCredentialPatch struct {
+	Kind   string `json:"kind"`
+	Title  string `json:"title"`
+	Issuer string `json:"issuer"`
+	Year   int32  `json:"year"`
+}
+
 // updateReqFromRaw builds gRPC UpdateMyProfileRequest from JSON fields (same rules as PATCH body).
 func (h *MasterHandler) updateReqFromRaw(uid string, raw map[string]json.RawMessage) (*masterv1.UpdateMyProfileRequest, error) {
 	req := &masterv1.UpdateMyProfileRequest{UserId: uid}
@@ -446,6 +476,24 @@ func (h *MasterHandler) updateReqFromRaw(uid string, raw map[string]json.RawMess
 				}
 				req.ServicesReplace = append(req.ServicesReplace, inp)
 			}
+		}
+	}
+	// Credentials (certificates/awards): unlike services, an empty list is a
+	// valid edit (the master removed all of them), so presence of the key — not
+	// a non-empty list — drives apply_credentials.
+	if v, ok := raw["credentials"]; ok {
+		var items []masterCredentialPatch
+		if err := json.Unmarshal(v, &items); err != nil {
+			return nil, errors.New("invalid credentials")
+		}
+		req.ApplyCredentials = true
+		for _, it := range items {
+			req.CredentialsReplace = append(req.CredentialsReplace, &masterv1.MasterCredentialItemInput{
+				Kind:   it.Kind,
+				Title:  it.Title,
+				Issuer: it.Issuer,
+				Year:   it.Year,
+			})
 		}
 	}
 	return req, nil

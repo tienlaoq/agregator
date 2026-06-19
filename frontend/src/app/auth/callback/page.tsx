@@ -3,6 +3,7 @@
 import { Suspense, useEffect } from "react"
 import { useRouter } from "next/navigation"
 import { getProfile } from "@/lib/api"
+import { safeNextPath } from "@/lib/safe-redirect"
 import { useAuthStore } from "@/store/auth"
 import { Flame } from "lucide-react"
 
@@ -44,6 +45,11 @@ function CallbackHandler() {
     const params = new URLSearchParams(fragment)
     const accessToken = params.get("access_token")
 
+    // Capture the post-login redirect target (set by the gateway as a query
+    // param) BEFORE replaceState below strips the query string. Validated
+    // against open redirects.
+    const nextPath = safeNextPath(new URLSearchParams(window.location.search).get("next"))
+
     if (!accessToken) {
       router.push("/auth/login?error=oauth_failed")
       return
@@ -67,7 +73,7 @@ function CallbackHandler() {
     getProfile()
       .then((user) => {
         authLogin(accessToken, "", user)
-        router.push("/")
+        router.push(nextPath ?? "/")
       })
       .catch(() => {
         router.push("/auth/login?error=profile_failed")

@@ -214,3 +214,53 @@ func TestSetStateCookie_secureWhenHTTPS(t *testing.T) {
 	assert.True(t, c.Secure, "Secure must be true when BASE_URL is https")
 	assert.True(t, c.HttpOnly)
 }
+
+// safeOAuthNext tests --------------------------------------------------
+
+func TestSafeOAuthNext(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"empty", "", ""},
+		{"simple path", "/support", "/support"},
+		{"root", "/", "/"},
+		{"path with query", "/venues?city=moskva", "/venues?city=moskva"},
+		{"nested path", "/my/bookings", "/my/bookings"},
+		{"protocol-relative open redirect", "//evil.com", ""},
+		{"backslash open redirect", "/\\evil.com", ""},
+		{"absolute url", "https://evil.com", ""},
+		{"scheme-relative no slash", "evil.com", ""},
+		{"missing leading slash", "support", ""},
+		{"single slash only is allowed", "/", "/"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := safeOAuthNext(tt.in); got != tt.want {
+				t.Errorf("safeOAuthNext(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestSetNextCookie_emptyWritesNothing(t *testing.T) {
+	h, err := NewOAuthHandler(zerolog.Nop(), nil, OAuthConfig{
+		BaseURL:     "https://api.example.com",
+		FrontendURL: "https://app.example.com",
+	})
+	require.NoError(t, err)
+
+	w := httptest.NewRecorder()
+	h.setNextCookie(w, "")
+	assert.Empty(t, w.Result().Cookies(), "empty next must not set a cookie")
+
+	w = httptest.NewRecorder()
+	h.setNextCookie(w, "/support")
+	cookies := w.Result().Cookies()
+	require.Len(t, cookies, 1)
+	assert.Equal(t, oauthNextCookie, cookies[0].Name)
+	assert.Equal(t, "/support", cookies[0].Value)
+	assert.True(t, cookies[0].HttpOnly)
+	assert.True(t, cookies[0].Secure, "Secure must be true when BASE_URL is https")
+}

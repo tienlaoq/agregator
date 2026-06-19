@@ -32,7 +32,22 @@ service CRMService {
   // CRM task CRUD (per-venue, optionally linked to a booking).
   rpc ListTasks(ListTasksRequest) returns (ListTasksResponse);
   rpc CreateTask(CreateTaskRequest) returns (CreateTaskResponse);
+  // CompleteTask transitions open -> done, recording who closed it and when.
   rpc CompleteTask(CompleteTaskRequest) returns (CompleteTaskResponse);
+  // UpdateTask edits mutable content (title/body/priority/due_at/assignee).
+  // Wholesale replace: send the full desired state — omitted due_at/assignee clear.
+  // Manager/owner only.
+  rpc UpdateTask(UpdateTaskRequest) returns (UpdateTaskResponse);
+  // ReopenTask transitions done -> open, clearing completed_by/at. Manager/owner only.
+  rpc ReopenTask(ReopenTaskRequest) returns (ReopenTaskResponse);
+  // CancelTask soft-deletes a task (-> cancelled). Manager/owner only.
+  rpc CancelTask(CancelTaskRequest) returns (CancelTaskResponse);
+
+  // Customer 360: guest profiles projected from booking events.
+  // ListGuests returns per-venue guest profiles (visits, LTV, segments).
+  rpc ListGuests(ListGuestsRequest) returns (ListGuestsResponse);
+  // GetGuest returns one guest's profile plus recent bookings.
+  rpc GetGuest(GetGuestRequest) returns (GetGuestResponse);
 }
 
 // ---- Access ----
@@ -115,11 +130,15 @@ message Task {
   optional string booking_id = 3;
   string title = 4;
   string body = 5;
-  string status = 6; // open | done
+  string status = 6; // open | done | cancelled
   optional string assignee_user_id = 7;
   string created_by = 8;
   google.protobuf.Timestamp created_at = 9;
   google.protobuf.Timestamp updated_at = 10;
+  google.protobuf.Timestamp due_at = 11;       // optional; absent when no deadline
+  string priority = 12;                         // low | normal | high
+  string completed_by = 13;                     // empty until completed
+  google.protobuf.Timestamp completed_at = 14;  // absent until completed
 }
 
 message ListTasksRequest {
@@ -140,6 +159,8 @@ message CreateTaskRequest {
   string body = 4;
   optional string booking_id = 5;
   optional string assignee_user_id = 6;
+  string priority = 7;                    // low | normal | high; empty -> normal
+  google.protobuf.Timestamp due_at = 8;   // optional deadline
 }
 
 message CreateTaskResponse {
@@ -153,3 +174,89 @@ message CompleteTaskRequest {
 }
 
 message CompleteTaskResponse {}
+
+message UpdateTaskRequest {
+  string venue_id = 1;
+  string actor_id = 2;
+  string task_id = 3;
+  string title = 4;
+  string body = 5;
+  string priority = 6;                     // low | normal | high; empty -> normal
+  google.protobuf.Timestamp due_at = 7;    // absent clears the deadline
+  optional string assignee_user_id = 8;    // empty/absent clears the assignee
+}
+
+message UpdateTaskResponse {
+  Task task = 1;
+}
+
+message ReopenTaskRequest {
+  string venue_id = 1;
+  string actor_id = 2;
+  string task_id = 3;
+}
+
+message ReopenTaskResponse {
+  Task task = 1;
+}
+
+message CancelTaskRequest {
+  string venue_id = 1;
+  string actor_id = 2;
+  string task_id = 3;
+}
+
+message CancelTaskResponse {}
+
+// ---- Guests (Customer 360) ----
+
+// GuestProfile is a per-venue behavioural projection of one guest, built from
+// booking.* events. PII (name/email) is NOT stored here — the gateway enriches
+// it from user-service on read.
+message GuestProfile {
+  string venue_id = 1;
+  string user_id = 2;
+  int32 bookings_count = 3;       // bookings ever created
+  int32 visits_count = 4;         // completed bookings
+  int32 cancellations_count = 5;
+  int32 no_show_count = 6;        // reserved; populated once booking.no_show exists
+  int64 total_spent = 7;          // LTV, same unit as booking total_price
+  google.protobuf.Timestamp first_visit_at = 8;
+  google.protobuf.Timestamp last_visit_at = 9;
+  google.protobuf.Timestamp last_booking_at = 10;
+  repeated string segments = 11;  // computed: new | regular | vip | at_risk
+}
+
+// GuestBookingSummary is a compact booking row for the 360 timeline.
+message GuestBookingSummary {
+  string booking_id = 1;
+  string status = 2;
+  int64 total_price = 3;
+  google.protobuf.Timestamp visit_date = 4;
+  int32 guests = 5;
+}
+
+message ListGuestsRequest {
+  string venue_id = 1;
+  string actor_id = 2;
+  string segment = 3;  // optional filter: new | regular | vip | at_risk
+  string sort = 4;     // last_visit (default) | ltv | visits
+  int32 limit = 5;     // page size; clamped server-side
+  int32 offset = 6;
+}
+
+message ListGuestsResponse {
+  repeated GuestProfile guests = 1;
+  int32 total = 2;  // total matching guests (before pagination)
+}
+
+message GetGuestRequest {
+  string venue_id = 1;
+  string actor_id = 2;
+  string user_id = 3;
+}
+
+message GetGuestResponse {
+  GuestProfile profile = 1;
+  repeated GuestBookingSummary recent_bookings = 2;
+}

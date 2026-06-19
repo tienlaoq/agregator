@@ -85,10 +85,12 @@ func TestTaskToProto(t *testing.T) {
 	now := time.Now()
 	booking := uuid.New()
 	assignee := uuid.New()
+	completer := uuid.New()
 	full := &domain.Task{
 		ID: uuid.New(), VenueID: uuid.New(), BookingID: &booking,
-		Title: "t", Body: "b", Status: domain.TaskStatusOpen,
-		AssigneeUserID: &assignee, CreatedBy: uuid.New(),
+		Title: "t", Body: "b", Status: domain.TaskStatusDone, Priority: domain.TaskPriorityHigh,
+		AssigneeUserID: &assignee, DueAt: &now, CreatedBy: uuid.New(),
+		CompletedBy: &completer, CompletedAt: &now,
 		CreatedAt: now, UpdatedAt: now,
 	}
 	p := taskToProto(full)
@@ -96,11 +98,18 @@ func TestTaskToProto(t *testing.T) {
 	assert.Equal(t, booking.String(), p.GetBookingId())
 	assert.Equal(t, assignee.String(), p.GetAssigneeUserId())
 	assert.Equal(t, "t", p.GetTitle())
+	assert.Equal(t, domain.TaskPriorityHigh, p.GetPriority())
+	assert.Equal(t, completer.String(), p.GetCompletedBy())
+	assert.NotNil(t, p.GetDueAt())
+	assert.NotNil(t, p.GetCompletedAt())
 
 	bare := &domain.Task{ID: uuid.New(), VenueID: uuid.New(), CreatedBy: uuid.New(), CreatedAt: now, UpdatedAt: now}
 	pb := taskToProto(bare)
 	assert.Nil(t, pb.BookingId)
 	assert.Nil(t, pb.AssigneeUserId)
+	assert.Nil(t, pb.DueAt)
+	assert.Nil(t, pb.CompletedAt)
+	assert.Empty(t, pb.GetCompletedBy())
 }
 
 func TestGetManagementAccess(t *testing.T) {
@@ -295,7 +304,7 @@ func TestCompleteTask(t *testing.T) {
 		GetManagementAccessFunc: func(_ context.Context, _, _ uuid.UUID) (string, error) {
 			return domain.AccessOwner, nil
 		},
-		CompleteTaskFunc: func(_ context.Context, _, _ uuid.UUID) (bool, error) { return true, nil },
+		CompleteTaskFunc: func(_ context.Context, _, _, _ uuid.UUID) (bool, error) { return true, nil },
 	})
 	_, err := s.CompleteTask(context.Background(), &crmv1.CompleteTaskRequest{
 		VenueId: uuid.NewString(), ActorId: uuid.NewString(), TaskId: uuid.NewString(),
@@ -306,4 +315,82 @@ func TestCompleteTask(t *testing.T) {
 		VenueId: uuid.NewString(), ActorId: uuid.NewString(), TaskId: "bad",
 	})
 	assert.Equal(t, codes.InvalidArgument, status.Code(err))
+}
+
+func TestUpdateTask(t *testing.T) {
+	s := newServer(&mockRepo{
+		GetManagementAccessFunc: func(_ context.Context, _, _ uuid.UUID) (string, error) {
+			return domain.AccessManager, nil
+		},
+		UpdateTaskFunc: func(_ context.Context, task *domain.Task) error {
+			task.Status = domain.TaskStatusOpen
+			task.CreatedAt = time.Now()
+			task.UpdatedAt = time.Now()
+			return nil
+		},
+	})
+	resp, err := s.UpdateTask(context.Background(), &crmv1.UpdateTaskRequest{
+		VenueId: uuid.NewString(), ActorId: uuid.NewString(), TaskId: uuid.NewString(),
+		Title: "Обновлено", Priority: "high",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "Обновлено", resp.GetTask().GetTitle())
+	assert.Equal(t, "high", resp.GetTask().GetPriority())
+
+	// staff role surfaces PermissionDenied from the usecase.
+	sd := newServer(&mockRepo{
+		GetManagementAccessFunc: func(_ context.Context, _, _ uuid.UUID) (string, error) {
+			return domain.AccessStaff, nil
+		},
+	})
+	_, err = sd.UpdateTask(context.Background(), &crmv1.UpdateTaskRequest{
+		VenueId: uuid.NewString(), ActorId: uuid.NewString(), TaskId: uuid.NewString(), Title: "x",
+	})
+	assert.Equal(t, codes.PermissionDenied, status.Code(err))
+}
+
+func TestReopenTask(t *testing.T) {
+	s := newServer(&mockRepo{
+		GetManagementAccessFunc: func(_ context.Context, _, _ uuid.UUID) (string, error) {
+			return domain.AccessOwner, nil
+		},
+		ReopenTaskFunc: func(_ context.Context, _, _ uuid.UUID) (*domain.Task, error) {
+			return &domain.Task{ID: uuid.New(), Status: domain.TaskStatusOpen, CreatedAt: time.Now(), UpdatedAt: time.Now()}, nil
+		},
+	})
+	resp, err := s.ReopenTask(context.Background(), &crmv1.ReopenTaskRequest{
+		VenueId: uuid.NewString(), ActorId: uuid.NewString(), TaskId: uuid.NewString(),
+	})
+	require.NoError(t, err)
+	assert.Equal(t, domain.TaskStatusOpen, resp.GetTask().GetStatus())
+
+	_, err = s.ReopenTask(context.Background(), &crmv1.ReopenTaskRequest{
+		VenueId: "bad", ActorId: uuid.NewString(), TaskId: uuid.NewString(),
+	})
+	assert.Equal(t, codes.InvalidArgument, status.Code(err))
+}
+
+func TestCancelTask(t *testing.T) {
+	s := newServer(&mockRepo{
+		GetManagementAccessFunc: func(_ context.Context, _, _ uuid.UUID) (string, error) {
+			return domain.AccessOwner, nil
+		},
+		CancelTaskFunc: func(_ context.Context, _, _ uuid.UUID) (bool, error) { return true, nil },
+	})
+	_, err := s.CancelTask(context.Background(), &crmv1.CancelTaskRequest{
+		VenueId: uuid.NewString(), ActorId: uuid.NewString(), TaskId: uuid.NewString(),
+	})
+	require.NoError(t, err)
+
+	// not found maps to NotFound.
+	sn := newServer(&mockRepo{
+		GetManagementAccessFunc: func(_ context.Context, _, _ uuid.UUID) (string, error) {
+			return domain.AccessOwner, nil
+		},
+		CancelTaskFunc: func(_ context.Context, _, _ uuid.UUID) (bool, error) { return false, nil },
+	})
+	_, err = sn.CancelTask(context.Background(), &crmv1.CancelTaskRequest{
+		VenueId: uuid.NewString(), ActorId: uuid.NewString(), TaskId: uuid.NewString(),
+	})
+	assert.Equal(t, codes.NotFound, status.Code(err))
 }

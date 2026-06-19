@@ -139,6 +139,25 @@ func main() {
 		}
 	}()
 
+	// Outbox poller: публикует staged-события booking.created/confirmed/cancelled
+	// из транзакционного outbox. Отдельный короткий тикер (а не 2-минутный
+	// AutoComplete) — иначе подтверждения/рефанды ждали бы публикации до 2 минут.
+	// publish раньше mark = at-least-once. См. TECH_DEBT [BOOKING-PUBLISH-LOSS].
+	go func() {
+		tick := time.NewTicker(2 * time.Second)
+		defer tick.Stop()
+		for {
+			select {
+			case <-autoCompleteCtx.Done():
+				return
+			case <-tick.C:
+				if _, err := uc.ProcessOutbox(autoCompleteCtx, 100); err != nil {
+					log.Error().Err(err).Msg("booking: outbox poller tick failed")
+				}
+			}
+		}
+	}()
+
 	sub := events.NewSubscriber(js, uc, log, m)
 	if err := sub.SubscribePaymentEvents(); err != nil {
 		log.Fatal().Err(err).Msg("failed to subscribe to payment events")

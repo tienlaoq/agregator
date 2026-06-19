@@ -155,6 +155,21 @@ func (m *mockCRMClient) CreateTask(ctx context.Context, in *crmv1.CreateTaskRequ
 func (m *mockCRMClient) CompleteTask(ctx context.Context, in *crmv1.CompleteTaskRequest, opts ...grpc.CallOption) (*crmv1.CompleteTaskResponse, error) {
 	return nil, nil
 }
+func (m *mockCRMClient) UpdateTask(ctx context.Context, in *crmv1.UpdateTaskRequest, opts ...grpc.CallOption) (*crmv1.UpdateTaskResponse, error) {
+	return nil, nil
+}
+func (m *mockCRMClient) ReopenTask(ctx context.Context, in *crmv1.ReopenTaskRequest, opts ...grpc.CallOption) (*crmv1.ReopenTaskResponse, error) {
+	return nil, nil
+}
+func (m *mockCRMClient) CancelTask(ctx context.Context, in *crmv1.CancelTaskRequest, opts ...grpc.CallOption) (*crmv1.CancelTaskResponse, error) {
+	return nil, nil
+}
+func (m *mockCRMClient) ListGuests(ctx context.Context, in *crmv1.ListGuestsRequest, opts ...grpc.CallOption) (*crmv1.ListGuestsResponse, error) {
+	return nil, nil
+}
+func (m *mockCRMClient) GetGuest(ctx context.Context, in *crmv1.GetGuestRequest, opts ...grpc.CallOption) (*crmv1.GetGuestResponse, error) {
+	return nil, nil
+}
 
 type mockPaymentClient struct {
 	CreatePaymentFunc func(ctx context.Context, in *paymentv1.CreatePaymentRequest, opts ...grpc.CallOption) (*paymentv1.PaymentResponse, error)
@@ -192,33 +207,19 @@ func (m *mockPaymentClient) ListPartnerPayouts(ctx context.Context, in *paymentv
 }
 
 type mockEventPublisher struct {
-	PublishBookingCreatedFunc   func(ctx context.Context, b *domain.Booking) error
-	PublishBookingConfirmedFunc func(ctx context.Context, b *domain.Booking) error
-	PublishBookingCancelledFunc func(ctx context.Context, b *domain.Booking) error
 	PublishBookingCompletedFunc func(ctx context.Context, b *domain.Booking) error
+	PublishRawFunc              func(ctx context.Context, subject string, payload []byte) error
 }
 
-func (m *mockEventPublisher) PublishBookingCreated(ctx context.Context, b *domain.Booking) error {
-	if m.PublishBookingCreatedFunc != nil {
-		return m.PublishBookingCreatedFunc(ctx, b)
-	}
-	return nil
-}
-func (m *mockEventPublisher) PublishBookingConfirmed(ctx context.Context, b *domain.Booking) error {
-	if m.PublishBookingConfirmedFunc != nil {
-		return m.PublishBookingConfirmedFunc(ctx, b)
-	}
-	return nil
-}
-func (m *mockEventPublisher) PublishBookingCancelled(ctx context.Context, b *domain.Booking) error {
-	if m.PublishBookingCancelledFunc != nil {
-		return m.PublishBookingCancelledFunc(ctx, b)
-	}
-	return nil
-}
 func (m *mockEventPublisher) PublishBookingCompleted(ctx context.Context, b *domain.Booking) error {
 	if m.PublishBookingCompletedFunc != nil {
 		return m.PublishBookingCompletedFunc(ctx, b)
+	}
+	return nil
+}
+func (m *mockEventPublisher) PublishRaw(ctx context.Context, subject string, payload []byte) error {
+	if m.PublishRawFunc != nil {
+		return m.PublishRawFunc(ctx, subject, payload)
 	}
 	return nil
 }

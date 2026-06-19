@@ -19,8 +19,8 @@ import (
 )
 
 type BookingRepo struct {
-	pool           *pgxpool.Pool
-	cursorHMACKey  []byte
+	pool          *pgxpool.Pool
+	cursorHMACKey []byte
 }
 
 // NewBookingRepo создаёт репозиторий. cursorHMACKey используется для подписи
@@ -55,18 +55,93 @@ func (r *BookingRepo) Create(ctx context.Context, b *domain.Booking) error {
 	).Scan(&b.ID, &b.CreatedAt, &b.UpdatedAt)
 }
 
-// SetPaymentAndStatus атомарно обновляет payment_id, payment_url и status за один round-trip.
-// Используется в CreateBooking вместо последовательных SetPaymentID + UpdateStatus.
-func (r *BookingRepo) SetPaymentAndStatus(ctx context.Context, bookingID, paymentID, paymentURL, status string) error {
+// insertOutboxTx пишет одно событие в outbox в рамках переданной транзакции.
+// payload хранится как JSONB (передаётся как text, PG валидирует JSON).
+func insertOutboxTx(ctx context.Context, tx pgx.Tx, ev domain.OutboxEvent) error {
+	_, err := tx.Exec(ctx,
+		`INSERT INTO outbox_events (subject, payload) VALUES ($1, $2::jsonb)`,
+		ev.Subject, string(ev.Payload))
+	return err
+}
+
+// SetPaymentAndStatus атомарно обновляет payment_id, payment_url и status и в той же
+// транзакции пишет событие booking.created в outbox. Используется в CreateBooking.
+func (r *BookingRepo) SetPaymentAndStatus(ctx context.Context, bookingID, paymentID, paymentURL, status string, ev domain.OutboxEvent) error {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
 	const q = `UPDATE bookings SET payment_id = $2, payment_url = $3, status = $4, updated_at = now() WHERE id = $1`
-	ct, err := r.pool.Exec(ctx, q, bookingID, paymentID, paymentURL, status)
+	ct, err := tx.Exec(ctx, q, bookingID, paymentID, paymentURL, status)
 	if err != nil {
 		return err
 	}
 	if ct.RowsAffected() == 0 {
 		return pkgerr.NotFound("booking not found")
 	}
-	return nil
+	if err := insertOutboxTx(ctx, tx, ev); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+// CancelWithEvent переводит бронь в status='cancelled' и пишет booking.cancelled
+// в outbox в одной транзакции. Гарантии отмены проверяются в usecase.
+func (r *BookingRepo) CancelWithEvent(ctx context.Context, id string, ev domain.OutboxEvent) error {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	const q = `UPDATE bookings SET status = $2, updated_at = now() WHERE id = $1`
+	ct, err := tx.Exec(ctx, q, id, string(domain.StatusCancelled))
+	if err != nil {
+		return err
+	}
+	if ct.RowsAffected() == 0 {
+		return pkgerr.NotFound("booking not found")
+	}
+	if err := insertOutboxTx(ctx, tx, ev); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
+// FetchUnsentOutbox возвращает неотправленные события в порядке id (FIFO).
+// payload::text — чтобы получить JSON-байты в string без двусмысленности pgx jsonb→[]byte.
+func (r *BookingRepo) FetchUnsentOutbox(ctx context.Context, limit int) ([]domain.OutboxEvent, error) {
+	const q = `SELECT id, subject, payload::text FROM outbox_events WHERE sent_at IS NULL ORDER BY id LIMIT $1`
+	rows, err := r.pool.Query(ctx, q, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var out []domain.OutboxEvent
+	for rows.Next() {
+		var (
+			ev      domain.OutboxEvent
+			payload string
+		)
+		if err := rows.Scan(&ev.ID, &ev.Subject, &payload); err != nil {
+			return nil, err
+		}
+		ev.Payload = []byte(payload)
+		out = append(out, ev)
+	}
+	return out, rows.Err()
+}
+
+// MarkOutboxSent проставляет sent_at = now() для отправленных событий. Пустой срез — no-op.
+func (r *BookingRepo) MarkOutboxSent(ctx context.Context, ids []int64) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	_, err := r.pool.Exec(ctx, `UPDATE outbox_events SET sent_at = now() WHERE id = ANY($1::bigint[])`, ids)
+	return err
 }
 
 // selectCols — общие колонки для всех SELECT-запросов на bookings.
@@ -342,7 +417,7 @@ func (r *BookingRepo) AddBookingStaffNote(ctx context.Context, n *domain.Booking
 //
 // NATS at-least-once гарантирует дубли payment.completed — второй вызов попадает
 // в ветку confirmed/completed и возвращает err=nil без лишнего round-trip.
-func (r *BookingRepo) ConfirmPayment(ctx context.Context, bookingID, paymentID string) (*domain.Booking, bool, error) {
+func (r *BookingRepo) ConfirmPayment(ctx context.Context, bookingID, paymentID, subject string) (*domain.Booking, bool, error) {
 	// confirmed — булев флаг: true если UPDATE задел строку, false если читали как-есть.
 	// Добавляется последней колонкой после selectCols; scanDest принимает его через extra.
 	const q = `
@@ -363,32 +438,58 @@ func (r *BookingRepo) ConfirmPayment(ctx context.Context, bookingID, paymentID s
 		 WHERE id = $1::uuid
 		   AND NOT EXISTS (SELECT 1 FROM upd)`
 
-	rows, err := r.pool.Query(ctx, q, bookingID, paymentID)
+	tx, err := r.pool.Begin(ctx)
 	if err != nil {
 		return nil, false, err
 	}
-	defer rows.Close()
+	defer tx.Rollback(ctx)
+
+	rows, err := tx.Query(ctx, q, bookingID, paymentID)
+	if err != nil {
+		return nil, false, err
+	}
 
 	if !rows.Next() {
-		if err := rows.Err(); err != nil {
-			return nil, false, err
+		rowsErr := rows.Err()
+		rows.Close()
+		if rowsErr != nil {
+			return nil, false, rowsErr
 		}
 		return nil, false, pkgerr.NotFound("booking not found")
 	}
 
 	var confirmed bool
-	b, err := scanBookingFromRows(rows, &confirmed)
-	if err != nil {
-		return nil, false, err
+	b, scanErr := scanBookingFromRows(rows, &confirmed)
+	rowsErr := rows.Err()
+	// Закрываем rows ДО любого другого запроса в этой же транзакции (pgx не допускает
+	// конкурентные запросы на одном соединении).
+	rows.Close()
+	if scanErr != nil {
+		return nil, false, scanErr
 	}
-	if err := rows.Err(); err != nil {
-		return nil, false, err
+	if rowsErr != nil {
+		return nil, false, rowsErr
 	}
 
 	if confirmed {
-		return b, true, nil // UPDATE сработал — бронь только что подтверждена
+		// UPDATE сработал — бронь только что подтверждена. Пишем событие в той же tx.
+		ev, err := domain.NewBookingEvent(subject, b)
+		if err != nil {
+			return nil, false, err
+		}
+		if err := insertOutboxTx(ctx, tx, ev); err != nil {
+			return nil, false, err
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return nil, false, err
+		}
+		return b, true, nil
 	}
-	// UPDATE не задел строку — смотрим текущий статус чтобы различить сценарии.
+	// UPDATE не задел строку — события нет. Коммитим (запись не велась) и
+	// смотрим текущий статус чтобы различить сценарии.
+	if err := tx.Commit(ctx); err != nil {
+		return nil, false, err
+	}
 	switch b.Status {
 	case domain.StatusConfirmed, domain.StatusCompleted, domain.StatusCancelled:
 		return b, false, nil // идемпотентный повтор — publish пропускаем

@@ -241,6 +241,24 @@ func (r *stubRepo) ListPublic(_ context.Context, _ domain.ListPublicMastersParam
 func (r *stubRepo) ReplaceServices(_ context.Context, _ uuid.UUID, _ []domain.MasterServiceUpsert) ([]domain.MasterService, error) {
 	panic("stubRepo.ReplaceServices not implemented")
 }
+func (r *stubRepo) ReplaceCredentials(_ context.Context, masterID uuid.UUID, items []domain.MasterCredentialUpsert) ([]domain.MasterCredential, error) {
+	out := make([]domain.MasterCredential, 0, len(items))
+	for i, it := range items {
+		out = append(out, domain.MasterCredential{
+			ID:        uuid.New(),
+			MasterID:  masterID,
+			Kind:      it.Kind,
+			Title:     it.Title,
+			Issuer:    it.Issuer,
+			Year:      it.Year,
+			SortOrder: int32(i),
+		})
+	}
+	if m, ok := r.masters[masterID]; ok {
+		m.Credentials = out
+	}
+	return out, nil
+}
 func (r *stubRepo) ListModerationHistory(_ context.Context, _ uuid.UUID, _ int32) ([]domain.ModerationHistoryEntry, error) {
 	panic("stubRepo.ListModerationHistory not implemented")
 }
@@ -753,6 +771,102 @@ func Test_validateMasterServices(t *testing.T) {
 	t.Run("empty list is valid", func(t *testing.T) {
 		if err := validateMasterServices(nil); err != nil {
 			t.Fatalf("unexpected error for empty list: %v", err)
+		}
+	})
+}
+
+// ── 6b. validateMasterCredentials ─────────────────────────────────────────────
+
+func Test_validateMasterCredentials(t *testing.T) {
+	t.Run("empty list is valid", func(t *testing.T) {
+		out, err := validateMasterCredentials(nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(out) != 0 {
+			t.Fatalf("expected empty output, got %d", len(out))
+		}
+	})
+
+	t.Run("defaults kind to certificate and trims fields", func(t *testing.T) {
+		out, err := validateMasterCredentials([]domain.MasterCredentialUpsert{
+			{Title: "  Мастер парения  ", Issuer: "  Школа бани ", Year: 2020},
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if out[0].Kind != domain.CredentialKindCertificate {
+			t.Fatalf("expected default kind certificate, got %q", out[0].Kind)
+		}
+		if out[0].Title != "Мастер парения" || out[0].Issuer != "Школа бани" {
+			t.Fatalf("fields not trimmed: %+v", out[0])
+		}
+		if out[0].SortOrder != 0 {
+			t.Fatalf("expected sort_order 0, got %d", out[0].SortOrder)
+		}
+	})
+
+	t.Run("award kind accepted and sort_order follows index", func(t *testing.T) {
+		out, err := validateMasterCredentials([]domain.MasterCredentialUpsert{
+			{Kind: domain.CredentialKindCertificate, Title: "A"},
+			{Kind: domain.CredentialKindAward, Title: "B"},
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if out[1].Kind != domain.CredentialKindAward || out[1].SortOrder != 1 {
+			t.Fatalf("unexpected second item: %+v", out[1])
+		}
+	})
+
+	t.Run("invalid kind rejected", func(t *testing.T) {
+		if _, err := validateMasterCredentials([]domain.MasterCredentialUpsert{
+			{Kind: "diploma", Title: "X"},
+		}); err == nil {
+			t.Fatal("expected error for invalid kind")
+		}
+	})
+
+	t.Run("empty title rejected", func(t *testing.T) {
+		if _, err := validateMasterCredentials([]domain.MasterCredentialUpsert{
+			{Title: "   "},
+		}); err == nil {
+			t.Fatal("expected error for empty title")
+		}
+	})
+
+	t.Run("title too long rejected", func(t *testing.T) {
+		long := make([]rune, domain.MaxCredentialTitle+1)
+		for i := range long {
+			long[i] = 'я'
+		}
+		if _, err := validateMasterCredentials([]domain.MasterCredentialUpsert{
+			{Title: string(long)},
+		}); err == nil {
+			t.Fatal("expected error for title exceeding MaxCredentialTitle")
+		}
+	})
+
+	t.Run("zero year allowed, out-of-range rejected", func(t *testing.T) {
+		if _, err := validateMasterCredentials([]domain.MasterCredentialUpsert{
+			{Title: "X", Year: 0},
+		}); err != nil {
+			t.Fatalf("zero year should be allowed: %v", err)
+		}
+		if _, err := validateMasterCredentials([]domain.MasterCredentialUpsert{
+			{Title: "X", Year: 1800},
+		}); err == nil {
+			t.Fatal("expected error for year before MinCredentialYear")
+		}
+	})
+
+	t.Run("too many credentials rejected", func(t *testing.T) {
+		items := make([]domain.MasterCredentialUpsert, domain.MaxCredentialsPerMaster+1)
+		for i := range items {
+			items[i] = domain.MasterCredentialUpsert{Title: "X"}
+		}
+		if _, err := validateMasterCredentials(items); err == nil {
+			t.Fatal("expected error for too many credentials")
 		}
 	})
 }

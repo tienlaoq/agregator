@@ -271,7 +271,7 @@ func TestCreateTask(t *testing.T) {
 					return nil
 				},
 			}
-			got, err := New(repo).CreateTask(context.Background(), venueID, actorID, tt.title, tt.body, &bookingID, &assignee)
+			got, err := New(repo).CreateTask(context.Background(), venueID, actorID, tt.title, tt.body, &bookingID, &assignee, "", nil)
 			if tt.wantErr {
 				require.Error(t, err)
 				assert.Equal(t, tt.wantCode, status.Code(err))
@@ -282,6 +282,7 @@ func TestCreateTask(t *testing.T) {
 			require.NotNil(t, got)
 			assert.Equal(t, tt.wantTitle, got.Title)
 			assert.Equal(t, domain.TaskStatusOpen, got.Status)
+			assert.Equal(t, domain.TaskPriorityNormal, got.Priority, "empty priority defaults to normal")
 			assert.Equal(t, actorID, got.CreatedBy)
 			assert.Equal(t, venueID, got.VenueID)
 			require.NotNil(t, got.BookingID)
@@ -299,33 +300,48 @@ func TestCreateTask_RepoError(t *testing.T) {
 		},
 		CreateTaskFunc: func(_ context.Context, _ *domain.Task) error { return errBoom },
 	}
-	got, err := New(repo).CreateTask(context.Background(), uuid.New(), uuid.New(), "title", "", nil, nil)
+	got, err := New(repo).CreateTask(context.Background(), uuid.New(), uuid.New(), "title", "", nil, nil, "", nil)
 	require.ErrorIs(t, err, errBoom)
 	assert.Nil(t, got)
 }
 
 func TestCompleteTask(t *testing.T) {
 	venueID, actorID, taskID := uuid.New(), uuid.New(), uuid.New()
+	other := uuid.New()
 	tests := []struct {
-		name       string
-		access     string
-		completed  bool
-		completeEr error
-		wantErr    bool
-		wantCode   codes.Code
+		name           string
+		access         string
+		task           *domain.Task // returned by GetTask on the staff path
+		getErr         error
+		completed      bool
+		completeEr     error
+		wantErr        bool
+		wantCode       codes.Code
+		expectComplete bool
 	}{
-		{name: "ok", access: domain.AccessStaff, completed: true},
-		{name: "not_found_or_closed", access: domain.AccessOwner, completed: false, wantErr: true, wantCode: codes.NotFound},
+		{name: "owner_any", access: domain.AccessOwner, completed: true, expectComplete: true},
+		{name: "manager_any", access: domain.AccessManager, completed: true, expectComplete: true},
+		{name: "staff_own_created", access: domain.AccessStaff, task: &domain.Task{CreatedBy: actorID}, completed: true, expectComplete: true},
+		{name: "staff_own_assigned", access: domain.AccessStaff, task: &domain.Task{CreatedBy: other, AssigneeUserID: &actorID}, completed: true, expectComplete: true},
+		{name: "staff_not_owner", access: domain.AccessStaff, task: &domain.Task{CreatedBy: other}, wantErr: true, wantCode: codes.PermissionDenied},
+		{name: "staff_task_missing", access: domain.AccessStaff, getErr: repository.ErrTaskNotFound, wantErr: true, wantCode: codes.NotFound},
+		{name: "owner_not_found_or_closed", access: domain.AccessOwner, completed: false, wantErr: true, wantCode: codes.NotFound},
 		{name: "no_access", access: "", wantErr: true, wantCode: codes.PermissionDenied},
 		{name: "repo_err", access: domain.AccessOwner, completeEr: errBoom, wantErr: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			var completeCalled bool
 			repo := &mockRepo{
 				GetManagementAccessFunc: func(_ context.Context, _, _ uuid.UUID) (string, error) {
 					return tt.access, nil
 				},
-				CompleteTaskFunc: func(_ context.Context, _, _ uuid.UUID) (bool, error) {
+				GetTaskFunc: func(_ context.Context, _, _ uuid.UUID) (*domain.Task, error) {
+					return tt.task, tt.getErr
+				},
+				CompleteTaskFunc: func(_ context.Context, _, _, completedBy uuid.UUID) (bool, error) {
+					completeCalled = true
+					assert.Equal(t, actorID, completedBy, "completer recorded as actor")
 					return tt.completed, tt.completeEr
 				},
 			}
@@ -338,8 +354,226 @@ func TestCompleteTask(t *testing.T) {
 				return
 			}
 			require.NoError(t, err)
+			assert.Equal(t, tt.expectComplete, completeCalled)
 		})
 	}
+}
+
+func TestUpdateTask(t *testing.T) {
+	venueID, actorID, taskID := uuid.New(), uuid.New(), uuid.New()
+	tests := []struct {
+		name       string
+		access     string
+		title      string
+		priority   string
+		updateErr  error
+		wantErr    bool
+		wantCode   codes.Code
+		expectRepo bool
+	}{
+		{name: "owner_ok", access: domain.AccessOwner, title: "x", priority: "high", expectRepo: true},
+		{name: "manager_ok", access: domain.AccessManager, title: "x", expectRepo: true},
+		{name: "staff_denied", access: domain.AccessStaff, title: "x", wantErr: true, wantCode: codes.PermissionDenied},
+		{name: "no_access", access: "", title: "x", wantErr: true, wantCode: codes.PermissionDenied},
+		{name: "empty_title", access: domain.AccessOwner, title: "  ", wantErr: true, wantCode: codes.InvalidArgument},
+		{name: "bad_priority", access: domain.AccessOwner, title: "x", priority: "urgent", wantErr: true, wantCode: codes.InvalidArgument},
+		{name: "not_found", access: domain.AccessOwner, title: "x", updateErr: repository.ErrTaskNotFound, wantErr: true, wantCode: codes.NotFound},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var called bool
+			repo := &mockRepo{
+				GetManagementAccessFunc: func(_ context.Context, _, _ uuid.UUID) (string, error) {
+					return tt.access, nil
+				},
+				UpdateTaskFunc: func(_ context.Context, task *domain.Task) error {
+					called = true
+					task.Status = domain.TaskStatusOpen
+					return tt.updateErr
+				},
+			}
+			got, err := New(repo).UpdateTask(context.Background(), venueID, actorID, taskID, tt.title, "body", nil, tt.priority, nil)
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.Equal(t, tt.wantCode, status.Code(err))
+				return
+			}
+			require.NoError(t, err)
+			require.NotNil(t, got)
+			assert.True(t, tt.expectRepo && called)
+		})
+	}
+}
+
+func TestReopenTask(t *testing.T) {
+	venueID, actorID, taskID := uuid.New(), uuid.New(), uuid.New()
+	tests := []struct {
+		name      string
+		access    string
+		reopenErr error
+		wantErr   bool
+		wantCode  codes.Code
+	}{
+		{name: "owner_ok", access: domain.AccessOwner},
+		{name: "manager_ok", access: domain.AccessManager},
+		{name: "staff_denied", access: domain.AccessStaff, wantErr: true, wantCode: codes.PermissionDenied},
+		{name: "not_done", access: domain.AccessOwner, reopenErr: repository.ErrTaskNotFound, wantErr: true, wantCode: codes.NotFound},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := &mockRepo{
+				GetManagementAccessFunc: func(_ context.Context, _, _ uuid.UUID) (string, error) {
+					return tt.access, nil
+				},
+				ReopenTaskFunc: func(_ context.Context, _, _ uuid.UUID) (*domain.Task, error) {
+					if tt.reopenErr != nil {
+						return nil, tt.reopenErr
+					}
+					return &domain.Task{ID: taskID, Status: domain.TaskStatusOpen}, nil
+				},
+			}
+			got, err := New(repo).ReopenTask(context.Background(), venueID, actorID, taskID)
+			if tt.wantErr {
+				require.Error(t, err)
+				assert.Equal(t, tt.wantCode, status.Code(err))
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, domain.TaskStatusOpen, got.Status)
+		})
+	}
+}
+
+func TestCancelTask(t *testing.T) {
+	venueID, actorID, taskID := uuid.New(), uuid.New(), uuid.New()
+	tests := []struct {
+		name      string
+		access    string
+		cancelled bool
+		cancelErr error
+		wantErr   bool
+		wantCode  codes.Code
+	}{
+		{name: "owner_ok", access: domain.AccessOwner, cancelled: true},
+		{name: "manager_ok", access: domain.AccessManager, cancelled: true},
+		{name: "staff_denied", access: domain.AccessStaff, wantErr: true, wantCode: codes.PermissionDenied},
+		{name: "not_found", access: domain.AccessOwner, cancelled: false, wantErr: true, wantCode: codes.NotFound},
+		{name: "repo_err", access: domain.AccessOwner, cancelErr: errBoom, wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := &mockRepo{
+				GetManagementAccessFunc: func(_ context.Context, _, _ uuid.UUID) (string, error) {
+					return tt.access, nil
+				},
+				CancelTaskFunc: func(_ context.Context, _, _ uuid.UUID) (bool, error) {
+					return tt.cancelled, tt.cancelErr
+				},
+			}
+			err := New(repo).CancelTask(context.Background(), venueID, actorID, taskID)
+			if tt.wantErr {
+				require.Error(t, err)
+				if tt.wantCode != codes.OK {
+					assert.Equal(t, tt.wantCode, status.Code(err))
+				}
+				return
+			}
+			require.NoError(t, err)
+		})
+	}
+}
+
+func TestListGuests(t *testing.T) {
+	venueID, actorID := uuid.New(), uuid.New()
+
+	t.Run("no access", func(t *testing.T) {
+		repo := &mockRepo{
+			GetManagementAccessFunc: func(_ context.Context, _, _ uuid.UUID) (string, error) { return "", nil },
+		}
+		_, _, err := New(repo).ListGuests(context.Background(), venueID, actorID, "", "", 0, 0)
+		assert.Equal(t, codes.PermissionDenied, status.Code(err))
+	})
+
+	t.Run("invalid segment", func(t *testing.T) {
+		repo := &mockRepo{
+			GetManagementAccessFunc: func(_ context.Context, _, _ uuid.UUID) (string, error) { return domain.AccessOwner, nil },
+		}
+		_, _, err := New(repo).ListGuests(context.Background(), venueID, actorID, "loyal", "", 0, 0)
+		assert.Equal(t, codes.InvalidArgument, status.Code(err))
+	})
+
+	t.Run("vip filter without threshold short-circuits", func(t *testing.T) {
+		called := false
+		repo := &mockRepo{
+			GetManagementAccessFunc: func(_ context.Context, _, _ uuid.UUID) (string, error) { return domain.AccessOwner, nil },
+			ListGuestsFunc: func(_ context.Context, _ uuid.UUID, _ domain.GuestListParams) ([]domain.GuestProfile, int, error) {
+				called = true
+				return nil, 0, nil
+			},
+		}
+		got, total, err := New(repo).ListGuests(context.Background(), venueID, actorID, domain.SegmentVIP, "", 0, 0)
+		require.NoError(t, err)
+		assert.Empty(t, got)
+		assert.Equal(t, 0, total)
+		assert.False(t, called, "repo must not be queried when VIP is disabled")
+	})
+
+	t.Run("success computes segments and forwards threshold", func(t *testing.T) {
+		var gotParams domain.GuestListParams
+		repo := &mockRepo{
+			GetManagementAccessFunc: func(_ context.Context, _, _ uuid.UUID) (string, error) { return domain.AccessManager, nil },
+			ListGuestsFunc: func(_ context.Context, _ uuid.UUID, params domain.GuestListParams) ([]domain.GuestProfile, int, error) {
+				gotParams = params
+				return []domain.GuestProfile{{
+					VenueID: venueID, UserID: uuid.New(), BookingsCount: 6, VisitsCount: 4, TotalSpent: 20000,
+				}}, 1, nil
+			},
+		}
+		views, total, err := New(repo, WithVIPThreshold(10000)).
+			ListGuests(context.Background(), venueID, actorID, "", "ltv", 25, 5)
+		require.NoError(t, err)
+		assert.Equal(t, 1, total)
+		require.Len(t, views, 1)
+		assert.Contains(t, views[0].Segments, domain.SegmentRegular)
+		assert.Contains(t, views[0].Segments, domain.SegmentVIP)
+		assert.Equal(t, int64(10000), gotParams.VIPThreshold)
+		assert.Equal(t, "ltv", gotParams.Sort)
+		assert.Equal(t, 25, gotParams.Limit)
+		assert.Equal(t, 5, gotParams.Offset)
+	})
+}
+
+func TestGetGuest(t *testing.T) {
+	venueID, actorID, userID := uuid.New(), uuid.New(), uuid.New()
+
+	t.Run("not found", func(t *testing.T) {
+		repo := &mockRepo{
+			GetManagementAccessFunc: func(_ context.Context, _, _ uuid.UUID) (string, error) { return domain.AccessStaff, nil },
+			GetGuestProfileFunc: func(_ context.Context, _, _ uuid.UUID) (*domain.GuestProfile, error) {
+				return nil, repository.ErrGuestNotFound
+			},
+		}
+		_, _, err := New(repo).GetGuest(context.Background(), venueID, actorID, userID)
+		assert.Equal(t, codes.NotFound, status.Code(err))
+	})
+
+	t.Run("success returns profile and bookings", func(t *testing.T) {
+		repo := &mockRepo{
+			GetManagementAccessFunc: func(_ context.Context, _, _ uuid.UUID) (string, error) { return domain.AccessOwner, nil },
+			GetGuestProfileFunc: func(_ context.Context, _, _ uuid.UUID) (*domain.GuestProfile, error) {
+				return &domain.GuestProfile{VenueID: venueID, UserID: userID, BookingsCount: 1}, nil
+			},
+			ListGuestBookingsFunc: func(_ context.Context, _, _ uuid.UUID, _ int) ([]domain.GuestBookingSummary, error) {
+				return []domain.GuestBookingSummary{{BookingID: uuid.New(), Status: "completed"}}, nil
+			},
+		}
+		view, bookings, err := New(repo).GetGuest(context.Background(), venueID, actorID, userID)
+		require.NoError(t, err)
+		require.NotNil(t, view)
+		assert.Equal(t, userID, view.Profile.UserID)
+		assert.Contains(t, view.Segments, domain.SegmentNew)
+		assert.Len(t, bookings, 1)
+	})
 }
 
 func TestEnsureMember_RepoError(t *testing.T) {

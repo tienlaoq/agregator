@@ -125,6 +125,57 @@ func validateMasterServices(items []domain.MasterServiceUpsert) error {
 	return nil
 }
 
+// validateMasterCredentials checks the certificate/award list supplied to
+// ReplaceCredentials before it reaches the repository. Limits mirror the domain
+// constants and the CHECK constraints in migration 021 so the application and DB
+// layers stay in sync. It returns the normalised items (trimmed strings, default
+// kind) so the caller persists exactly what was validated.
+func validateMasterCredentials(items []domain.MasterCredentialUpsert) ([]domain.MasterCredentialUpsert, error) {
+	if int32(len(items)) > domain.MaxCredentialsPerMaster {
+		return nil, pkgerrors.InvalidArgument(fmt.Sprintf(
+			"too many credentials: %d provided, max %d", len(items), domain.MaxCredentialsPerMaster,
+		))
+	}
+	out := make([]domain.MasterCredentialUpsert, 0, len(items))
+	for i, it := range items {
+		kind := strings.TrimSpace(it.Kind)
+		if kind == "" {
+			kind = domain.CredentialKindCertificate
+		}
+		if kind != domain.CredentialKindCertificate && kind != domain.CredentialKindAward {
+			return nil, pkgerrors.InvalidArgument(fmt.Sprintf("credential[%d]: invalid kind %q", i, kind))
+		}
+		title := strings.TrimSpace(it.Title)
+		if title == "" {
+			return nil, pkgerrors.InvalidArgument(fmt.Sprintf("credential[%d]: title is required", i))
+		}
+		if len([]rune(title)) > domain.MaxCredentialTitle {
+			return nil, pkgerrors.InvalidArgument(fmt.Sprintf(
+				"credential[%d]: title exceeds %d characters", i, domain.MaxCredentialTitle,
+			))
+		}
+		issuer := strings.TrimSpace(it.Issuer)
+		if len([]rune(issuer)) > domain.MaxCredentialIssuer {
+			return nil, pkgerrors.InvalidArgument(fmt.Sprintf(
+				"credential[%d]: issuer exceeds %d characters", i, domain.MaxCredentialIssuer,
+			))
+		}
+		if it.Year != 0 && (it.Year < domain.MinCredentialYear || it.Year > domain.MaxCredentialYear) {
+			return nil, pkgerrors.InvalidArgument(fmt.Sprintf(
+				"credential[%d]: year must be between %d and %d", i, domain.MinCredentialYear, domain.MaxCredentialYear,
+			))
+		}
+		out = append(out, domain.MasterCredentialUpsert{
+			Kind:      kind,
+			Title:     title,
+			Issuer:    issuer,
+			Year:      it.Year,
+			SortOrder: int32(i),
+		})
+	}
+	return out, nil
+}
+
 // normalizeMasterPhotoURL validates rawURL and returns a canonical URL that
 // should be persisted. The caller must use the returned value — not rawURL —
 // so that percent-encoding, double-slashes, and query strings are stripped
@@ -276,6 +327,8 @@ type UpdateMasterInput struct {
 	AvailabilityJSON           *string
 	ApplyServicesReplace       bool
 	ServicesReplace            []domain.MasterServiceUpsert
+	ApplyCredentialsReplace    bool
+	CredentialsReplace         []domain.MasterCredentialUpsert
 	ApplySpecializations       bool
 	Specializations            []string
 	PayoutLegalForm            *string
@@ -507,6 +560,16 @@ func (uc *MasterUseCase) UpdateMyProfile(ctx context.Context, userID uuid.UUID, 
 			return nil, err
 		}
 		if _, err := uc.repo.ReplaceServices(ctx, m.ID, in.ServicesReplace); err != nil {
+			return nil, err
+		}
+	}
+
+	if in.ApplyCredentialsReplace {
+		normalized, err := validateMasterCredentials(in.CredentialsReplace)
+		if err != nil {
+			return nil, err
+		}
+		if _, err := uc.repo.ReplaceCredentials(ctx, m.ID, normalized); err != nil {
 			return nil, err
 		}
 	}

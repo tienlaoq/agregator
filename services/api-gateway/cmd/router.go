@@ -50,6 +50,7 @@ func buildRouter(ctx context.Context, log zerolog.Logger, cfg Config, d *deps) (
 	venueHandler := handler.NewVenueHandler(d.Venue, d.User, d.CRM, d.Storage,
 		handler.WithSuspendNotifier(suspendMail),
 		handler.WithStaffInviteNotifier(notificationHandler),
+		handler.WithCRMTaskNotifier(notificationHandler),
 		handler.WithVenueModerationNotifier(notificationHandler),
 	)
 	if suspendMail.Enabled() {
@@ -67,6 +68,7 @@ func buildRouter(ctx context.Context, log zerolog.Logger, cfg Config, d *deps) (
 		handler.ParseWebhookSecurityConfig(cfg.PaymentWebhookSecret, cfg.PaymentWebhookIPAllowlist))
 	masterHandler := handler.NewMasterHandler(d.Master, d.Storage,
 		handler.WithMasterOwnerNotifier(notificationHandler),
+		handler.WithMasterUserClient(d.User),
 	)
 	payoutHandler := handler.NewPayoutHandler(log, d.Payment, d.Venue, d.Master)
 	analyticsHandler := handler.NewAnalyticsHandler(log, d.NATS)
@@ -320,7 +322,12 @@ func buildRouter(ctx context.Context, log zerolog.Logger, cfg Config, d *deps) (
 				r.With(ownerCabinet).Delete("/owner/venues/{venueId}/staff/{userId}", venueHandler.RemoveVenueStaff)
 				r.With(ownerCabinet).Get("/owner/venues/{venueId}/crm/tasks", venueHandler.ListVenueCRMTasks)
 				r.With(ownerCabinet).Post("/owner/venues/{venueId}/crm/tasks", venueHandler.CreateVenueCRMTask)
+				r.With(ownerCabinet).Patch("/owner/venues/{venueId}/crm/tasks/{taskId}", venueHandler.UpdateVenueCRMTask)
 				r.With(ownerCabinet).Post("/owner/venues/{venueId}/crm/tasks/{taskId}/complete", venueHandler.CompleteVenueCRMTask)
+				r.With(ownerCabinet).Post("/owner/venues/{venueId}/crm/tasks/{taskId}/reopen", venueHandler.ReopenVenueCRMTask)
+				r.With(ownerCabinet).Delete("/owner/venues/{venueId}/crm/tasks/{taskId}", venueHandler.CancelVenueCRMTask)
+				r.With(ownerCabinet).Get("/owner/venues/{venueId}/crm/guests", venueHandler.ListVenueGuests)
+				r.With(ownerCabinet).Get("/owner/venues/{venueId}/crm/guests/{userId}", venueHandler.GetVenueGuest)
 				r.With(ownerCabinet).Get("/owner/venues/{venueId}/bookings/{bookingId}/staff-notes", bookingHandler.ListBookingStaffNotes)
 				r.With(ownerCabinet).Post("/owner/venues/{venueId}/bookings/{bookingId}/staff-notes", bookingHandler.AddBookingStaffNote)
 

@@ -65,6 +65,7 @@ import {
   AlertTriangle,
   ArrowLeft,
   CheckCircle2,
+  Circle,
   Clock,
   FileEdit,
   Info,
@@ -784,6 +785,20 @@ export default function EditOwnerVenuePage() {
     draftDescOk &&
     draftVerificationOk;
 
+  // Динамический чек-лист публикации (как у профиля мастера): пункты зеленеют по
+  // мере заполнения. Показываем липким сайдбаром справа, только для черновика.
+  const showVenueChecklist = venue.status === "draft";
+  const venueChecklist = [
+    { label: "Фото — хотя бы одно", done: draftHasPhotos },
+    { label: "Цена за час по залам", done: draftHallsPriced },
+    { label: "Описание — от ~2–3 предложений", done: draftDescOk },
+    {
+      label: "Данные для модерации: юрлицо/ИП, ИНН, ОГРН, ссылка на карты",
+      done: draftVerificationOk,
+    },
+  ];
+  const venueChecklistDone = venueChecklist.filter((i) => i.done).length;
+
   const baseline = baselineSerializedRef.current;
   const isDirty = Boolean(baseline && serializeForm(form) !== baseline);
   /** Отклонённую карточку можно отправить повторно без обязательных правок в форме */
@@ -869,7 +884,14 @@ export default function EditOwnerVenuePage() {
       </div>
 
       <div className="container mx-auto px-4 py-8">
-        <div className="mx-auto max-w-4xl space-y-6">
+        <div
+          className={
+            showVenueChecklist
+              ? "mx-auto max-w-6xl lg:grid lg:grid-cols-[minmax(0,1fr)_300px] lg:items-start lg:gap-8"
+              : "mx-auto max-w-4xl"
+          }
+        >
+          <div className="min-w-0 space-y-6">
           {statusMeta.description ? (
             <p className="text-sm text-muted-foreground">{statusMeta.description}</p>
           ) : null}
@@ -885,40 +907,10 @@ export default function EditOwnerVenuePage() {
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
-                <p className="text-sm font-medium text-foreground">
-                  Рекомендуем перед отправкой:
+                <p className="text-sm text-muted-foreground">
+                  Заполните все пункты чек-листа — когда они станут зелёными,
+                  кнопка отправки разблокируется.
                 </p>
-                <ul className="list-inside list-disc space-y-1.5 text-sm text-muted-foreground">
-                  <li className={draftHasPhotos ? "text-green-700 dark:text-green-400" : ""}>
-                    Добавить фото (хотя бы одно)
-                  </li>
-                  <li
-                    className={
-                      draftHallsPriced
-                        ? "text-green-700 dark:text-green-400"
-                        : ""
-                    }
-                  >
-                    Указать цену за час по залам
-                  </li>
-                  <li
-                    className={
-                      draftDescOk ? "text-green-700 dark:text-green-400" : ""
-                    }
-                  >
-                    Описание заведения (от ~2–3 предложений)
-                  </li>
-                  <li
-                    className={
-                      draftVerificationOk
-                        ? "text-green-700 dark:text-green-400"
-                        : ""
-                    }
-                  >
-                    Данные для модерации: наименование юрлица/ИП, ИНН, ОГРН,
-                    ссылка на карточку в картах
-                  </li>
-                </ul>
                 {submitReviewError ? (
                   <p className="text-sm text-destructive" role="alert">
                     {submitReviewError}
@@ -930,7 +922,7 @@ export default function EditOwnerVenuePage() {
                   disabled={!draftReadyForReview || submitReviewMu.isPending}
                   title={
                     !draftReadyForReview && !submitReviewMu.isPending
-                      ? "Выполните все пункты списка выше."
+                      ? "Выполните все пункты чек-листа."
                       : undefined
                   }
                 >
@@ -1665,6 +1657,43 @@ export default function EditOwnerVenuePage() {
               </div>
             </div>
           </form>
+          </div>
+
+          {showVenueChecklist ? (
+            <aside className="mt-6 lg:mt-0 lg:sticky lg:top-20 lg:max-h-[calc(100vh-6rem)] lg:self-start lg:overflow-y-auto">
+              <Card className="border-border">
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-base">Чек-лист публикации</CardTitle>
+                  <CardDescription>
+                    Выполнено {venueChecklistDone} из {venueChecklist.length}.
+                    Заполните все пункты, чтобы отправить карточку на модерацию.
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  <ul className="space-y-2.5">
+                    {venueChecklist.map((item) => (
+                      <li key={item.label} className="flex items-start gap-2.5 text-sm">
+                        {item.done ? (
+                          <CheckCircle2
+                            className="mt-0.5 h-4 w-4 shrink-0 text-green-600 dark:text-green-500"
+                            aria-hidden
+                          />
+                        ) : (
+                          <Circle
+                            className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground/40"
+                            aria-hidden
+                          />
+                        )}
+                        <span className={item.done ? "text-foreground" : "text-muted-foreground"}>
+                          {item.label}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                </CardContent>
+              </Card>
+            </aside>
+          ) : null}
         </div>
       </div>
     </section>

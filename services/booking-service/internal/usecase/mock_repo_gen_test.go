@@ -3,6 +3,12 @@
 // To regenerate:
 //
 //go:generate mockery --name BookingRepository --dir ../domain --output . --outpkg usecase --filename mock_repo_gen_test.go --with-expecter
+//
+// NOTE: mockery v2.49 fails on Go 1.26 with "package database/sql/driver without
+// types" when loading the domain package (its TimeOfDay Scanner). Until a mockery
+// release that supports Go 1.26 is available, the outbox methods (SetPaymentAndStatus
+// signature change, CancelWithEvent, FetchUnsentOutbox, MarkOutboxSent) and the
+// ConfirmPayment signature change below were edited by hand following the same pattern.
 
 package usecase
 
@@ -194,15 +200,15 @@ func (_c *MockBookingRepository_SetPaymentID_Call) Return(_a0 error) *MockBookin
 	return _c
 }
 
-func (_m *MockBookingRepository) SetPaymentAndStatus(ctx context.Context, bookingID, paymentID, paymentURL, status string) error {
-	ret := _m.Called(ctx, bookingID, paymentID, paymentURL, status)
+func (_m *MockBookingRepository) SetPaymentAndStatus(ctx context.Context, bookingID, paymentID, paymentURL, status string, ev domain.OutboxEvent) error {
+	ret := _m.Called(ctx, bookingID, paymentID, paymentURL, status, ev)
 	return ret.Error(0)
 }
 
 type MockBookingRepository_SetPaymentAndStatus_Call struct{ *mock.Call }
 
-func (_e *MockBookingRepository_Expecter) SetPaymentAndStatus(ctx, bookingID, paymentID, paymentURL, status interface{}) *MockBookingRepository_SetPaymentAndStatus_Call {
-	return &MockBookingRepository_SetPaymentAndStatus_Call{Call: _e.mock.On("SetPaymentAndStatus", ctx, bookingID, paymentID, paymentURL, status)}
+func (_e *MockBookingRepository_Expecter) SetPaymentAndStatus(ctx, bookingID, paymentID, paymentURL, status, ev interface{}) *MockBookingRepository_SetPaymentAndStatus_Call {
+	return &MockBookingRepository_SetPaymentAndStatus_Call{Call: _e.mock.On("SetPaymentAndStatus", ctx, bookingID, paymentID, paymentURL, status, ev)}
 }
 
 func (_c *MockBookingRepository_SetPaymentAndStatus_Call) Return(_a0 error) *MockBookingRepository_SetPaymentAndStatus_Call {
@@ -210,11 +216,11 @@ func (_c *MockBookingRepository_SetPaymentAndStatus_Call) Return(_a0 error) *Moc
 	return _c
 }
 
-func (_m *MockBookingRepository) ConfirmPayment(ctx context.Context, bookingID, paymentID string) (*domain.Booking, bool, error) {
-	ret := _m.Called(ctx, bookingID, paymentID)
+func (_m *MockBookingRepository) ConfirmPayment(ctx context.Context, bookingID, paymentID, subject string) (*domain.Booking, bool, error) {
+	ret := _m.Called(ctx, bookingID, paymentID, subject)
 	var r0 *domain.Booking
-	if rf, ok := ret.Get(0).(func(context.Context, string, string) *domain.Booking); ok {
-		r0 = rf(ctx, bookingID, paymentID)
+	if rf, ok := ret.Get(0).(func(context.Context, string, string, string) *domain.Booking); ok {
+		r0 = rf(ctx, bookingID, paymentID, subject)
 	} else {
 		if ret.Get(0) != nil {
 			r0 = ret.Get(0).(*domain.Booking)
@@ -225,8 +231,8 @@ func (_m *MockBookingRepository) ConfirmPayment(ctx context.Context, bookingID, 
 
 type MockBookingRepository_ConfirmPayment_Call struct{ *mock.Call }
 
-func (_e *MockBookingRepository_Expecter) ConfirmPayment(ctx, bookingID, paymentID interface{}) *MockBookingRepository_ConfirmPayment_Call {
-	return &MockBookingRepository_ConfirmPayment_Call{Call: _e.mock.On("ConfirmPayment", ctx, bookingID, paymentID)}
+func (_e *MockBookingRepository_Expecter) ConfirmPayment(ctx, bookingID, paymentID, subject interface{}) *MockBookingRepository_ConfirmPayment_Call {
+	return &MockBookingRepository_ConfirmPayment_Call{Call: _e.mock.On("ConfirmPayment", ctx, bookingID, paymentID, subject)}
 }
 
 func (_c *MockBookingRepository_ConfirmPayment_Call) Return(_a0 *domain.Booking, _a1 bool, _a2 error) *MockBookingRepository_ConfirmPayment_Call {
@@ -311,6 +317,69 @@ func (_e *MockBookingRepository_Expecter) FindUnpublishedCompleted(ctx, limit in
 
 func (_c *MockBookingRepository_FindUnpublishedCompleted_Call) Return(_a0 []domain.BookingCompletedRef, _a1 error) *MockBookingRepository_FindUnpublishedCompleted_Call {
 	_c.Call.Return(_a0, _a1)
+	return _c
+}
+
+func (_m *MockBookingRepository) CancelWithEvent(ctx context.Context, id string, ev domain.OutboxEvent) error {
+	ret := _m.Called(ctx, id, ev)
+	return ret.Error(0)
+}
+
+type MockBookingRepository_CancelWithEvent_Call struct{ *mock.Call }
+
+func (_e *MockBookingRepository_Expecter) CancelWithEvent(ctx, id, ev interface{}) *MockBookingRepository_CancelWithEvent_Call {
+	return &MockBookingRepository_CancelWithEvent_Call{Call: _e.mock.On("CancelWithEvent", ctx, id, ev)}
+}
+
+func (_c *MockBookingRepository_CancelWithEvent_Call) Return(_a0 error) *MockBookingRepository_CancelWithEvent_Call {
+	_c.Call.Return(_a0)
+	return _c
+}
+
+func (_c *MockBookingRepository_CancelWithEvent_Call) Run(fn func(ctx context.Context, id string, ev domain.OutboxEvent)) *MockBookingRepository_CancelWithEvent_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		fn(args[0].(context.Context), args[1].(string), args[2].(domain.OutboxEvent))
+	})
+	return _c
+}
+
+func (_m *MockBookingRepository) FetchUnsentOutbox(ctx context.Context, limit int) ([]domain.OutboxEvent, error) {
+	ret := _m.Called(ctx, limit)
+	var r0 []domain.OutboxEvent
+	if rf, ok := ret.Get(0).(func(context.Context, int) []domain.OutboxEvent); ok {
+		r0 = rf(ctx, limit)
+	} else {
+		if ret.Get(0) != nil {
+			r0 = ret.Get(0).([]domain.OutboxEvent)
+		}
+	}
+	return r0, ret.Error(1)
+}
+
+type MockBookingRepository_FetchUnsentOutbox_Call struct{ *mock.Call }
+
+func (_e *MockBookingRepository_Expecter) FetchUnsentOutbox(ctx, limit interface{}) *MockBookingRepository_FetchUnsentOutbox_Call {
+	return &MockBookingRepository_FetchUnsentOutbox_Call{Call: _e.mock.On("FetchUnsentOutbox", ctx, limit)}
+}
+
+func (_c *MockBookingRepository_FetchUnsentOutbox_Call) Return(_a0 []domain.OutboxEvent, _a1 error) *MockBookingRepository_FetchUnsentOutbox_Call {
+	_c.Call.Return(_a0, _a1)
+	return _c
+}
+
+func (_m *MockBookingRepository) MarkOutboxSent(ctx context.Context, ids []int64) error {
+	ret := _m.Called(ctx, ids)
+	return ret.Error(0)
+}
+
+type MockBookingRepository_MarkOutboxSent_Call struct{ *mock.Call }
+
+func (_e *MockBookingRepository_Expecter) MarkOutboxSent(ctx, ids interface{}) *MockBookingRepository_MarkOutboxSent_Call {
+	return &MockBookingRepository_MarkOutboxSent_Call{Call: _e.mock.On("MarkOutboxSent", ctx, ids)}
+}
+
+func (_c *MockBookingRepository_MarkOutboxSent_Call) Return(_a0 error) *MockBookingRepository_MarkOutboxSent_Call {
+	_c.Call.Return(_a0)
 	return _c
 }
 

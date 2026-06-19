@@ -18,18 +18,32 @@ type BookingRepository interface {
 	ListByVenue(ctx context.Context, venueID, status, date, cursor string, limit int) ([]*Booking, int, string, error)
 	UpdateStatus(ctx context.Context, id, status string) error
 	SetPaymentID(ctx context.Context, bookingID, paymentID string) error
-	// SetPaymentAndStatus атомарно устанавливает payment_id, payment_url и status за один UPDATE.
+	// SetPaymentAndStatus атомарно устанавливает payment_id, payment_url и status за один UPDATE
+	// и в ТОЙ ЖЕ транзакции пишет событие ev в outbox (booking.created).
 	// Заменяет последовательные вызовы SetPaymentID + UpdateStatus в CreateBooking,
 	// устраняя окно где бронь имеет payment_id без обновлённого статуса или наоборот.
 	// payment_url персистируется в БД чтобы GetBooking возвращал его после перезапуска сервиса.
-	SetPaymentAndStatus(ctx context.Context, bookingID, paymentID, paymentURL, status string) error
+	// См. TECH_DEBT [BOOKING-PUBLISH-LOSS].
+	SetPaymentAndStatus(ctx context.Context, bookingID, paymentID, paymentURL, status string, ev OutboxEvent) error
+	// CancelWithEvent переводит бронь в status='cancelled' и в той же транзакции пишет
+	// событие ev в outbox (booking.cancelled). Гарантии при отмене (CanCancel/дедлайн)
+	// проверяются в usecase; здесь — безусловный UPDATE по id + INSERT в outbox.
+	CancelWithEvent(ctx context.Context, id string, ev OutboxEvent) error
 	// ConfirmPayment атомарно переводит бронь payment_pending → confirmed и
 	// записывает payment_id (если ещё не записан) за один UPDATE … RETURNING.
+	// При успешном переходе в ТОЙ ЖЕ транзакции пишет событие в outbox с subject.
 	// confirmed=false означает что строка не была обновлена — бронь уже находится
 	// в терминальном статусе (confirmed/completed/cancelled) или не существует;
-	// в этом случае publish делать не нужно.
+	// в этом случае событие не пишется.
 	// Возвращает ErrPaymentMismatch если payment_id уже записан и не совпадает с переданным.
-	ConfirmPayment(ctx context.Context, bookingID, paymentID string) (b *Booking, confirmed bool, err error)
+	ConfirmPayment(ctx context.Context, bookingID, paymentID, subject string) (b *Booking, confirmed bool, err error)
+
+	// FetchUnsentOutbox возвращает неотправленные события (sent_at IS NULL) в порядке id (FIFO).
+	// limit ограничивает батч. Используется поллером ProcessOutbox.
+	FetchUnsentOutbox(ctx context.Context, limit int) ([]OutboxEvent, error)
+	// MarkOutboxSent проставляет sent_at = now() для указанных id. Вызывается ПОСЛЕ
+	// успешной публикации (publish раньше mark = at-least-once). Пустой срез — no-op.
+	MarkOutboxSent(ctx context.Context, ids []int64) error
 	HasCompleted(ctx context.Context, userID, venueID string) (bool, error)
 	// AutoCompleteVisitEnded переводит confirmed → completed если конец слота уже прошёл.
 	// completed_event_sent_at намеренно остаётся NULL — метка выставляется после успешного publish.

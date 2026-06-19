@@ -192,6 +192,60 @@ func (h *OAuthHandler) setStateCookie(w http.ResponseWriter, cookieName, state s
 	})
 }
 
+// oauthNextCookie carries a validated post-login redirect path across the
+// provider round-trip. The OAuth provider only echoes back the opaque "state"
+// value, so the desired destination cannot ride along in the query string; a
+// short-lived HttpOnly cookie keeps it server-side and tamper-resistant until
+// the callback consumes it.
+const oauthNextCookie = "oauth_next"
+
+// setNextCookie persists a post-login redirect path for the duration of the
+// OAuth flow. An empty next — the common case, or a value rejected by
+// safeOAuthNext — writes nothing, leaving the default "/" destination in place.
+func (h *OAuthHandler) setNextCookie(w http.ResponseWriter, next string) {
+	if next == "" {
+		return
+	}
+	http.SetCookie(w, &http.Cookie{
+		Name:     oauthNextCookie,
+		Value:    next,
+		Path:     "/",
+		MaxAge:   600,
+		HttpOnly: true,
+		Secure:   h.secureCookie,
+		SameSite: http.SameSiteLaxMode,
+	})
+}
+
+// clearNextCookie expires the redirect cookie so a completed or failed flow
+// never leaks its destination into a later, unrelated request.
+func (h *OAuthHandler) clearNextCookie(w http.ResponseWriter) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     oauthNextCookie,
+		Value:    "",
+		Path:     "/",
+		MaxAge:   -1,
+		HttpOnly: true,
+		Secure:   h.secureCookie,
+		SameSite: http.SameSiteLaxMode,
+	})
+}
+
+// safeOAuthNext validates a post-login redirect target to prevent an open
+// redirect. Only a same-site absolute path is accepted: it must begin with a
+// single "/" and must not begin with "//" or "/\", both of which a browser
+// resolves to an external origin. Any other input yields "" — the flow then
+// falls back to the default destination.
+func safeOAuthNext(raw string) string {
+	if raw == "" || raw[0] != '/' {
+		return ""
+	}
+	if len(raw) > 1 && (raw[1] == '/' || raw[1] == '\\') {
+		return ""
+	}
+	return raw
+}
+
 // setPKCECookie stores the PKCE code_verifier in a separate HttpOnly cookie.
 // It is intentionally distinct from oauth_state so that leaking one does not
 // compromise the other (state via Referer ≠ verifier needed at token exchange).
@@ -262,6 +316,7 @@ func (h *OAuthHandler) VKRedirect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.setStateCookie(w, "vk_oauth_state", state)
+	h.setNextCookie(w, safeOAuthNext(r.URL.Query().Get("next")))
 
 	// PKCE S256: verifier and state are independent secrets.
 	// Even if state leaks via Referer the verifier remains unknown to the attacker.
@@ -432,6 +487,7 @@ func (h *OAuthHandler) YandexRedirect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.setStateCookie(w, "yandex_oauth_state", state)
+	h.setNextCookie(w, safeOAuthNext(r.URL.Query().Get("next")))
 	http.Redirect(w, r, h.yandex.AuthCodeURL(state), http.StatusTemporaryRedirect)
 }
 
@@ -578,6 +634,16 @@ func (h *OAuthHandler) oauthLogin(w http.ResponseWriter, r *http.Request, provid
 	//
 	// url.Parse cannot fail here — h.frontURL was validated at construction.
 	callbackU, _ := url.Parse(h.frontURL + "/auth/callback")
+	// A post-login redirect target, if one survived the provider round-trip,
+	// rides in the query string — revalidated here, never trusting the cookie
+	// value blindly. The access token stays in the fragment; the two do not
+	// collide.
+	if c, err := r.Cookie(oauthNextCookie); err == nil {
+		if next := safeOAuthNext(c.Value); next != "" {
+			callbackU.RawQuery = url.Values{"next": {next}}.Encode()
+		}
+		h.clearNextCookie(w)
+	}
 	frag := url.Values{}
 	frag.Set("access_token", resp.AccessToken)
 	callbackU.Fragment = frag.Encode()
@@ -596,6 +662,10 @@ func (h *OAuthHandler) redirectError(w http.ResponseWriter, r *http.Request, cod
 		ev = ev.Err(internalErr)
 	}
 	ev.Msg("oauth callback error")
+
+	// Drop any pending redirect target — a failed flow must not carry it into
+	// the next attempt.
+	h.clearNextCookie(w)
 
 	// Same url.Values pattern as oauthLogin: avoids manual QueryEscape.
 	// url.Parse cannot fail here — h.frontURL was validated at construction.
