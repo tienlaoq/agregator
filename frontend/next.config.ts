@@ -102,9 +102,30 @@ if (isProd && process.env.NEXT_ENABLE_HSTS === "true") {
   });
 }
 
+/**
+ * Базовый адрес gateway для server-side прокси rewrites.
+ * В контейнере фронта — внутренний хост compose (INTERNAL_API_URL),
+ * в dev/браузере — NEXT_PUBLIC_API_URL (по умолчанию localhost:8080).
+ */
+const gatewayOrigin =
+  process.env.INTERNAL_API_URL ||
+  process.env.NEXT_PUBLIC_API_URL ||
+  "http://localhost:8080";
+
 const nextConfig: NextConfig = {
   output: "standalone",
   poweredByHeader: false,
+  async rewrites() {
+    // Медиа отдаётся по относительному пути /api/v1/uploads/* (см. venueMediaUrl
+    // в src/lib/api.ts). Проксируем его на gateway, чтобы путь одинаково
+    // работал и в браузере, и при server-side fetch оптимизатора next/image.
+    return [
+      {
+        source: "/api/v1/uploads/:path*",
+        destination: `${gatewayOrigin}/api/v1/uploads/:path*`,
+      },
+    ];
+  },
   async headers() {
     return [
       {
