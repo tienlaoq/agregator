@@ -261,6 +261,10 @@ func buildRouter(ctx context.Context, log zerolog.Logger, cfg Config, d *deps) (
 			// Reviews (public read)
 			r.Get("/venues/{venueId}/reviews", reviewHandler.ListByVenue)
 			r.Get("/masters/{masterId}/reviews", reviewHandler.ListByMaster)
+			r.Get("/masters/{masterId}/rating", reviewHandler.MasterRating)
+
+			// СБП bank directory for the payout bank picker (stub — see sbp.go).
+			r.Get("/sbp/banks", handler.ListSBPBanks)
 			r.With(masterPublicRL).Get("/masters", masterHandler.ListPublic)
 			r.With(masterPublicRL).Get("/masters/{slug}", masterHandler.GetPublic)
 

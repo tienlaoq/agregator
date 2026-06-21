@@ -564,6 +564,25 @@ func (h *MasterHandler) SubmitForReview(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, masterProtoToJSON(resp.GetMaster()))
 }
 
+// resolveClientName returns the booking client's display name, or "" when it
+// cannot be resolved (no user client wired, lookup failed, or empty id). The
+// caller passes a per-request cache so a repeat client costs one lookup.
+func (h *MasterHandler) resolveClientName(r *http.Request, userID string, cache map[string]string) string {
+	id := strings.TrimSpace(userID)
+	if id == "" || h.userClient == nil {
+		return ""
+	}
+	if name, ok := cache[id]; ok {
+		return name
+	}
+	name := ""
+	if u, err := h.userClient.GetUser(r.Context(), &userv1.GetUserRequest{Id: id}); err == nil {
+		name = strings.TrimSpace(u.GetName())
+	}
+	cache[id] = name
+	return name
+}
+
 // ListMyBookings GET /api/v1/owner/master/bookings
 func (h *MasterHandler) ListMyBookings(w http.ResponseWriter, r *http.Request) {
 	uid := middleware.UserIDFromCtx(r.Context())
@@ -579,12 +598,14 @@ func (h *MasterHandler) ListMyBookings(w http.ResponseWriter, r *http.Request) {
 		grpcErrorToHTTP(w, err)
 		return
 	}
+	nameCache := make(map[string]string, len(resp.GetBookings()))
 	out := make([]map[string]any, 0, len(resp.GetBookings()))
 	for _, b := range resp.GetBookings() {
 		out = append(out, map[string]any{
 			"id":                b.GetId(),
 			"master_id":         b.GetMasterId(),
 			"client_user_id":    b.GetClientUserId(),
+			"client_name":       h.resolveClientName(r, b.GetClientUserId(), nameCache),
 			"master_service_id": b.GetMasterServiceId(),
 			"date":              b.GetDate(),
 			"time_from":         b.GetTimeFrom(),

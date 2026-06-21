@@ -276,6 +276,26 @@ func (h *ReviewHandler) CreateForMaster(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusCreated, reviewToJSON(resp, ""))
 }
 
+// MasterRating GET /api/v1/masters/{masterId}/rating
+// Returns the cached aggregate (average rating + review count) maintained by
+// review-service in O(1), so callers don't have to page through all reviews to
+// compute it themselves.
+func (h *ReviewHandler) MasterRating(w http.ResponseWriter, r *http.Request) {
+	masterID := chi.URLParam(r, "masterId")
+	resp, err := h.client.GetMasterRating(r.Context(), &reviewv1.GetMasterRatingRequest{
+		MasterId: masterID,
+	})
+	if err != nil {
+		grpcErrorToHTTP(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"master_id":    resp.GetMasterId(),
+		"avg_rating":   resp.GetAvgRating(),
+		"review_count": resp.GetReviewCount(),
+	})
+}
+
 func (h *ReviewHandler) ListByMaster(w http.ResponseWriter, r *http.Request) {
 	masterID := chi.URLParam(r, "masterId")
 	page, ok := queryInt(w, r, "page", 0, 0, 10000)
