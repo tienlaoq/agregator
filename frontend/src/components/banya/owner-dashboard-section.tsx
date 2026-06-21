@@ -4,6 +4,7 @@ import Link from "next/link";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { MetricCard } from "@/components/banya/dashboard-metric-card";
 import {
   Table,
   TableBody,
@@ -31,7 +32,7 @@ export type OwnerDashboardStats = {
   avgRatingLabel: string;
 };
 
-const statusConfig: Record<
+export const statusConfig: Record<
   string,
   { label: string; className: string }
 > = {
@@ -98,7 +99,7 @@ function venueModerationBadge(venue: Venue) {
   );
 }
 
-function isoTodayLocal(): string {
+export function isoTodayLocal(): string {
   const d = new Date();
   const y = d.getFullYear();
   const m = String(d.getMonth() + 1).padStart(2, "0");
@@ -111,7 +112,7 @@ function isoYearMonthLocal(d: Date): string {
 }
 
 /** Для выручки и «бронирований сегодня» считаем только оплаченные визиты. */
-function isBookingPaidForMetrics(b: Booking): boolean {
+export function isBookingPaidForMetrics(b: { status: string }): boolean {
   return b.status === "confirmed" || b.status === "completed";
 }
 
@@ -170,7 +171,7 @@ export function bookingsTodayByVenue(
   return counts;
 }
 
-function formatBookingDate(dateStr: string): string {
+export function formatBookingDate(dateStr: string): string {
   const parts = dateStr.split("-").map(Number);
   const y = parts[0];
   const m = parts[1];
@@ -268,19 +269,12 @@ export function OwnerDashboardSection({
 
         <div className="mb-8 grid gap-4 sm:grid-cols-3">
           {statItems.map((stat) => (
-            <Card key={stat.title} className="border-border">
-              <CardContent className="flex items-center gap-4 p-6">
-                <div className="flex h-12 w-12 items-center justify-center rounded-lg bg-primary/10">
-                  <stat.icon className="h-6 w-6 text-primary" />
-                </div>
-                <div>
-                  <p className="text-sm text-muted-foreground">{stat.title}</p>
-                  <p className="text-2xl font-bold text-card-foreground">
-                    {stat.value}
-                  </p>
-                </div>
-              </CardContent>
-            </Card>
+            <MetricCard
+              key={stat.title}
+              title={stat.title}
+              value={stat.value}
+              icon={stat.icon}
+            />
           ))}
         </div>
 

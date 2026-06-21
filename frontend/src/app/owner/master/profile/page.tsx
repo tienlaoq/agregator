@@ -932,7 +932,7 @@ export default function MasterProfilePage() {
                   <Input value={city} onChange={(e) => setCity(e.target.value)} />
                 </div>
               </div>
-              <div className="space-y-2">
+              <div id="payouts" className="space-y-2 scroll-mt-24">
                 <Label>Форма получения выплат</Label>
                 <p className="text-xs text-muted-foreground">
                   Оплата услуг проходит через платформу; выплаты вам переводятся с учётом вашего

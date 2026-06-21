@@ -671,6 +671,8 @@ export interface MasterBooking {
   id: string;
   master_id: string;
   client_user_id: string;
+  /** Resolved client display name; "" when unavailable (set by api-gateway). */
+  client_name?: string;
   master_service_id?: string;
   date: string;
   time_from: string;
@@ -681,6 +683,18 @@ export interface MasterBooking {
   payment_url?: string;
   total_price?: number;
   created_at: string;
+}
+
+export interface MasterRating {
+  master_id: string;
+  avg_rating: number;
+  review_count: number;
+}
+
+/** СБП member bank for the payout bank picker (id = NSPK member id, name = label). */
+export interface SbpBank {
+  id: string;
+  name: string;
 }
 
 export const MASTER_PROFILE_STATUS_LABELS: Record<

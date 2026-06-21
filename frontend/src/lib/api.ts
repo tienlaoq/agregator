@@ -18,6 +18,8 @@ import type {
   Venue,
   MasterProfile,
   MasterBooking,
+  MasterRating,
+  SbpBank,
   ChatThread,
   ChatMessage,
   SupportContactRequest,
@@ -447,6 +449,17 @@ export async function getMasterReviews(masterId: string): Promise<Review[]> {
   return data.reviews ?? [];
 }
 
+/** Cached aggregate (avg rating + review count) from review-service — O(1), no paging. */
+export async function getMasterRating(masterId: string): Promise<MasterRating> {
+  return fetchAPI<MasterRating>(`/api/v1/masters/${masterId}/rating`);
+}
+
+/** СБП member-bank directory for the payout bank picker (stub until provider chosen). */
+export async function getSbpBanks(): Promise<SbpBank[]> {
+  const data = await fetchAPI<{ banks: SbpBank[] }>(`/api/v1/sbp/banks`);
+  return data.banks ?? [];
+}
+
 export async function createMasterReview(
   masterId: string,
   data: CreateReviewRequest,
@@ -803,6 +816,60 @@ export async function listVenuePayouts(
   const qs = search.toString();
   const data = await fetchAPI<{ payouts: PartnerPayout[] }>(
     `/api/v1/owner/venues/${encodeURIComponent(venueId)}/payouts${qs ? `?${qs}` : ""}`,
+  );
+  return data.payouts ?? [];
+}
+
+// ── Master payout cabinet ────────────────────────────────────────────────────
+// Mirror of the venue payout API, but the partner is the caller's own master
+// profile (resolved from auth) — no id path param. Same response shapes.
+
+export async function getMasterPayoutMethod(): Promise<PayoutMethod | null> {
+  const data = await fetchAPI<{ payout_method: PayoutMethod | null }>(
+    `/api/v1/owner/master/payout-method`,
+  );
+  return data.payout_method ?? null;
+}
+
+export async function setMasterPayoutMethod(
+  input: SetPayoutMethodInput,
+): Promise<PayoutMethod> {
+  const data = await fetchAPI<{ payout_method: PayoutMethod }>(
+    `/api/v1/owner/master/payout-method`,
+    { method: "PUT", body: JSON.stringify(input) },
+  );
+  return data.payout_method;
+}
+
+export async function getMasterBalance(): Promise<PartnerBalance> {
+  const data = await fetchAPI<{ balance: PartnerBalance }>(
+    `/api/v1/owner/master/balance`,
+  );
+  return data.balance;
+}
+
+export async function listMasterLedger(
+  params?: { limit?: number; offset?: number },
+): Promise<PartnerLedgerEntry[]> {
+  const search = new URLSearchParams();
+  if (params?.limit) search.set("limit", String(params.limit));
+  if (params?.offset) search.set("offset", String(params.offset));
+  const qs = search.toString();
+  const data = await fetchAPI<{ entries: PartnerLedgerEntry[] }>(
+    `/api/v1/owner/master/ledger${qs ? `?${qs}` : ""}`,
+  );
+  return data.entries ?? [];
+}
+
+export async function listMasterPayouts(
+  params?: { limit?: number; offset?: number },
+): Promise<PartnerPayout[]> {
+  const search = new URLSearchParams();
+  if (params?.limit) search.set("limit", String(params.limit));
+  if (params?.offset) search.set("offset", String(params.offset));
+  const qs = search.toString();
+  const data = await fetchAPI<{ payouts: PartnerPayout[] }>(
+    `/api/v1/owner/master/payouts${qs ? `?${qs}` : ""}`,
   );
   return data.payouts ?? [];
 }

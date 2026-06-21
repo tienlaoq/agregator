@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useMemo } from "react";
+import { useEffect } from "react";
 import Link from "next/link";
-import { useParams } from "next/navigation";
+import { useRouter } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useForm, Controller } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -29,15 +29,14 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { redirectToLogin } from "@/lib/auth-redirect";
 import {
   formatApiErrorMessage,
-  getOwnerVenues,
-  getVenueBalance,
-  getVenuePayoutMethod,
-  listVenueLedger,
-  listVenuePayouts,
-  setVenuePayoutMethod,
+  getMyMasterProfile,
+  getMasterBalance,
+  getMasterPayoutMethod,
+  listMasterLedger,
+  listMasterPayouts,
+  setMasterPayoutMethod,
 } from "@/lib/api";
 import { useAuthStore } from "@/store/auth";
 import { SbpBankSelect } from "@/components/banya/sbp-bank-select";
@@ -90,7 +89,7 @@ const bankAccountSchema = z.object({
     .transform((s) => s.replace(/\D/g, ""))
     .refine(
       (s) => s.length === 10 || s.length === 12,
-      "ИНН должен содержать 10 цифр (юрлицо) или 12 (ИП)",
+      "ИНН должен содержать 10 цифр (юрлицо) или 12 (ИП / физлицо)",
     ),
   recipient_kpp: z
     .string()
@@ -121,55 +120,52 @@ const PAYOUT_STATUS_BADGE: Record<string, "default" | "secondary" | "destructive
   failed: "destructive",
 };
 
-export default function VenueFinancePage() {
-  const params = useParams<{ venueId: string }>();
-  const venueId = params.venueId;
-  const { token, hydrated } = useAuthStore();
+export default function MasterFinancePage() {
+  const router = useRouter();
+  const { token, user, hydrated } = useAuthStore();
   const queryClient = useQueryClient();
 
   useEffect(() => {
-    if (hydrated && !token) redirectToLogin();
-  }, [hydrated, token]);
+    if (hydrated && (!token || user?.role !== "master")) {
+      router.push("/auth/login");
+    }
+  }, [hydrated, token, user, router]);
 
-  const enabled = !!token && !!venueId;
+  const enabled = !!token && user?.role === "master";
 
-  const { data: venues } = useQuery({
-    queryKey: ["owner-venues"],
-    queryFn: getOwnerVenues,
+  const { data: profile } = useQuery({
+    queryKey: ["my-master-profile"],
+    queryFn: getMyMasterProfile,
     enabled,
+    retry: false,
   });
-  const venue = useMemo(
-    () => venues?.find((v) => v.id === venueId),
-    [venues, venueId],
-  );
 
   const balanceQ = useQuery({
-    queryKey: ["venue-balance", venueId],
-    queryFn: () => getVenueBalance(venueId),
+    queryKey: ["master-balance"],
+    queryFn: getMasterBalance,
     enabled,
   });
   const methodQ = useQuery({
-    queryKey: ["venue-payout-method", venueId],
-    queryFn: () => getVenuePayoutMethod(venueId),
+    queryKey: ["master-payout-method"],
+    queryFn: getMasterPayoutMethod,
     enabled,
   });
   const payoutsQ = useQuery({
-    queryKey: ["venue-payouts", venueId],
-    queryFn: () => listVenuePayouts(venueId, { limit: 50 }),
+    queryKey: ["master-payouts"],
+    queryFn: () => listMasterPayouts({ limit: 50 }),
     enabled,
   });
   const ledgerQ = useQuery({
-    queryKey: ["venue-ledger", venueId],
-    queryFn: () => listVenueLedger(venueId, { limit: 50 }),
+    queryKey: ["master-ledger"],
+    queryFn: () => listMasterLedger({ limit: 50 }),
     enabled,
   });
 
   const saveMethodMu = useMutation({
-    mutationFn: (input: SetPayoutMethodInput) =>
-      setVenuePayoutMethod(venueId, input),
+    mutationFn: (input: SetPayoutMethodInput) => setMasterPayoutMethod(input),
     onSuccess: () => {
       toast.success("Реквизиты сохранены. Выплаты будут отправляться автоматически.");
-      queryClient.invalidateQueries({ queryKey: ["venue-payout-method", venueId] });
+      queryClient.invalidateQueries({ queryKey: ["master-payout-method"] });
     },
     onError: (e) => {
       toast.error(formatApiErrorMessage(e, "Не удалось сохранить реквизиты"));
@@ -192,23 +188,23 @@ export default function VenueFinancePage() {
     defaultValues: { sbp_phone: "", sbp_bank_id: "" },
   });
 
-  // Префилл из данных верификации заведения: юр. название и ИНН владелец уже
-  // указывал при создании карточки (их сверяла модерация) — не заставляем
-  // вводить второй раз. Только пока форма не тронута, чтобы не затирать ввод.
+  // Префилл из реквизитов профиля: получателя и ИНН мастер уже указывал в
+  // разделе «Реквизиты для выплат» профиля — не заставляем вводить второй раз.
+  // Только пока форма не тронута, чтобы не затирать ввод.
   const { reset: resetBankForm, getValues: getBankValues, formState: bankFormState } = bankForm;
   useEffect(() => {
-    if (!venue || bankFormState.isDirty) return;
-    const name = venue.legal_entity_name?.trim() ?? "";
-    const inn = venue.inn?.replace(/\D/g, "") ?? "";
+    if (!profile || bankFormState.isDirty) return;
+    const name = profile.payout_legal_name?.trim() ?? "";
+    const inn = profile.payout_inn?.replace(/\D/g, "") ?? "";
     if (!name && !inn) return;
     resetBankForm({
       ...getBankValues(),
       recipient_name: name,
       recipient_inn: inn,
     });
-  }, [venue, bankFormState.isDirty, resetBankForm, getBankValues]);
+  }, [profile, bankFormState.isDirty, resetBankForm, getBankValues]);
 
-  if (!hydrated || !token) return null;
+  if (!hydrated || !token || user?.role !== "master") return null;
 
   const method = methodQ.data;
   const balance = balanceQ.data;
@@ -217,14 +213,14 @@ export default function VenueFinancePage() {
     <div className="container mx-auto max-w-5xl px-4 py-8">
       <div className="mb-6">
         <Button variant="ghost" size="sm" className="mb-2 gap-1" asChild>
-          <Link href="/owner/venues">
+          <Link href="/owner/master">
             <ArrowLeft className="h-4 w-4" />
-            Мои заведения
+            Кабинет мастера
           </Link>
         </Button>
         <h1 className="text-3xl font-bold">Финансы</h1>
-        {venue ? (
-          <p className="text-muted-foreground">{venue.name}</p>
+        {profile ? (
+          <p className="text-muted-foreground">{profile.display_name}</p>
         ) : null}
       </div>
 
@@ -289,7 +285,7 @@ export default function VenueFinancePage() {
           <CardTitle>Реквизиты для выплат</CardTitle>
           <CardDescription>
             Выплаты отправляются автоматически, когда доступная сумма достигает
-            100 ₽. Деньги за бронь становятся доступны после визита гостя.
+            100 ₽. Деньги за визит становятся доступны после его завершения.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
@@ -349,7 +345,7 @@ export default function VenueFinancePage() {
                   <Label htmlFor="recipient_name">Получатель</Label>
                   <Input
                     id="recipient_name"
-                    placeholder="ООО «Жар-птица» или ИП Иванов И. И."
+                    placeholder="ИП Иванов И. И. или Иванов Иван Иванович"
                     {...bankForm.register("recipient_name")}
                   />
                   {bankForm.formState.errors.recipient_name ? (
@@ -506,8 +502,8 @@ export default function VenueFinancePage() {
                 <Skeleton className="h-24 w-full" />
               ) : (payoutsQ.data?.length ?? 0) === 0 ? (
                 <p className="py-6 text-center text-sm text-muted-foreground">
-                  Выплат пока не было. Они появятся после первых оплаченных
-                  бронирований.
+                  Выплат пока не было. Они появятся после первых завершённых
+                  визитов.
                 </p>
               ) : (
                 <Table>
@@ -556,7 +552,7 @@ export default function VenueFinancePage() {
               ) : (ledgerQ.data?.length ?? 0) === 0 ? (
                 <p className="py-6 text-center text-sm text-muted-foreground">
                   Начислений пока нет. Они появляются после успешной оплаты
-                  бронирования.
+                  визита.
                 </p>
               ) : (
                 <Table>
