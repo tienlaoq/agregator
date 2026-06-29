@@ -28,3 +28,8 @@ tmp/
 *.cursor
 .vercel
 .env*
+
+# Archives and stray build artifacts (do NOT use a bare "cmd" — it would
+# ignore the legitimate services/*/cmd/ source dirs; anchor to repo root).
+*.zip
+/cmd
