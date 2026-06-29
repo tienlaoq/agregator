@@ -51,7 +51,7 @@ type Payment struct {
 	CounterpartyNetKopecks int64
 	CounterpartyType       string // "venue" | "master"
 	CounterpartyID         string
-	ProviderName           string // e.g. "yookassa", "tbank"
+	ProviderName           string // e.g. "mock", "tbank"
 	// ServiceAt is the wall-clock moment the booked service begins.  Used to
 	// compute the accrual's available_at (= ServiceAt + payout hold).  Zero
 	// value means "no service date" — accrual falls back to created_at + hold.
@@ -80,9 +80,9 @@ type WebhookEvent struct {
 	// capture call before funds are moved.  When true the usecase must call
 	// provider.Capture(ctx, ProviderPaymentID, CaptureKey) before returning.
 	//
-	// Example: ЮKassa split payments use capture=false; the webhook sends
-	// "waiting_for_capture" which the provider translates into this flag.
-	// A future Tinkoff provider would set this flag after its Init step.
+	// Example: a two-phase gateway uses capture=false and sends a
+	// "waiting_for_capture" notification which the provider translates into this
+	// flag (e.g. a Tinkoff provider would set it after its Init step).
 	RequiresCapture bool
 
 	// CaptureKey is the idempotency key the usecase must pass to Capture.

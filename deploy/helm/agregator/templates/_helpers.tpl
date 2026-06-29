@@ -12,3 +12,18 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 app.kubernetes.io/managed-by: {{ .Release.Service }}
 helm.sh/chart: {{ .Chart.Name }}-{{ .Chart.Version | replace "+" "_" }}
 {{- end -}}
+
+{{- /* Emit a probe action (grpc | http | tcp) from a dict {type, port, path}. */ -}}
+{{- define "agregator.probeAction" -}}
+{{- if eq .type "grpc" -}}
+grpc:
+  port: {{ .port }}
+{{- else if eq .type "http" -}}
+httpGet:
+  path: {{ .path }}
+  port: {{ .port }}
+{{- else if eq .type "tcp" -}}
+tcpSocket:
+  port: {{ .port }}
+{{- end -}}
+{{- end -}}

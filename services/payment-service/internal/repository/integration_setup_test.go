@@ -144,7 +144,7 @@ func seedCardMethod(ctx context.Context, t *testing.T, pt domain.PartnerType, pa
 		PartnerType:   pt,
 		PartnerID:     partnerID,
 		Kind:          domain.PayoutMethodCard,
-		ProviderName:  "yookassa",
+		ProviderName:  "mock",
 		CardLast4:     "4242",
 		CardBrand:     "visa",
 		ProviderToken: "tok_" + uuid.NewString(),

@@ -25,7 +25,7 @@ func newTestPayout(partner, methodID string) *domain.Payout {
 		MethodID:           methodID,
 		MethodKindSnapshot: domain.PayoutMethodCard,
 		MethodDisplay:      "•••• 4242",
-		ProviderName:       "yookassa",
+		ProviderName:       "mock",
 		IdempotencyKey:     "idem_" + uuid.NewString(),
 	}
 }

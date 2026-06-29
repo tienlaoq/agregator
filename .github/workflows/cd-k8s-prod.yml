@@ -30,6 +30,10 @@ jobs:
           - payment-service
           - master-service
           - chat-service
+          - crm-service
+          - notification-service
+          - analytics-service
+          - migrator
           - api-gateway
     steps:
       - name: Checkout
@@ -103,9 +107,43 @@ jobs:
             ${{ env.REGISTRY }}/${{ env.REPOSITORY_PREFIX }}/frontend:${{ env.IMAGE_TAG }}
             ${{ env.REGISTRY }}/${{ env.REPOSITORY_PREFIX }}/frontend:latest
 
+  build-and-push-backup:
+    name: Build and push pg-backup
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Yandex Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.YCR_USERNAME }}
+          password: ${{ secrets.YCR_PASSWORD }}
+
+      - name: Build and push pg-backup
+        uses: docker/build-push-action@v6
+        with:
+          context: deploy/backup
+          file: deploy/backup/Dockerfile
+          push: true
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.REPOSITORY_PREFIX }}/pg-backup:${{ env.IMAGE_TAG }}
+            ${{ env.REGISTRY }}/${{ env.REPOSITORY_PREFIX }}/pg-backup:latest
+
+  # Approval gate: images build & push on every push to main, but the actual
+  # helm upgrade runs ONLY on a manual workflow_dispatch ("Run workflow") — never
+  # automatically on push. (Native environment required-reviewers needs a paid
+  # plan on private repos; this is the dependency-free equivalent. The
+  # `environment: production` is kept so reviewers auto-activate if the plan is
+  # upgraded later.)
   deploy:
     name: Deploy with Helm
-    needs: [build-and-push, build-and-push-frontend]
+    needs: [build-and-push, build-and-push-frontend, build-and-push-backup]
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     environment: production
     steps:
@@ -130,6 +168,7 @@ jobs:
           helm upgrade --install agregator deploy/helm/agregator \
             --namespace agregator \
             --create-namespace \
+            -f deploy/helm/agregator/values-prod.yaml \
             --set global.registry=${REGISTRY}/${REPOSITORY_PREFIX} \
             --set global.imageTag=${IMAGE_TAG} \
             --wait --atomic --timeout 10m

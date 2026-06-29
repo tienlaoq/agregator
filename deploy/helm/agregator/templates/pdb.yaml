@@ -1,0 +1,20 @@
+{{- range $name, $cfg := .Values.services }}
+{{- if and $cfg.enabled $cfg.pdb $cfg.pdb.enabled }}
+# PodDisruptionBudget — keeps capacity during voluntary disruptions (node drains,
+# rolling upgrades). Only meaningful with >1 replica (HPA or fixed).
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ $.Release.Name }}-{{ $name }}
+  labels:
+    {{- include "agregator.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: {{ $name }}
+spec:
+  maxUnavailable: {{ $cfg.pdb.maxUnavailable | default 1 }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/instance: {{ $.Release.Name }}
+      app.kubernetes.io/component: {{ $name }}
+---
+{{- end }}
+{{- end }}

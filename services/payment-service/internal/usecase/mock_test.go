@@ -195,7 +195,7 @@ func (m *mockPaymentProvider) CreatePayment(ctx context.Context, req provider.Cr
 	}
 	return &provider.Result{
 		ProviderPaymentID: "mock-pay",
-		ConfirmationURL:   "https://mock.yookassa.ru/pay/mock-pay",
+		ConfirmationURL:   "https://mock.local/pay/mock-pay",
 	}, nil
 }
 

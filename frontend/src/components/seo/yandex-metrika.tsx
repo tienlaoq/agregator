@@ -2,14 +2,23 @@
 
 import Script from "next/script"
 
-/** Яндекс.Метрика: задайте NEXT_PUBLIC_YANDEX_METRIKA_ID (числовой id счётчика). */
-export function YandexMetrika() {
+import { useCookieConsent } from "@/hooks/use-cookie-consent"
+
+/**
+ * Яндекс.Метрика: задайте NEXT_PUBLIC_YANDEX_METRIKA_ID (числовой id счётчика).
+ * Загружается только после согласия пользователя на cookie/аналитику
+ * (см. components/banya/cookie-consent.tsx) — требование 152-ФЗ.
+ */
+export function YandexMetrika({ nonce }: { nonce?: string }) {
+  const consent = useCookieConsent()
   const id = process.env.NEXT_PUBLIC_YANDEX_METRIKA_ID?.trim()
   if (!id || !/^\d+$/.test(id)) return null
+  if (consent !== "accepted") return null
 
   return (
     <Script
       id="yandex-metrika"
+      nonce={nonce}
       strategy="afterInteractive"
       dangerouslySetInnerHTML={{
         __html: `

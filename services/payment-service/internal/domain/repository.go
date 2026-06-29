@@ -36,10 +36,10 @@ type PaymentRepository interface {
 	// Problem it solves:
 	//   After CreateIdempotent returns isNew=false with an empty ProviderID, two
 	//   concurrent requests (original + retry) can both enter the "re-drive"
-	//   branch and call the external payment provider twice.  YooKassa is safe
-	//   because it deduplicates on Idempotence-Key, but other providers (TBank,
-	//   Sber) may not offer the same guarantee, and in mock mode two calls
-	//   produce two different UUIDs that overwrite each other in UpdateProviderInfo.
+	//   branch and call the external payment provider twice.  A gateway that
+	//   deduplicates on an idempotency key is safe, but not every provider offers
+	//   that guarantee, and in mock mode two calls produce two different UUIDs
+	//   that overwrite each other in UpdateProviderInfo.
 	//
 	// How it works:
 	//   1. Opens a transaction.

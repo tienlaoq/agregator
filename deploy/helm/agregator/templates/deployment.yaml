@@ -8,7 +8,11 @@ metadata:
     {{- include "agregator.labels" $ | nindent 4 }}
     app.kubernetes.io/component: {{ $name }}
 spec:
+  {{- /* When an HPA owns this service, omit replicas so it isn't reset on each
+         upgrade; otherwise pin the configured count. */}}
+  {{- if not (and $cfg.hpa $cfg.hpa.enabled) }}
   replicas: {{ $cfg.replicas | default 1 }}
+  {{- end }}
   selector:
     matchLabels:
       app.kubernetes.io/instance: {{ $.Release.Name }}
@@ -32,11 +36,14 @@ spec:
           ports:
             - containerPort: {{ $cfg.port }}
               name: http
-          {{- if $cfg.env }}
+          {{- /* Merge shared global.env with the service's own env (service wins);
+                 render values through tpl so "{{ .Release.Name }}" resolves. */}}
+          {{- $env := merge (deepCopy ($cfg.env | default dict)) ($.Values.global.env | default dict) }}
+          {{- if $env }}
           env:
-            {{- range $k, $v := $cfg.env }}
+            {{- range $k, $v := $env }}
             - name: {{ $k }}
-              value: {{ $v | quote }}
+              value: {{ tpl (toString $v) $ | quote }}
             {{- end }}
           {{- end }}
           {{- if $cfg.envFromSecrets }}
@@ -45,6 +52,25 @@ spec:
             - secretRef:
                 name: {{ $secret }}
             {{- end }}
+          {{- end }}
+          {{- if and $cfg.probe (ne ($cfg.probe.type | default "none") "none") }}
+          {{- $pa := dict "type" $cfg.probe.type "port" ($cfg.probe.port | default $cfg.port) "path" ($cfg.probe.path | default "/") }}
+          readinessProbe:
+            {{- include "agregator.probeAction" $pa | nindent 12 }}
+            initialDelaySeconds: {{ $cfg.probe.readinessInitialDelaySeconds | default 5 }}
+            periodSeconds: {{ $cfg.probe.periodSeconds | default 10 }}
+            timeoutSeconds: {{ $cfg.probe.timeoutSeconds | default 3 }}
+            failureThreshold: {{ $cfg.probe.failureThreshold | default 3 }}
+          livenessProbe:
+            {{- include "agregator.probeAction" $pa | nindent 12 }}
+            initialDelaySeconds: {{ $cfg.probe.livenessInitialDelaySeconds | default 15 }}
+            periodSeconds: {{ $cfg.probe.periodSeconds | default 20 }}
+            timeoutSeconds: {{ $cfg.probe.timeoutSeconds | default 3 }}
+            failureThreshold: {{ $cfg.probe.failureThreshold | default 3 }}
+          {{- end }}
+          {{- with $cfg.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
           {{- end }}
 ---
 {{- end }}

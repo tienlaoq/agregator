@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { MessageCircle, X } from "lucide-react";
+import { ArrowLeft, MessageCircle, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { issueChatWsTicket, listChatThreadsV2 } from "@/lib/api";
 import { useAuthStore } from "@/store/auth";
@@ -11,7 +11,12 @@ import type { ChatThread } from "@/lib/types";
 import type { ChatKind } from "@/features/chat/types/chat";
 import { setChatSocketToken } from "@/features/chat/lib/global-chat-socket";
 import { useChatRealtimeBridge } from "@/features/chat/hooks/use-chat-realtime-bridge";
-import { chatThreadDisplayLabel, chatThreadPanelTitle } from "@/features/chat/lib/thread-label";
+import {
+  chatThreadDisplayLabel,
+  chatThreadInitial,
+  chatThreadKindLabel,
+} from "@/features/chat/lib/thread-label";
+import { formatThreadTime } from "@/features/chat/lib/format-time";
 import { useChatWidgetStore } from "@/features/chat/store/chat-widget-store";
 import { cn } from "@/lib/utils";
 
@@ -32,6 +37,7 @@ export function ChatWidget() {
   const selected = useChatWidgetStore((s) => s.selected);
   const toggle = useChatWidgetStore((s) => s.toggle);
   const close = useChatWidgetStore((s) => s.close);
+  const setSelected = useChatWidgetStore((s) => s.setSelected);
   const openWithThread = useChatWidgetStore((s) => s.openWithThread);
 
   const threadsQuery = useQuery({
@@ -58,32 +64,14 @@ export function ChatWidget() {
     [threads],
   );
 
-  const activePanel = useMemo(() => {
-    if (selected) {
-      const match = threads.find((t) => threadMatchesSelection(t, selected.kind, selected.refId));
-      const title = match ? chatThreadPanelTitle(match) : (selected.title ?? "Чат");
-      return {
-        kind: selected.kind,
-        refId: selected.refId,
-        title,
-      };
-    }
-    if (threads.length === 0) return null;
-    const first = threads[0];
-    return {
-      kind: toChatKind(first.kind),
-      refId: first.ref_id,
-      title: chatThreadPanelTitle(first),
-    };
+  /** Открытый диалог: либо явно выбранный, либо null (показываем список). */
+  const activeThread = useMemo(() => {
+    if (!selected) return null;
+    return threads.find((t) => threadMatchesSelection(t, selected.kind, selected.refId)) ?? null;
   }, [selected, threads]);
 
-  const activeThreadId = useMemo(() => {
-    if (!activePanel) return null;
-    const t = threads.find(
-      (x) => x.ref_id === activePanel.refId && toChatKind(x.kind) === activePanel.kind,
-    );
-    return t?.id ?? null;
-  }, [threads, activePanel]);
+  const activeThreadId = activeThread?.id ?? null;
+  const inConversation = Boolean(selected);
 
   useEffect(() => {
     const ticket = wsTicketQuery.data?.ticket ?? null;
@@ -101,68 +89,119 @@ export function ChatWidget() {
 
   if (!token) return null;
 
+  const conversationTitle = activeThread
+    ? chatThreadDisplayLabel(activeThread)
+    : selected?.title?.replace(/^Чат:\s*/i, "") ?? "Чат";
+  const conversationSubtitle = activeThread ? chatThreadKindLabel(activeThread) : "Диалог";
+
   return (
     <div className="fixed bottom-4 right-4 z-50 md:bottom-6 md:right-6">
       {isOpen ? (
-        <div
-          className={cn(
-            "mb-3 flex max-h-[75vh] w-[calc(100vw-2rem)] max-w-sm flex-col gap-3 overflow-hidden rounded-2xl border border-neutral-200/90 bg-[#f5f5f5] p-3 shadow-2xl dark:border-border dark:bg-muted/40",
-          )}
-        >
-          <div className="flex items-center justify-between px-0.5">
-            <span className="text-[17px] font-semibold leading-tight text-neutral-900 dark:text-foreground">
-              Чаты
-            </span>
-            <Button type="button" size="icon" variant="ghost" className="h-8 w-8 shrink-0" onClick={close}>
+        <div className="mb-3 flex h-[min(34rem,75vh)] w-[min(24rem,calc(100vw-2rem))] flex-col overflow-hidden rounded-2xl border border-border/80 bg-card shadow-2xl">
+          {/* Шапка: список ↔ диалог */}
+          <div className="flex shrink-0 items-center gap-2 border-b border-border/70 bg-card px-2.5 py-2.5">
+            {inConversation ? (
+              <Button
+                type="button"
+                size="icon"
+                variant="ghost"
+                className="h-8 w-8 shrink-0"
+                onClick={() => setSelected(null)}
+                aria-label="Назад к списку"
+              >
+                <ArrowLeft className="h-4 w-4" />
+              </Button>
+            ) : null}
+            <div className="min-w-0 flex-1">
+              <div className="truncate text-[15px] font-semibold leading-tight text-foreground">
+                {inConversation ? conversationTitle : "Чаты"}
+              </div>
+              <div className="truncate text-[12px] leading-tight text-muted-foreground">
+                {inConversation
+                  ? conversationSubtitle
+                  : unreadChatsCount > 0
+                    ? `Новых диалогов: ${unreadChatsCount}`
+                    : "Все сообщения"}
+              </div>
+            </div>
+            <Button
+              type="button"
+              size="icon"
+              variant="ghost"
+              className="h-8 w-8 shrink-0"
+              onClick={close}
+              aria-label="Закрыть чаты"
+            >
               <X className="h-4 w-4" />
             </Button>
           </div>
 
-          <div className="rounded-2xl border border-neutral-200/80 bg-white p-1.5 shadow-sm dark:border-border dark:bg-card">
-            <div className="max-h-44 space-y-0.5 overflow-y-auto">
+          {/* Тело: список диалогов или открытая переписка */}
+          {inConversation && selected ? (
+            <ChatPanel kind={selected.kind} refId={selected.refId} className="flex-1" />
+          ) : (
+            <div className="min-h-0 flex-1 overflow-y-auto p-1.5">
               {threads.length === 0 ? (
-                <p className="px-3 py-4 text-center text-sm text-[#757575] dark:text-muted-foreground">
+                <p className="px-3 py-10 text-center text-[13px] text-muted-foreground">
                   {threadsQuery.isLoading ? "Загрузка чатов…" : "Доступных чатов пока нет."}
                 </p>
               ) : (
-                threads.map((t) => {
-                  const active =
-                    activePanel?.refId === t.ref_id && activePanel?.kind === toChatKind(t.kind);
-                  const label = chatThreadDisplayLabel(t);
-                  return (
-                    <button
-                      key={t.id}
-                      type="button"
-                      onClick={() =>
-                        openWithThread({
-                          kind: toChatKind(t.kind),
-                          refId: t.ref_id,
-                          title: chatThreadPanelTitle(t),
-                        })
-                      }
-                      className={cn(
-                        "w-full rounded-xl px-3 py-2.5 text-left transition-colors",
-                        active
-                          ? "bg-[#F5F0ED] dark:bg-muted"
-                          : "hover:bg-neutral-50 dark:hover:bg-muted/60",
-                      )}
-                    >
-                      <div className="text-[15px] font-semibold leading-snug text-neutral-900 dark:text-foreground">
-                        {label}
-                      </div>
-                      <div className="mt-0.5 text-[13px] leading-snug text-[#757575] dark:text-muted-foreground">
-                        {t.unread_count > 0 ? `Непрочитанных: ${t.unread_count}` : "Без непрочитанных"}
-                      </div>
-                    </button>
-                  );
-                })
+                <ul className="space-y-0.5">
+                  {threads.map((t) => {
+                    const label = chatThreadDisplayLabel(t);
+                    const unread = t.unread_count > 0;
+                    return (
+                      <li key={t.id}>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            openWithThread({ kind: toChatKind(t.kind), refId: t.ref_id, title: label })
+                          }
+                          className="flex w-full items-center gap-2.5 rounded-xl px-2 py-2 text-left transition-colors hover:bg-muted/70"
+                        >
+                          <span
+                            className={cn(
+                              "flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-[14px] font-semibold",
+                              unread
+                                ? "bg-primary text-primary-foreground"
+                                : "bg-muted text-muted-foreground",
+                            )}
+                          >
+                            {chatThreadInitial(t)}
+                          </span>
+                          <span className="min-w-0 flex-1">
+                            <span className="flex items-baseline justify-between gap-2">
+                              <span
+                                className={cn(
+                                  "truncate text-[14px] leading-snug",
+                                  unread ? "font-semibold text-foreground" : "font-medium text-foreground",
+                                )}
+                              >
+                                {label}
+                              </span>
+                              <span className="shrink-0 text-[11px] text-muted-foreground">
+                                {formatThreadTime(t.last_message_at)}
+                              </span>
+                            </span>
+                            <span className="mt-0.5 flex items-center justify-between gap-2">
+                              <span className="truncate text-[12px] text-muted-foreground">
+                                {chatThreadKindLabel(t)}
+                              </span>
+                              {unread ? (
+                                <span className="flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full bg-primary px-1.5 text-[11px] font-semibold leading-none text-primary-foreground">
+                                  {t.unread_count > 99 ? "99+" : t.unread_count}
+                                </span>
+                              ) : null}
+                            </span>
+                          </span>
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
               )}
             </div>
-          </div>
-
-          {activePanel ? (
-            <ChatPanel kind={activePanel.kind} refId={activePanel.refId} title={activePanel.title} />
-          ) : null}
+          )}
         </div>
       ) : null}
 
@@ -173,7 +212,7 @@ export function ChatWidget() {
         className="relative h-12 w-12 rounded-full shadow-lg"
         title={
           unreadChatsCount > 0
-            ? `Диалогов с новыми сообщениями: ${unreadChatsCount} (цифра на бейдже — число таких диалогов; в списке ниже — непрочитанные сообщения по каждому)`
+            ? `Диалогов с новыми сообщениями: ${unreadChatsCount}`
             : "Открыть чаты"
         }
         aria-label={

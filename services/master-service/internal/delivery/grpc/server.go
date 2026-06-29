@@ -392,7 +392,7 @@ func (s *Server) ListMyMasterBookings(ctx context.Context, req *masterv1.ListMyM
 	for i := range list {
 		pb := bookingToProto(&list[i])
 		// The caller is the master owner, not the client who created the booking.
-		// Strip the YooKassa payment URL so master owners cannot intercept or
+		// Strip the payment URL so master owners cannot intercept or
 		// replay client payment links.
 		pb.PaymentUrl = ""
 		out = append(out, pb)
@@ -436,7 +436,7 @@ func (s *Server) GetMasterBooking(ctx context.Context, req *masterv1.GetMasterBo
 		s := ownerID.String()
 		pb.MasterUserId = &s
 	}
-	// Strip the YooKassa payment URL when the actor is the master owner rather
+	// Strip the payment URL when the actor is the master owner rather
 	// than the client who created the booking.  Master owners must not receive
 	// client payment links (replay / interception risk).
 	if aid != b.ClientUserID {
@@ -495,7 +495,7 @@ func (s *Server) GetMasterBookingsBatch(ctx context.Context, req *masterv1.GetMa
 			s := ownerID.String()
 			pb.MasterUserId = &s
 		}
-		// Strip the YooKassa payment URL when the actor is the master owner rather
+		// Strip the payment URL when the actor is the master owner rather
 		// than the client who created the booking.  Master owners must not receive
 		// client payment links (replay / interception risk).
 		if actorID != b.ClientUserID {

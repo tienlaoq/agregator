@@ -7,12 +7,13 @@ use (
 	./services/api-gateway
 	./services/auth-service
 	./services/booking-service
+	./services/chat-service
+	./services/crm-service
+	./services/master-service
+	./services/migrator
+	./services/notification-service
 	./services/payment-service
 	./services/review-service
 	./services/user-service
 	./services/venue-service
-	./services/master-service
-	./services/chat-service
-	./services/crm-service
-	./services/notification-service
 )

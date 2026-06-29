@@ -58,10 +58,9 @@ type Venue struct {
 	SocialLinks string
 	// PayoutLegalForm: ip | ooo | self_employed | gph (empty = not set).
 	PayoutLegalForm string
-	// NOTE: yookassa_seller_account_id was dropped when the platform moved from
-	// marketplace-split to escrow + per-partner payouts.  The DB column lives on
-	// (default '') until a follow-up migration removes it; venue-service simply
-	// stops reading/writing it.  Partner payout rails now live in payment-service.
+	// NOTE: the legacy seller-account column was dropped when the platform moved
+	// from marketplace-split to escrow + per-partner payouts (DB column removed in
+	// migration 016).  Partner payout rails now live in payment-service.
 	Services  []VenueService
 	Photos    []VenuePhoto
 	Halls     []VenueHall

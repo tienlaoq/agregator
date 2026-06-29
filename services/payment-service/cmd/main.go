@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/health"
+	"google.golang.org/grpc/health/grpc_health_v1"
 
 	paymentv1 "github.com/tienlao/agregator/gen/go/payment/v1"
 	"github.com/tienlao/agregator/pkg/grpcutil"
@@ -25,7 +27,7 @@ import (
 	"github.com/tienlao/agregator/services/payment-service/internal/kpi"
 	"github.com/tienlao/agregator/services/payment-service/internal/outbox"
 	"github.com/tienlao/agregator/services/payment-service/internal/provider"
-	"github.com/tienlao/agregator/services/payment-service/internal/provider/yookassa"
+	"github.com/tienlao/agregator/services/payment-service/internal/provider/mock"
 	"github.com/tienlao/agregator/services/payment-service/internal/repository"
 	"github.com/tienlao/agregator/services/payment-service/internal/usecase"
 )
@@ -150,6 +152,50 @@ func main() {
 	grpcServer := grpc.NewServer(srvOpts...)
 	paymentv1.RegisterPaymentServiceServer(grpcServer, delivery.NewServer(uc, payoutUC, log))
 
+	// Health service: k8s readiness/liveness probes via grpc_health_v1.
+	// Starts NOT_SERVING and flips to SERVING only after a Postgres ping
+	// succeeds; a background goroutine re-checks every 10 s and flips back to
+	// NOT_SERVING if the pool becomes unavailable, so k8s pulls the pod from the
+	// load-balancer without a restart.
+	healthSrv := health.NewServer()
+	grpc_health_v1.RegisterHealthServer(grpcServer, healthSrv)
+	healthSrv.SetServingStatus("", grpc_health_v1.HealthCheckResponse_NOT_SERVING)
+
+	// pingTimeout bounds each Postgres liveness check; keep it shorter than the
+	// ticker interval so ticks never queue up.
+	const pingTimeout = 3 * time.Second
+
+	go func() {
+		const interval = 10 * time.Second
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				healthSrv.SetServingStatus("", grpc_health_v1.HealthCheckResponse_NOT_SERVING)
+				return
+			case <-ticker.C:
+				pingCtx, pingCancel := context.WithTimeout(ctx, pingTimeout)
+				err := pgPool.Ping(pingCtx)
+				pingCancel()
+				if err != nil {
+					log.Warn().Err(err).Msg("health: postgres ping failed, marking NOT_SERVING")
+					healthSrv.SetServingStatus("", grpc_health_v1.HealthCheckResponse_NOT_SERVING)
+				} else {
+					healthSrv.SetServingStatus("", grpc_health_v1.HealthCheckResponse_SERVING)
+				}
+			}
+		}
+	}()
+
+	initPingCtx, initPingCancel := context.WithTimeout(ctx, pingTimeout)
+	if err := pgPool.Ping(initPingCtx); err != nil {
+		log.Warn().Err(err).Msg("health: initial postgres ping failed, starting NOT_SERVING")
+	} else {
+		healthSrv.SetServingStatus("", grpc_health_v1.HealthCheckResponse_SERVING)
+	}
+	initPingCancel()
+
 	lis, err := net.Listen("tcp", ":"+cfg.GRPCPort)
 	if err != nil {
 		log.Fatal().Err(err).Msg("failed to listen")
@@ -178,21 +224,20 @@ func main() {
 //  2. Add its credentials to config.ProviderConfig + config.Load().
 //  3. Add a case here.
 func buildProvider(cfg config.Config) (provider.PaymentProvider, error) {
-	p := cfg.Provider
 	switch cfg.ActiveProvider {
-	case config.ProviderYooKassa:
-		// Empty ShopID → mock mode (dev/CI without real credentials).
-		return yookassa.NewClient(p.YooKassaShopID, p.YooKassaSecretKey), nil
+	case config.ProviderMock:
+		// No-network stand-in for dev/CI. Rejected in production by Validate.
+		return mock.NewClient(), nil
 
 	case config.ProviderTBank:
 		// Placeholder: implement internal/provider/tbank/client.go,
 		// then replace this error with: return tbank.NewClient(p.TBankTerminalKey, p.TBankSecretKey), nil
-		return nil, fmt.Errorf("tbank provider not yet implemented: set PAYMENT_PROVIDER=yookassa or implement internal/provider/tbank")
+		return nil, fmt.Errorf("tbank provider not yet implemented: set PAYMENT_PROVIDER=mock or implement internal/provider/tbank")
 
 	case config.ProviderSber:
 		// Placeholder: implement internal/provider/sber/client.go,
 		// then replace this error with: return sber.NewClient(p.SberMerchantLogin, p.SberSecretKey), nil
-		return nil, fmt.Errorf("sber provider not yet implemented: set PAYMENT_PROVIDER=yookassa or implement internal/provider/sber")
+		return nil, fmt.Errorf("sber provider not yet implemented: set PAYMENT_PROVIDER=mock or implement internal/provider/sber")
 
 	default:
 		// Should never reach here — cfg.Validate() catches unknown values at startup.

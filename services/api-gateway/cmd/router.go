@@ -268,7 +268,7 @@ func buildRouter(ctx context.Context, log zerolog.Logger, cfg Config, d *deps) (
 			r.With(masterPublicRL).Get("/masters", masterHandler.ListPublic)
 			r.With(masterPublicRL).Get("/masters/{slug}", masterHandler.GetPublic)
 
-			// Payment webhook (public, called by YooKassa)
+			// Payment webhook (public, called by the acquiring gateway)
 			r.With(webhookRL).Post("/payments/webhook", paymentHandler.Webhook)
 
 			// Analytics (public)

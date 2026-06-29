@@ -39,12 +39,21 @@
 # ── Frontend (Next.js) ──────────────────────────────────────────────────────
 {$APP_DOMAIN} {
 	encode zstd gzip
+
+	# HSTS — Caddy is the single TLS-terminating layer, so it owns this header for
+	# both sub-domains. 1 year + includeSubDomains. Add `preload` and submit to
+	# hstspreload.org only once you're committed (hard to undo).
+	header Strict-Transport-Security "max-age=31536000; includeSubDomains"
+
 	reverse_proxy frontend:3000
 }
 
 # ── API gateway (chi router serving /api/v1/*) ──────────────────────────────
 {$API_DOMAIN} {
 	encode zstd gzip
+
+	# HSTS on the API origin too (see frontend block above for the preload note).
+	header Strict-Transport-Security "max-age=31536000; includeSubDomains"
 
 	# Belt-and-suspenders: /metrics moved to the gateway's internal
 	# METRICS_ADDR listener, but block it at the edge too — Prometheus

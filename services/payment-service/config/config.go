@@ -12,19 +12,20 @@ import (
 type ProviderName string
 
 const (
-	ProviderYooKassa ProviderName = "yookassa"
-	ProviderTBank    ProviderName = "tbank"
-	ProviderSber     ProviderName = "sber"
+	// ProviderMock is the no-network stand-in used until a real bank acquiring
+	// gateway is wired up. It is rejected in production by Validate.
+	ProviderMock  ProviderName = "mock"
+	ProviderTBank ProviderName = "tbank"
+	ProviderSber  ProviderName = "sber"
 )
 
 // ProviderConfig holds per-provider credentials loaded from environment.
 // Only the fields for the active provider need to be set; unused fields are
 // ignored so secrets for inactive providers can be omitted entirely.
+//
+// The mock provider takes no credentials. Add the chosen acquiring bank's
+// fields here when its implementation lands.
 type ProviderConfig struct {
-	// YooKassa — YOOKASSA_SHOP_ID / YOOKASSA_SECRET_KEY
-	YooKassaShopID    string
-	YooKassaSecretKey string
-
 	// TBank — TBANK_TERMINAL_KEY / TBANK_SECRET_KEY
 	TBankTerminalKey string
 	TBankSecretKey   string
@@ -40,7 +41,7 @@ type Config struct {
 	NATSURL  string
 
 	// Provider selects the active payment gateway at startup.
-	// Set via PAYMENT_PROVIDER env var (default: "yookassa").
+	// Set via PAYMENT_PROVIDER env var (default: "mock").
 	// Switching providers requires only an env change + redeploy — no code change.
 	Provider ProviderConfig
 	// ActiveProvider is the validated name of the selected gateway.
@@ -64,42 +65,43 @@ type Config struct {
 // any value other than "production" (case-insensitive) is treated as non-prod.
 //
 // In production:
-//   - ActiveProvider must be a known gateway.
+//   - ActiveProvider must be a known, real gateway. The mock provider is
+//     rejected outright: it issues fake payment URLs and fake "succeeded"
+//     events, which must never reach real users.
 //   - Required credentials for the active provider must be non-empty; a missing
-//     credential would silently enable mock mode, causing fake payment URLs to
-//     reach real users and fake "succeeded" events to enter the DB.
+//     credential would otherwise leave the provider unauthenticated against the
+//     live gateway.
 //   - InternalServiceToken must be set (same rule as before — kept here for
 //     symmetry so all production invariants are in one place).
 //
 // In non-production (dev / CI):
-//   - Only the ActiveProvider name is validated; credentials may be empty to
-//     allow mock mode.
+//   - Only the ActiveProvider name is validated; the mock provider is allowed
+//     and needs no credentials.
 func (c *Config) Validate(env string) error {
 	isProduction := strings.EqualFold(strings.TrimSpace(env), "production")
 
 	switch c.ActiveProvider {
-	case ProviderYooKassa, ProviderTBank, ProviderSber:
+	case ProviderMock, ProviderTBank, ProviderSber:
 		// known — ok
 	default:
-		return fmt.Errorf("unknown PAYMENT_PROVIDER %q: must be yookassa, tbank, or sber", c.ActiveProvider)
+		return fmt.Errorf("unknown PAYMENT_PROVIDER %q: must be mock, tbank, or sber", c.ActiveProvider)
 	}
 
 	if !isProduction {
 		return nil
 	}
 
-	// ── Production-only credential checks ────────────────────────────────────
-	// A missing credential silently enables mock mode: CreatePayment returns a
-	// fake URL, GetByProviderID looks up a fake UUID, and the outbox publishes
-	// a fake "succeeded" event.  Fail fast here so the deploy never starts.
+	// ── Production-only checks ───────────────────────────────────────────────
+	// The mock provider must never run in production: it returns fake payment
+	// URLs and emits fake "succeeded" events. Fail fast so a real acquiring
+	// gateway must be implemented and selected before go-live.
+	if c.ActiveProvider == ProviderMock {
+		return fmt.Errorf("production: PAYMENT_PROVIDER=mock is not allowed — select a real acquiring gateway")
+	}
+
+	// A missing credential would leave the active provider unauthenticated
+	// against the live gateway.  Fail fast so the deploy never starts.
 	switch c.ActiveProvider {
-	case ProviderYooKassa:
-		if strings.TrimSpace(c.Provider.YooKassaShopID) == "" {
-			return fmt.Errorf("production: YOOKASSA_SHOP_ID must be set when PAYMENT_PROVIDER=yookassa")
-		}
-		if strings.TrimSpace(c.Provider.YooKassaSecretKey) == "" {
-			return fmt.Errorf("production: YOOKASSA_SECRET_KEY must be set when PAYMENT_PROVIDER=yookassa")
-		}
 	case ProviderTBank:
 		if strings.TrimSpace(c.Provider.TBankTerminalKey) == "" {
 			return fmt.Errorf("production: TBANK_TERMINAL_KEY must be set when PAYMENT_PROVIDER=tbank")
@@ -132,12 +134,9 @@ func Load() Config {
 		Postgres: pg,
 		NATSURL:  config.GetEnv("NATS_URL", "nats://localhost:4222"),
 
-		ActiveProvider: ProviderName(config.GetEnv("PAYMENT_PROVIDER", string(ProviderYooKassa))),
+		ActiveProvider: ProviderName(config.GetEnv("PAYMENT_PROVIDER", string(ProviderMock))),
 
 		Provider: ProviderConfig{
-			// ЮKassa
-			YooKassaShopID:    config.GetEnv("YOOKASSA_SHOP_ID", ""),
-			YooKassaSecretKey: config.GetEnv("YOOKASSA_SECRET_KEY", ""),
 			// TBank
 			TBankTerminalKey: config.GetEnv("TBANK_TERMINAL_KEY", ""),
 			TBankSecretKey:   config.GetEnv("TBANK_SECRET_KEY", ""),

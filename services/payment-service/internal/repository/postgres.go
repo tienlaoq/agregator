@@ -53,7 +53,7 @@ func (r *PaymentRepo) CreateIdempotent(ctx context.Context, p *domain.Payment) (
 		RETURNING id, created_at, updated_at`
 	providerName := p.ProviderName
 	if providerName == "" {
-		providerName = "yookassa"
+		providerName = "mock"
 	}
 	err := r.pool.QueryRow(ctx, q,
 		p.BookingID, p.Amount, p.Status.String(),
@@ -95,7 +95,7 @@ const paymentSelectCols = `
 	COALESCE(payment_url, ''), COALESCE(idempotency_key, ''),
 	COALESCE(platform_fee_kopecks, 0), COALESCE(counterparty_net_kopecks, 0),
 	COALESCE(counterparty_type, ''), COALESCE(counterparty_id, ''),
-	COALESCE(provider_name, 'yookassa'), service_at,
+	COALESCE(provider_name, 'mock'), service_at,
 	created_at, updated_at`
 
 func (r *PaymentRepo) GetByID(ctx context.Context, id string) (*domain.Payment, error) {

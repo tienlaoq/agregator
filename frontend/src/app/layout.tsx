@@ -1,7 +1,9 @@
 import type { Metadata } from "next";
+import { headers } from "next/headers";
 import { Geist } from "next/font/google";
 import { Providers } from "./providers";
 import { YandexMetrika } from "@/components/seo/yandex-metrika";
+import { CookieConsent } from "@/components/banya/cookie-consent";
 import { siteUrl } from "@/lib/seo-site";
 import "./globals.css";
 
@@ -35,14 +37,17 @@ export const metadata: Metadata = {
   },
 };
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
+  // Nonce is injected per-request by src/proxy.ts; pass it to the inline Метрика
+  // script so it satisfies the strict-dynamic CSP.
+  const nonce = (await headers()).get("x-nonce") ?? undefined;
   return (
     // suppressHydrationWarning нужен при использовании next-themes (класс темы пишется на <html>).
     <html lang="ru" suppressHydrationWarning>
       <body className={`${geist.className} font-sans antialiased`}>
-        <YandexMetrika />
+        <YandexMetrika nonce={nonce} />
         <Providers>
           {/*
            * AppLayout (header + footer + chat-widget) вынесен отсюда в отдельный
@@ -51,6 +56,7 @@ export default function RootLayout({
            */}
           {children}
         </Providers>
+        <CookieConsent />
       </body>
     </html>
   );
