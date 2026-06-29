@@ -3,7 +3,7 @@ import { Clock, Flame, LifeBuoy, Mail, MessageCircle, Phone, Send, ShieldCheck }
 import { SEO_CITY_HUBS } from "@/lib/seo-city-hubs"
 
 // TODO: заменить плейсхолдеры реальными данными перед продом.
-// Это публичные контакты/реквизиты (не PII по политике вебхуков) — берутся из договора с ЮKassa.
+// Это публичные контакты/реквизиты (не PII по политике вебхуков) — берутся из договора с эквайером.
 const SITE_PHONE = "8 800 000-00-00"
 const SITE_PHONE_HREF = "tel:+78000000000"
 const SITE_EMAIL = "hello@banyagid.ru"
@@ -31,7 +31,7 @@ const socialLinks = [
   { href: "https://wa.me/78000000000", label: "WhatsApp", icon: MessageCircle },
 ]
 
-const paymentMethods = ["ЮKassa", "Мир", "Visa", "Mastercard", "СБП"]
+const paymentMethods = ["Мир", "Visa", "Mastercard", "СБП"]
 
 const legalLinks = [
   { href: "/offer", label: "Публичная оферта" },

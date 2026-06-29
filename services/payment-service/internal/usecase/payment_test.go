@@ -539,11 +539,11 @@ func TestHandleWebhook_ParseError(t *testing.T) {
 // TestHandleWebhook_ProviderMismatch verifies that a terminal webhook whose
 // stored payment was created by a different provider is rejected with
 // FailedPrecondition and does not update the DB or write an outbox event.
-// Scenario: migrated from yookassa → tbank; a stale yookassa notification
+// Scenario: migrated from mock → tbank; a stale mock notification
 // arrives and matches a now-tbank payment ID by coincidence or replay.
 func TestHandleWebhook_ProviderMismatch(t *testing.T) {
 	t.Parallel()
-	providerID := "pay_stale_yookassa"
+	providerID := "pay_stale_mock"
 	// Payment row was created by tbank; the active provider is also tbank.
 	p := &domain.Payment{
 		ID:           "pay-tb-1",
@@ -571,10 +571,10 @@ func TestHandleWebhook_ProviderMismatch(t *testing.T) {
 		},
 	}
 	// Explicitly set activeProvider="tbank"; payment.ProviderName="tbank" but
-	// the webhook was parsed as a yookassa event — the check fires on name mismatch
+	// the webhook was parsed as a mock event — the check fires on name mismatch
 	// between what the webhook claims vs what the payment row records.
-	// Here we simulate: activeProvider=yookassa, payment stored as tbank.
-	uc := NewPaymentUseCase(repo, &mockOutboxRepo{}, &mockLedgerRepo{}, prov, "yookassa", "https://example.com/return", 1500, 0, zerolog.Nop())
+	// Here we simulate: activeProvider=mock, payment stored as tbank.
+	uc := NewPaymentUseCase(repo, &mockOutboxRepo{}, &mockLedgerRepo{}, prov, "mock", "https://example.com/return", 1500, 0, zerolog.Nop())
 	_, err := uc.HandleWebhook(context.Background(), rawWebhookBody)
 	require.Error(t, err)
 	// Must be FailedPrecondition so the gateway returns 4xx (not retried).
@@ -585,12 +585,12 @@ func TestHandleWebhook_ProviderMismatch(t *testing.T) {
 // stored payment matches the active provider is processed normally.
 func TestHandleWebhook_ProviderMatch(t *testing.T) {
 	t.Parallel()
-	providerID := "pay_yookassa_ok"
+	providerID := "pay_mock_ok"
 	p := &domain.Payment{
 		ID:           "pay-yk-1",
 		BookingID:    "book-yk-1",
 		ProviderID:   providerID,
-		ProviderName: "yookassa",
+		ProviderName: "mock",
 		Status:       domain.StatusPending,
 	}
 	updateCalled := false
@@ -613,7 +613,7 @@ func TestHandleWebhook_ProviderMatch(t *testing.T) {
 			}, nil
 		},
 	}
-	uc := NewPaymentUseCase(repo, &mockOutboxRepo{}, &mockLedgerRepo{}, prov, "yookassa", "https://example.com/return", 1500, 0, zerolog.Nop())
+	uc := NewPaymentUseCase(repo, &mockOutboxRepo{}, &mockLedgerRepo{}, prov, "mock", "https://example.com/return", 1500, 0, zerolog.Nop())
 	_, err := uc.HandleWebhook(context.Background(), rawWebhookBody)
 	require.NoError(t, err)
 	require.True(t, updateCalled, "UpdateStatusWithOutbox must be called when providers match")

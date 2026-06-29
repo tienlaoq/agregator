@@ -15,7 +15,14 @@ export function chatThreadDisplayLabel(t: ChatThread): string {
   return short ? `Заведение · ${short}` : "Заведение";
 }
 
-/** Строка заголовка внутри карточки переписки («Чат: …»). */
-export function chatThreadPanelTitle(t: ChatThread): string {
-  return `Чат: ${chatThreadDisplayLabel(t)}`;
+/** Подпись под именем собеседника: тип диалога. */
+export function chatThreadKindLabel(t: ChatThread): string {
+  return t.kind === "master_booking" ? "Пар-мастер" : "Заведение";
+}
+
+/** Первая буква имени собеседника для аватара-заглушки. */
+export function chatThreadInitial(t: ChatThread): string {
+  const label = chatThreadDisplayLabel(t).trim();
+  const first = [...label].find((ch) => /\p{L}|\p{N}/u.test(ch));
+  return (first ?? "?").toUpperCase();
 }

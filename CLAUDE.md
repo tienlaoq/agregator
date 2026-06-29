@@ -94,11 +94,11 @@ Applies to every log statement in the webhook request path
 | `content_type` | Content-Type header |
 | `client_ip` | source IP; already logged on rejection |
 | `event` | notification type, e.g. `"payment.succeeded"` |
-| `object_id` | ЮKassa payment UUID |
+| `object_id` | provider payment UUID |
 | `object_status` | status string from payload (`"succeeded"`, `"canceled"`) |
 | `err` | error values on failure paths |
 
-**Never log** — PII or financial data that ЮKassa may expand without notice:
+**Never log** — PII or financial data that the payment provider may expand without notice:
 
 - `body` / `raw_body` / any fragment of the HTTP request body
 - `amount`, `value`, `currency`

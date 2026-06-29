@@ -1008,9 +1008,9 @@ func (uc *MasterUseCase) CreateBooking(ctx context.Context, clientUserID uuid.UU
 	}
 
 	// Step 2: persist the payment reference on the booking row.
-	// On failure: the payment exists in YooKassa but the booking does not know
+	// On failure: the payment exists at the provider but the booking does not know
 	// its payment_id. Delete the booking to avoid a permanently stale row.
-	// The YooKassa payment will expire on its own TTL (~1 h for pending).
+	// The provider payment will expire on its own TTL (~1 h for pending).
 	// This residual risk is documented in docs/TECH_DEBT.md [BOOKING-ORPHAN-PAYMENT].
 	b.PaymentID = strings.TrimSpace(payResp.GetId())
 	b.PaymentURL = strings.TrimSpace(payResp.GetPaymentUrl())
@@ -1019,7 +1019,7 @@ func (uc *MasterUseCase) CreateBooking(ctx context.Context, clientUserID uuid.UU
 		uc.log.Error().Err(err).
 			Stringer("booking_id", b.ID).
 			Str("payment_id", b.PaymentID).
-			Msg("CreateBooking saga: SetBookingPayment failed after CreatePayment — attempting booking deletion; payment may be orphaned in YooKassa")
+			Msg("CreateBooking saga: SetBookingPayment failed after CreatePayment — attempting booking deletion; payment may be orphaned at the provider")
 		if delErr := uc.repo.DeleteBooking(context.Background(), b.ID); delErr != nil {
 			uc.log.Error().Err(delErr).Stringer("booking_id", b.ID).
 				Msg("CreateBooking saga: DeleteBooking also failed — booking AND payment are both orphaned; manual intervention required")

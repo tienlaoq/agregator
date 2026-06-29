@@ -172,11 +172,10 @@ type Master struct {
 	Specializations     []string
 	HourlyRate          int64
 	AvailabilityJSON    string
-	// NOTE: yookassa_seller_account_id was dropped when the platform moved from
-	// marketplace-split to escrow + per-partner payouts. The DB column lives on
-	// (NOT NULL DEFAULT '') until a follow-up migration removes it; master-service
-	// simply stops reading/writing it. Partner payout rails now live in
-	// payment-service (partner_payout_methods + partner_ledger + payouts).
+	// NOTE: the legacy seller-account column was dropped when the platform moved
+	// from marketplace-split to escrow + per-partner payouts (DB column removed in
+	// migration 022). Partner payout rails now live in payment-service
+	// (partner_payout_methods + partner_ledger + payouts).
 	PayoutLegalForm            string
 	PayoutLegalName            string
 	PayoutINN                  string

@@ -115,7 +115,7 @@ var (
 
 var (
 	// PaymentWebhookMaxBodyBytes is the maximum size of an inbound payment
-	// webhook body.  256 KiB is sufficient for any YooKassa payload.
+	// webhook body.  256 KiB is sufficient for any payment-provider payload.
 	PaymentWebhookMaxBodyBytes = int64(intLimit("PAYMENT_WEBHOOK_MAX_BODY_BYTES", 256<<10))
 )
 

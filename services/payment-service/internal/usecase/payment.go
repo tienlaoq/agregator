@@ -18,7 +18,7 @@ import (
 
 // PaymentUseCase orchestrates payment lifecycle.  It depends on
 // provider.PaymentProvider rather than any concrete gateway type, so swapping
-// ЮKassa for another provider requires only a wiring change in cmd/main.go.
+// one provider for another requires only a wiring change in cmd/main.go.
 //
 // Event publication is handled via the transactional outbox pattern:
 // state transitions write an OutboxEvent row in the same DB transaction as the
@@ -30,7 +30,7 @@ type PaymentUseCase struct {
 	outbox         domain.OutboxRepository
 	ledger         domain.LedgerRepository
 	provider       provider.PaymentProvider
-	activeProvider string // e.g. "yookassa" — must match Payment.ProviderName on webhook
+	activeProvider string // e.g. "mock", "tbank" — must match Payment.ProviderName on webhook
 	returnURL      string
 	feeBPS         int64
 	holdDuration   time.Duration // accrual hold = ServiceAt + holdDuration
@@ -244,7 +244,7 @@ func (uc *PaymentUseCase) HandleWebhook(ctx context.Context, rawBody []byte) (*d
 	if !event.Status.IsTerminal() {
 		// Non-terminal: either a known non-terminal provider status (pending,
 		// waiting_for_capture) or an unrecognised status coerced to pending by
-		// the provider.  Warn on the latter so operators notice new ЮKassa
+		// the provider.  Warn on the latter so operators notice new provider
 		// statuses before they silently become no-ops in production.
 		if event.RawProviderStatus != "" {
 			if _, known := knownProviderStatuses[event.RawProviderStatus]; !known {
@@ -265,11 +265,11 @@ func (uc *PaymentUseCase) HandleWebhook(ctx context.Context, rawBody []byte) (*d
 	// Provider-mismatch guard: reject a webhook whose payment row was created by
 	// a different provider than the one currently active.
 	//
-	// Scenario this prevents: service is migrated from ЮKassa to T-Bank; a stale
-	// ЮKassa notification arrives after the switchover (or an attacker replays one).
-	// The active provider parsed it successfully (both providers may accept
-	// structurally valid JSON), but the stored ProviderName disagrees — applying
-	// the status update would corrupt a T-Bank payment record with ЮKassa data.
+	// Scenario this prevents: service is migrated from one provider to another; a
+	// stale notification from the old provider arrives after the switchover (or an
+	// attacker replays one). The active provider parsed it successfully (providers
+	// may accept structurally valid JSON), but the stored ProviderName disagrees —
+	// applying the status update would corrupt a payment record with foreign data.
 	//
 	// In mock mode activeProvider is empty — skip the check to keep tests simple.
 	if uc.activeProvider != "" && p.ProviderName != uc.activeProvider {
@@ -309,7 +309,7 @@ func (uc *PaymentUseCase) HandleWebhook(ctx context.Context, rawBody []byte) (*d
 		if err := uc.writeAccrual(ctx, p); err != nil {
 			// Failing here would leave the payment terminal-succeeded but the
 			// partner uncredited. Return the error so the webhook caller Naks
-			// and ЮKassa retries; the UpdateStatus guard absorbs the duplicate
+			// and the provider retries; the UpdateStatus guard absorbs the duplicate
 			// status flip, and the ledger guard absorbs the duplicate accrual.
 			return event, fmt.Errorf("write accrual: %w", err)
 		}
@@ -362,14 +362,15 @@ func (uc *PaymentUseCase) writeAccrual(ctx context.Context, p *domain.Payment) e
 // distinguish "genuine non-terminal" from "unrecognised status silently coerced
 // to pending" so the latter can be warned on rather than silently absorbed.
 //
-// This must stay in sync with yookassa.statusToDomain and the ЮKassa docs.
-// It is intentionally kept as a usecase-layer constant (not imported from the
-// provider package) to avoid coupling the usecase to the ЮKassa wire format.
+// This must stay in sync with the active provider's ParseWebhook status mapping
+// (e.g. the mock provider's statusToDomain). It is intentionally kept as a
+// usecase-layer constant (not imported from the provider package) to avoid
+// coupling the usecase to any provider's wire format.
 var knownProviderStatuses = map[string]struct{}{
 	"pending":             {}, // payment created, awaiting user action
 	"waiting_for_capture": {}, // authorised, usecase calls Capture
 	"succeeded":           {}, // terminal: funds moved
-	"canceled":            {}, // terminal: payment cancelled (ЮKassa spelling)
+	"canceled":            {}, // terminal: payment cancelled
 }
 
 // RefundByBooking issues a full refund for the payment associated with

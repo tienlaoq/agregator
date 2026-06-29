@@ -67,8 +67,13 @@ func newChatThreadResolver(
 //   - Staff members listed by ListVenueStaff are participants.
 //   - userID must be the booking client, venue owner, or have management access.
 //
-// All three venue-service calls are fail-closed: an error means we cannot
-// determine access or build the full participant set, so we deny (P0#2).
+// Staff enumeration uses the venue OWNER as the CRM actor, never the requesting
+// user: CRM.ListStaff is actor-gated to venue members, so passing a plain
+// booking client (who is legitimately not a member) would fail-close and lock
+// the client out of their own thread.
+//
+// All venue/CRM calls are fail-closed: an error means we cannot determine
+// access or build the full participant set, so we deny (P0#2).
 func (rs *chatThreadResolver) ensureVenueBookingThread(r *http.Request, userID, refID string) (*chatv1.ChatThread, error) {
 	ctx := r.Context()
 
@@ -107,21 +112,28 @@ func (rs *chatThreadResolver) ensureVenueBookingThread(r *http.Request, userID, 
 			allowed = true
 		}
 
-		staffResp, sErr := rs.crm.ListStaff(ctx, &crmv1.ListStaffRequest{
-			VenueId: venueID,
-			ActorId: userID,
-		})
-		if sErr != nil {
-			rs.log.Error().Err(sErr).Str("venue_id", venueID).Str("user_id", userID).
-				Msg("chat: crm.ListStaff failed, denying access")
-			return nil, pkgerrors.PermissionDenied("chat access denied")
-		}
-		for _, m := range staffResp.GetMembers() {
-			uid := strings.TrimSpace(m.GetUserId())
-			if uid == "" || sameUserID(uid, clientID) || sameUserID(uid, ownerID) {
-				continue
+		// Enumerate staff with the venue owner as the actor — never `userID`.
+		// CRM.ListStaff is actor-gated to venue members; a booking client is not
+		// one, so using their identity here would deny them their own thread.
+		// Skip when the owner is unresolved: without a privileged actor we cannot
+		// enumerate staff, and a client+owner thread is still valid.
+		if ownerID != "" {
+			staffResp, sErr := rs.crm.ListStaff(ctx, &crmv1.ListStaffRequest{
+				VenueId: venueID,
+				ActorId: ownerID,
+			})
+			if sErr != nil {
+				rs.log.Error().Err(sErr).Str("venue_id", venueID).Str("user_id", userID).
+					Msg("chat: crm.ListStaff failed, denying access")
+				return nil, pkgerrors.PermissionDenied("chat access denied")
 			}
-			participants = append(participants, uid)
+			for _, m := range staffResp.GetMembers() {
+				uid := strings.TrimSpace(m.GetUserId())
+				if uid == "" || sameUserID(uid, clientID) || sameUserID(uid, ownerID) {
+					continue
+				}
+				participants = append(participants, uid)
+			}
 		}
 	}
 

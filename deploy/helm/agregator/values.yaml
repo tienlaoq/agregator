@@ -3,124 +3,402 @@ global:
   imageTag: latest
   imagePullSecrets: []
 
+  # Non-secret config injected into every service container (merged with each
+  # service's own env: below, which takes precedence). Endpoints are
+  # environment-specific — override CHANGE_ME for your cluster. Secrets
+  # (PG_PASSWORD, tokens, keys) never live here — they come from the per-service
+  # *-env secrets created by deploy/helm/secrets/generate-secrets.sh.
+  env:
+    PG_HOST: "CHANGE_ME.mdb.yandexcloud.net"
+    PG_PORT: "6432"
+    PG_USER: "banya"
+    PG_SSLMODE: "verify-full"
+    # Point at the in-cluster NATS/Redis below. If you switch to managed Redis,
+    # set redis.enabled=false and replace REDIS_ADDR with the managed endpoint.
+    REDIS_ADDR: "{{ .Release.Name }}-redis:6379"
+    NATS_URL: "nats://{{ .Release.Name }}-nats:4222"
+    LOG_FORMAT: "json"
+
+# Schema migrations run as a pre-install/pre-upgrade Helm hook Job before the
+# service Deployments roll out (templates/migrate-job.yaml). The image bundles
+# every service's SQL; the migrator-env secret supplies PG_* connection params
+# for the external (Yandex Managed) Postgres. Databases must already exist — see
+# deploy/helm/MIGRATIONS.md.
+migrator:
+  enabled: true
+  backoffLimit: 3
+  activeDeadlineSeconds: 600
+  image:
+    name: migrator
+    pullPolicy: IfNotPresent
+  envFromSecrets:
+    - migrator-env
+
+# Logical pg_dump backup to S3-compatible Object Storage, on a schedule
+# (templates/backup-cronjob.yaml). Independent of Yandex Managed PostgreSQL's
+# automated snapshots/PITR — see deploy/BACKUPS.md. The pg-backup-env secret
+# supplies libpq (PG*) and S3 (S3_*) credentials.
+backup:
+  enabled: true
+  schedule: "0 2 * * *" # 02:00 UTC daily (05:00 MSK)
+  retentionDays: 14
+  prefix: postgres
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  backoffLimit: 2
+  activeDeadlineSeconds: 3600
+  image:
+    name: pg-backup
+    pullPolicy: IfNotPresent
+  envFromSecrets:
+    - pg-backup-env
+
+# In-cluster NATS (JetStream) — see templates/nats.yaml. No managed NATS on YC.
+# Single node + PVC; scale to the upstream cluster chart for HA later.
+nats:
+  enabled: true
+  image: nats:2.10-alpine
+  storage: 10Gi
+  storageClass: "" # "" = cluster default StorageClass
+  jetstream:
+    maxMemory: "1G"
+    maxFile: "8G"
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits: { cpu: "1", memory: 1Gi }
+
+# In-cluster Redis (cache + rate-limit only) — see templates/redis.yaml. Set
+# enabled=false and override global.env.REDIS_ADDR to use managed Redis instead.
+redis:
+  enabled: true
+  image: redis:7-alpine
+  storage: 2Gi
+  storageClass: ""
+  resources:
+    requests: { cpu: 50m, memory: 64Mi }
+    limits: { cpu: 500m, memory: 256Mi }
+
+# Per service:
+#   env             non-secret config (in git)
+#   envFromSecrets  sensitive values from the generated *-env secret
+#   resources       requests/limits (requests required for HPA + scheduler)
+#   probe           liveness/readiness — type: grpc|http|tcp|none
+#                     grpc only for services that register grpc_health_v1
+#                     (user/venue/master/crm); others use tcp on the gRPC port
+#   pdb             PodDisruptionBudget (only meaningful with >1 replica)
+#   hpa             HorizontalPodAutoscaler (needs metrics-server)
+# Inter-service addresses use the release name; the deployment template renders
+# env values through `tpl`.
 services:
   auth-service:
     enabled: true
-    replicas: 1
+    replicas: 2
     port: 50051
     image:
       name: auth-service
       pullPolicy: IfNotPresent
-    env: {}
+    env:
+      GRPC_PORT: "50051"
+      PG_DB: "auth_db"
+      USER_SERVICE_ADDR: "{{ .Release.Name }}-user-service:50052"
+      FRONTEND_URL: "CHANGE_ME"
+      PASSWORD_RESET_TTL: "1h"
     envFromSecrets:
       - auth-service-env
+    resources:
+      requests: { cpu: 50m, memory: 96Mi }
+      limits: { cpu: 500m, memory: 256Mi }
+    probe: { type: grpc }
+    pdb: { enabled: true }
 
   user-service:
     enabled: true
-    replicas: 1
+    replicas: 2
     port: 50052
     image:
       name: user-service
       pullPolicy: IfNotPresent
-    env: {}
+    env:
+      GRPC_PORT: "50052"
+      PG_DB: "user_db"
     envFromSecrets:
       - user-service-env
+    resources:
+      requests: { cpu: 50m, memory: 96Mi }
+      limits: { cpu: 500m, memory: 256Mi }
+    probe: { type: grpc }
+    pdb: { enabled: true }
 
   venue-service:
     enabled: true
-    replicas: 1
+    replicas: 2
     port: 50053
     image:
       name: venue-service
       pullPolicy: IfNotPresent
-    env: {}
+    env:
+      GRPC_PORT: "50053"
+      PG_DB: "venue_db"
+      REVIEW_SERVICE_ADDR: "{{ .Release.Name }}-review-service:50055"
+      FRONTEND_URL: "CHANGE_ME"
     envFromSecrets:
       - venue-service-env
+    resources:
+      requests: { cpu: 50m, memory: 96Mi }
+      limits: { cpu: 500m, memory: 256Mi }
+    probe: { type: grpc }
+    pdb: { enabled: true }
 
   booking-service:
     enabled: true
-    replicas: 1
+    replicas: 2
     port: 50054
     image:
       name: booking-service
       pullPolicy: IfNotPresent
-    env: {}
+    env:
+      GRPC_PORT: "50054"
+      PG_DB: "booking_db"
+      VENUE_SERVICE_ADDR: "{{ .Release.Name }}-venue-service:50053"
+      PAYMENT_SERVICE_ADDR: "{{ .Release.Name }}-payment-service:50056"
+      CRM_SERVICE_ADDR: "{{ .Release.Name }}-crm-service:50059"
+      BOOKING_VISIT_TIMEZONE: "Europe/Moscow"
     envFromSecrets:
       - booking-service-env
+    resources:
+      requests: { cpu: 50m, memory: 96Mi }
+      limits: { cpu: 500m, memory: 256Mi }
+    probe: { type: grpc }
+    pdb: { enabled: true }
 
   review-service:
     enabled: true
-    replicas: 1
+    replicas: 2
     port: 50055
     image:
       name: review-service
       pullPolicy: IfNotPresent
-    env: {}
+    env:
+      GRPC_PORT: "50055"
+      PG_DB: "review_db"
+      BOOKING_SERVICE_ADDR: "{{ .Release.Name }}-booking-service:50054"
+      VENUE_SERVICE_ADDR: "{{ .Release.Name }}-venue-service:50053"
+      MASTER_SERVICE_ADDR: "{{ .Release.Name }}-master-service:50057"
     envFromSecrets:
       - review-service-env
+    resources:
+      requests: { cpu: 50m, memory: 96Mi }
+      limits: { cpu: 500m, memory: 256Mi }
+    probe: { type: grpc }
+    pdb: { enabled: true }
 
   payment-service:
     enabled: true
-    replicas: 1
+    replicas: 2
     port: 50056
     image:
       name: payment-service
       pullPolicy: IfNotPresent
-    env: {}
+    env:
+      GRPC_PORT: "50056"
+      PG_DB: "payment_db"
+      PAYMENT_RETURN_URL: "CHANGE_ME/my/bookings"
+      PLATFORM_FEE_BPS: "1500"
     envFromSecrets:
       - payment-service-env
+    resources:
+      requests: { cpu: 50m, memory: 96Mi }
+      limits: { cpu: 500m, memory: 256Mi }
+    probe: { type: grpc }
+    pdb: { enabled: true }
 
   master-service:
     enabled: true
-    replicas: 1
+    replicas: 2
     port: 50057
     image:
       name: master-service
       pullPolicy: IfNotPresent
-    env: {}
+    env:
+      GRPC_PORT: "50057"
+      PG_DB: "master_db"
+      PAYMENT_SERVICE_ADDR: "{{ .Release.Name }}-payment-service:50056"
     envFromSecrets:
       - master-service-env
+    resources:
+      requests: { cpu: 50m, memory: 96Mi }
+      limits: { cpu: 500m, memory: 256Mi }
+    probe: { type: grpc }
+    pdb: { enabled: true }
 
   chat-service:
     enabled: true
-    replicas: 1
+    replicas: 2
     port: 50058
     image:
       name: chat-service
       pullPolicy: IfNotPresent
-    env: {}
+    env:
+      GRPC_PORT: "50058"
+      PG_DB: "chat_db"
     envFromSecrets:
       - chat-service-env
+    resources:
+      requests: { cpu: 50m, memory: 96Mi }
+      limits: { cpu: 500m, memory: 256Mi }
+    probe: { type: grpc }
+    pdb: { enabled: true }
+
+  # crm-service shares venue_db with venue-service (strangler-fig phase B);
+  # see deploy/docker-compose.yml.
+  crm-service:
+    enabled: true
+    replicas: 2
+    port: 50059
+    image:
+      name: crm-service
+      pullPolicy: IfNotPresent
+    env:
+      GRPC_PORT: "50059"
+      PG_DB: "venue_db"
+    envFromSecrets:
+      - crm-service-env
+    resources:
+      requests: { cpu: 50m, memory: 96Mi }
+      limits: { cpu: 500m, memory: 256Mi }
+    probe: { type: grpc }
+    pdb: { enabled: true }
+
+  notification-service:
+    enabled: true
+    replicas: 2
+    port: 50060
+    image:
+      name: notification-service
+      pullPolicy: IfNotPresent
+    env:
+      GRPC_PORT: "50060"
+      PG_DB: "notification_db"
+    envFromSecrets:
+      - notification-service-env
+    resources:
+      requests: { cpu: 50m, memory: 96Mi }
+      limits: { cpu: 500m, memory: 256Mi }
+    probe: { type: grpc }
+    pdb: { enabled: true }
+
+  # analytics-service has no gRPC API and publishes no service port — it is a
+  # NATS JetStream *durable push* consumer (analytics-web-sink). Running >1
+  # replica would conflict on the durable, so it stays at replicas: 1 (no HPA,
+  # no PDB). The only listener is the metrics endpoint on 9100.
+  analytics-service:
+    enabled: true
+    replicas: 1
+    port: 9100
+    image:
+      name: analytics-service
+      pullPolicy: IfNotPresent
+    env:
+      PG_DB: "analytics_db"
+    envFromSecrets:
+      - analytics-service-env
+    resources:
+      requests: { cpu: 50m, memory: 96Mi }
+      limits: { cpu: 300m, memory: 256Mi }
+    probe: { type: http, path: /metrics, port: 9100 }
 
   api-gateway:
     enabled: true
-    replicas: 1
+    replicas: 2
     port: 8080
     image:
       name: api-gateway
       pullPolicy: IfNotPresent
-    env: {}
+    env:
+      HTTP_PORT: "8080"
+      UPLOAD_ROOT: "/data/uploads"
+      PG_DB: "support_db"
+      AUTH_SERVICE_ADDR: "{{ .Release.Name }}-auth-service:50051"
+      USER_SERVICE_ADDR: "{{ .Release.Name }}-user-service:50052"
+      VENUE_SERVICE_ADDR: "{{ .Release.Name }}-venue-service:50053"
+      BOOKING_SERVICE_ADDR: "{{ .Release.Name }}-booking-service:50054"
+      REVIEW_SERVICE_ADDR: "{{ .Release.Name }}-review-service:50055"
+      PAYMENT_SERVICE_ADDR: "{{ .Release.Name }}-payment-service:50056"
+      MASTER_SERVICE_ADDR: "{{ .Release.Name }}-master-service:50057"
+      CHAT_SERVICE_ADDR: "{{ .Release.Name }}-chat-service:50058"
+      CRM_SERVICE_ADDR: "{{ .Release.Name }}-crm-service:50059"
+      NOTIFICATION_SERVICE_ADDR: "{{ .Release.Name }}-notification-service:50060"
+      BASE_URL: "CHANGE_ME"
+      FRONTEND_URL: "CHANGE_ME"
+      CORS_ALLOWED_ORIGINS: "CHANGE_ME"
+      # Set to the edge proxy's in-cluster CIDR (Caddy/nginx) so X-Forwarded-For
+      # is trusted only from it; empty means XFF is ignored (safe default).
+      TRUSTED_PROXY_CIDRS: ""
+      MINIO_ENDPOINT: "storage.yandexcloud.net"
+      MINIO_BUCKET: "photos"
+      MINIO_PUBLIC_BASE_URL: "CHANGE_ME"
+      MINIO_USE_SSL: "true"
+      FORGOT_PASSWORD_RATE_LIMIT_MAX: "10"
+      FORGOT_PASSWORD_RATE_LIMIT_WINDOW: "15m"
     envFromSecrets:
       - api-gateway-env
+    resources:
+      requests: { cpu: 100m, memory: 128Mi }
+      limits: { cpu: "1", memory: 512Mi }
+    probe: { type: http, path: /healthz, port: 8080 }
+    pdb: { enabled: true }
+    hpa:
+      enabled: true
+      minReplicas: 2
+      maxReplicas: 6
+      targetCPUUtilizationPercentage: 70
 
   frontend:
     enabled: true
-    replicas: 1
+    replicas: 2
     port: 3000
     image:
       name: frontend
       pullPolicy: IfNotPresent
-    env: {}
+    env:
+      INTERNAL_API_URL: "http://{{ .Release.Name }}-api-gateway:8080"
     envFromSecrets: []
+    resources:
+      requests: { cpu: 100m, memory: 256Mi }
+      limits: { cpu: "1", memory: 512Mi }
+    probe: { type: http, path: /, port: 3000 }
+    pdb: { enabled: true }
+    hpa:
+      enabled: true
+      minReplicas: 2
+      maxReplicas: 5
+      targetCPUUtilizationPercentage: 70
 
+# Edge / TLS. Configured for the Yandex Application Load Balancer Ingress
+# Controller (RF-native managed L7 + Certificate Manager TLS). Both ingresses
+# share one ALB via the same group-name. Fill the CHANGE_ME values (subnet/SG
+# IDs, domains, Certificate Manager cert IDs) before deploying. For nginx-ingress
+# instead, set className: nginx, drop the alb annotations, and point
+# tlsSecretName at a real TLS secret. See deploy/helm/INGRESS.md.
 ingress:
-  enabled: false
-  className: nginx
-  host: api.example.com
-  tlsSecretName: ""
+  enabled: true
+  className: "" # YC ALB is selected via annotations below; nginx → "nginx"
+  host: "api.CHANGE_ME.ru"
+  # YC Certificate Manager: secret name must be yc-certmgr-cert-id-<cert-id>.
+  tlsSecretName: "yc-certmgr-cert-id-CHANGE_ME"
+  annotations:
+    ingress.alb.yc.io/subnets: "CHANGE_ME" # comma-separated subnet IDs
+    ingress.alb.yc.io/security-groups: "CHANGE_ME" # comma-separated SG IDs
+    ingress.alb.yc.io/external-ipv4-address: "auto"
+    ingress.alb.yc.io/group-name: "agregator"
 
 ingressFrontend:
-  enabled: false
-  className: nginx
-  host: app.example.com
-  tlsSecretName: ""
+  enabled: true
+  className: ""
+  host: "CHANGE_ME.ru"
+  tlsSecretName: "yc-certmgr-cert-id-CHANGE_ME"
+  annotations:
+    ingress.alb.yc.io/subnets: "CHANGE_ME"
+    ingress.alb.yc.io/security-groups: "CHANGE_ME"
+    ingress.alb.yc.io/external-ipv4-address: "auto"
+    ingress.alb.yc.io/group-name: "agregator"

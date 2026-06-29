@@ -110,7 +110,7 @@ type Config struct {
 	PaymentWebhookSecret string
 
 	// PaymentWebhookIPAllowlist is a comma-separated list of CIDRs / plain IPs
-	// that are allowed to call POST /payments/webhook (e.g. YooKassa IPs).
+	// that are allowed to call POST /payments/webhook (e.g. the acquiring gateway's IPs).
 	// Set via PAYMENT_WEBHOOK_IP_ALLOWLIST.  Empty disables IP verification.
 	PaymentWebhookIPAllowlist string
 

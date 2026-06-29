@@ -22,7 +22,7 @@ func TestIntegration_PayoutMethod_SaveAndGetActive(t *testing.T) {
 		PartnerType:   domain.PartnerVenue,
 		PartnerID:     partner,
 		Kind:          domain.PayoutMethodCard,
-		ProviderName:  "yookassa",
+		ProviderName:  "mock",
 		CardLast4:     "4242",
 		CardBrand:     "visa",
 		ProviderToken: "tok_active",
@@ -51,7 +51,7 @@ func TestIntegration_PayoutMethod_SaveReplacesActive(t *testing.T) {
 		PartnerType:   domain.PartnerMaster,
 		PartnerID:     partner,
 		Kind:          domain.PayoutMethodCard,
-		ProviderName:  "yookassa",
+		ProviderName:  "mock",
 		CardLast4:     "1111",
 		ProviderToken: "tok_first",
 	}

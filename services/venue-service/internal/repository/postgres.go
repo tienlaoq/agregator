@@ -92,9 +92,8 @@ func (r *venueRepo) Create(ctx context.Context, venue *domain.Venue) error {
 		venue.SocialLinks = "{}"
 	}
 
-	// yookassa_seller_account_id is intentionally NOT included in INSERT —
-	// the column still exists in the DB (default '') but the new escrow flow
-	// owns all payout rails through payment-service.
+	// Payout rails are owned by payment-service (escrow flow); venues carry only
+	// the provider-agnostic payout profile fields.
 	err = tx.QueryRow(ctx, `
 		INSERT INTO venues (owner_id, slug, name, type, description, address, city, location, price_from, capacity, amenities, working_hours, phone, status,
 			legal_entity_name, inn, ogrn, public_listing_url, verification_note, social_links,

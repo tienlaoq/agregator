@@ -261,6 +261,81 @@ func TestResolver_VenueBooking_StaffIsActor(t *testing.T) {
 	}
 }
 
+// actorGatedCRM mirrors the real CRM-service contract: ListStaff is actor-gated
+// to venue members, so a non-member actor (e.g. a plain booking client) is
+// denied.  GetManagementAccess is a passthrough that reports the actor's own
+// role ("" for a client).  Used to reproduce the bug where a booking client was
+// locked out of their own venue thread because staff enumeration passed the
+// client as the ListStaff actor.
+type actorGatedCRM struct {
+	ownerID string
+	staff   []string
+}
+
+func (f *actorGatedCRM) GetManagementAccess(_ context.Context, in *crmv1.GetManagementAccessRequest, _ ...grpc.CallOption) (*crmv1.GetManagementAccessResponse, error) {
+	access := ""
+	if in.GetUserId() == f.ownerID {
+		access = "owner"
+	} else {
+		for _, s := range f.staff {
+			if s == in.GetUserId() {
+				access = "staff"
+			}
+		}
+	}
+	return &crmv1.GetManagementAccessResponse{Access: access}, nil
+}
+
+func (f *actorGatedCRM) ListStaff(_ context.Context, in *crmv1.ListStaffRequest, _ ...grpc.CallOption) (*crmv1.ListStaffResponse, error) {
+	member := in.GetActorId() == f.ownerID
+	for _, s := range f.staff {
+		if s == in.GetActorId() {
+			member = true
+		}
+	}
+	if !member {
+		return nil, status.Error(codes.PermissionDenied, "нет доступа к управлению заведением")
+	}
+	members := make([]*crmv1.StaffMember, 0, len(f.staff))
+	for _, id := range f.staff {
+		members = append(members, &crmv1.StaffMember{UserId: id})
+	}
+	return &crmv1.ListStaffResponse{Members: members}, nil
+}
+
+// TestResolver_VenueBooking_ClientAllowed_WhenStaffEnumIsActorGated reproduces
+// the reported bug: a booking client (not owner/staff) opening their own thread.
+// Real CRM denies ListStaff for the client actor; the resolver must enumerate
+// staff via the owner and still allow the client.
+func TestResolver_VenueBooking_ClientAllowed_WhenStaffEnumIsActorGated(t *testing.T) {
+	rs := newResolverWithCRM(
+		resolverFakeChat{},
+		&resolverFakeBooking{resp: &bookingv1.BookingResponse{Id: "b1", VenueId: "v1", UserId: "client-1"}},
+		&resolverFakeVenue{ownerID: "owner-1"},
+		&resolverFakeMaster{},
+		&actorGatedCRM{ownerID: "owner-1", staff: []string{"staff-1"}},
+	)
+	req := makeResolverRequest("client-1")
+	thread, err := rs.ensureVenueBookingThread(req, "client-1", "b1")
+	if err != nil {
+		t.Fatalf("booking client should be allowed into their own thread, got: %v", err)
+	}
+	// Staff enrichment must still happen (via the owner actor): client, owner and
+	// staff-1 are all participants.
+	pids := thread.GetParticipantUserIds()
+	has := func(id string) bool {
+		for _, p := range pids {
+			if p == id {
+				return true
+			}
+		}
+		return false
+	}
+	if !has("client-1") || !has("owner-1") || !has("staff-1") {
+		t.Fatalf("participant list missing expected IDs: %v", pids)
+	}
+}
+
 // ── master-booking tests ──────────────────────────────────────────────────────
 
 // TestResolver_MasterBooking_EmptyBooking_Denied — service returns nil booking → denied.

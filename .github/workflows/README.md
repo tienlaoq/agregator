@@ -2,36 +2,46 @@
 
 This repository now includes:
 
-- `ci.yml` — Go + frontend lint/test/build on PR and push.
-- `cd-k8s-prod.yml` — build/push all backend images to Yandex Container Registry and deploy to Kubernetes via Helm on `main`.
+- `ci.yml` â€” Go + frontend lint/test/build on PR and push.
+- `cd-k8s-prod.yml` â€” build/push all images to Yandex Container Registry on every push to `main`; **deploy (helm upgrade) runs only on manual `workflow_dispatch`** ("Run workflow"), never automatically on push.
+
+## Deploying (manual approval gate)
+
+Pushing to `main` builds and pushes images but does **not** deploy. To release:
+
+1. Actions â†’ **CD Kubernetes Production** â†’ **Run workflow** (select `main`).
+2. This rebuilds images for that commit and runs `helm upgrade --install`.
+
+Native environment required-reviewers (Settings â†’ Environments â†’ Production) is
+not available on the current plan (Free, private repo); the manual-dispatch gate
+is the dependency-free equivalent. If the plan is upgraded, add required
+reviewers to the `Production` environment â€” the deploy job already targets it.
 
 ## Required GitHub Secrets
 
 Set these in **Settings > Secrets and variables > Actions**:
 
-- `YCR_REGISTRY` — e.g. `cr.yandex`
-- `YCR_REPOSITORY_PREFIX` — e.g. `crp123456789/agregator`
+- `YCR_REGISTRY` ï¿½ e.g. `cr.yandex`
+- `YCR_REPOSITORY_PREFIX` ï¿½ e.g. `crp123456789/agregator`
 - `YCR_USERNAME`
 - `YCR_PASSWORD`
-- `KUBECONFIG_B64` — base64 encoded kubeconfig for production cluster
+- `KUBECONFIG_B64` ï¿½ base64 encoded kubeconfig for production cluster
 
 ## Helm chart
 
 Chart path: `deploy/helm/agregator`.
 
-By default each service reads env vars from Kubernetes secrets:
+Each service reads non-secret config from `values.yaml` (`global.env` + per-service
+`env`) and sensitive values from a per-service `*-env` Kubernetes secret
+(`auth-service-env`, â€¦, plus `migrator-env` and `pg-backup-env`).
 
-- `auth-service-env`
-- `user-service-env`
-- `venue-service-env`
-- `booking-service-env`
-- `review-service-env`
-- `payment-service-env`
-- `master-service-env`
-- `chat-service-env`
-- `api-gateway-env`
+Generate and apply all of them with the helper (never commit secrets):
 
-Create these secrets before first deploy.
+```bash
+deploy/helm/secrets/generate-secrets.sh -n agregator   # see SECRETS.md
+```
+
+Databases & migrations: `deploy/helm/MIGRATIONS.md`. Backups: `deploy/BACKUPS.md`.
 
 ### Optional ingress
 

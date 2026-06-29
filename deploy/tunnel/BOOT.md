@@ -68,7 +68,7 @@ cloudflared tunnel delete banyaorganica-demo
 
 ## Что НЕ работает в этом демо (специально)
 
-- Реальные платежи через ЮKassa (payment-service не подключён к боевому контуру)
+- Реальные платежи (банк-эквайер ещё не выбран; payment-service работает на mock-провайдере)
 - Email/SMS-уведомления (SMTP/Telegram не настроены)
 - Отзывы (review-service есть, но пустой)
 - Админ-CRM (доступ только локально)

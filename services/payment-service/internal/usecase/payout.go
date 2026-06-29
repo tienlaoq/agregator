@@ -471,7 +471,7 @@ func (uc *PayoutUseCase) payoutPartner(ctx context.Context, ref domain.PartnerRe
 		// tick (with a fresh idempotency key) would double-pay the partner once
 		// the original request lands.  Leave the row in pending; the
 		// reconciliation loop will re-call CreatePayout with the SAME idempotency
-		// key — ЮKassa deduplicates and returns the existing payout if any.
+		// key — the provider deduplicates and returns the existing payout if any.
 		if errors.Is(err, provider.ErrTransient) {
 			uc.log.Warn().
 				Str("payout_id", payout.ID).
@@ -552,10 +552,10 @@ func (uc *PayoutUseCase) HandlePayoutWebhook(ctx context.Context, rawBody []byte
 
 	// Provider-mismatch guard: reject a webhook whose payout row was created by
 	// a different provider than the one currently active.  Mirrors the same
-	// guard in HandleWebhook (payment.go) — without it, a stale ЮKassa
-	// notification arriving after a T-Bank migration would mutate a T-Bank
-	// payout row with ЮKassa data (status flip, failure reason, ledger
-	// reversal) because both providers may share structurally-similar payload
+	// guard in HandleWebhook (payment.go) — without it, a stale notification from
+	// a previous provider arriving after a migration would mutate the current
+	// provider's payout row with foreign data (status flip, failure reason, ledger
+	// reversal) because different providers may share structurally-similar payload
 	// formats.
 	//
 	// In mock mode activeProvider is empty — skip the check to keep tests simple.

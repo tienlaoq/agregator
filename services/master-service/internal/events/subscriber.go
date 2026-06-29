@@ -106,7 +106,7 @@ func ack(msg *nats.Msg, log zerolog.Logger) {
 //
 // Compliance note: before increasing the prefix length, confirm with legal/DPO
 // that the truncated value does not constitute personal data under applicable
-// regulations (GDPR Art. 4, 152-ФЗ). ЮKassa payment IDs are currently
+// regulations (GDPR Art. 4, 152-ФЗ). Provider payment IDs are currently
 // UUID v4 — statistically non-identifying — but policy may vary by context.
 func truncatePaymentID(id string) string {
 	if len(id) <= 8 {
@@ -335,7 +335,7 @@ func (s *Subscriber) handlePaymentFailed(msg *nats.Msg) {
 
 	log.Info().Msg("payment.failed: master booking cancelled")
 	// TODO(refund): publish a "booking.cancelled" event here so payment-service
-	// can issue the ЮKassa refund. payment-service already subscribes to
+	// can issue the provider refund. payment-service already subscribes to
 	// "booking.cancelled" and calls RefundByBooking — but master-service never
 	// publishes that event, so refunds for master bookings are silently skipped.
 	//

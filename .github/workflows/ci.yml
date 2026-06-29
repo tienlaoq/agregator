@@ -25,6 +25,10 @@ jobs:
           - payment-service
           - master-service
           - chat-service
+          - crm-service
+          - notification-service
+          - analytics-service
+          - migrator
           - api-gateway
     defaults:
       run:

@@ -20,9 +20,9 @@ import (
 // WebhookSecurityConfig carries the two independent verification mechanisms
 // for inbound payment webhooks.
 //
-// IP allowlist (YooKassa):
+// IP allowlist:
 //
-//	YooKassa sends notifications from a fixed published set of IPs.
+//	Acquiring gateways send notifications from a fixed published set of IPs.
 //	When AllowedCIDRs is non-empty, any request whose source IP is not covered
 //	by at least one entry is rejected with 403 before the body is read.
 //	Configure with PAYMENT_WEBHOOK_IP_ALLOWLIST (comma-separated CIDRs or IPs).
@@ -96,7 +96,7 @@ func NewPaymentHandler(log zerolog.Logger, client paymentv1.PaymentServiceClient
 // POLICY — webhook body MUST NEVER be logged, in whole or in part:
 //
 //   The raw body can contain card metadata, payer details, amounts, and other
-//   PII fields that ЮKassa may add in future API versions without notice.
+//   PII fields that the payment provider may add in future API versions without notice.
 //   Logging any fragment of it (even on error paths) risks writing PII to
 //   stdout/files that feed aggregators such as Loki or CloudWatch Logs.
 //
@@ -104,7 +104,7 @@ func NewPaymentHandler(log zerolog.Logger, client paymentv1.PaymentServiceClient
 //   - body_bytes  — the byte length of the received body (no content)
 //   - content_type — the Content-Type header (structural, never PII)
 //   - client_ip   — already logged on rejection; stripped to /24 if desired
-//   - object_id   — the ЮKassa payment UUID extracted after parse (non-sensitive)
+//   - object_id   — the provider payment UUID extracted after parse (non-sensitive)
 //   - event       — the event type string, e.g. "payment.succeeded"
 //   - object_status — the status string, e.g. "succeeded"
 //
@@ -119,7 +119,7 @@ func NewPaymentHandler(log zerolog.Logger, client paymentv1.PaymentServiceClient
 // in the Permitted list, treat it as a PII leak and reject the PR.
 
 func (h *PaymentHandler) Webhook(w http.ResponseWriter, r *http.Request) {
-	// Limit body to 256 KiB — sufficient for any YooKassa payload.
+	// Limit body to 256 KiB — sufficient for any payment-provider payload.
 	// MaxBytesReader returns *http.MaxBytesError on overflow; treat that as a
 	// client error (400) rather than a server-side read failure.
 	//

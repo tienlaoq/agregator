@@ -1,0 +1,44 @@
+{{- if .Values.migrator.enabled }}
+# Pre-install/pre-upgrade hook: applies all SQL migrations before the service
+# Deployments roll out, so new code never starts against a stale schema.
+# hook-weight -5 runs it ahead of weight-0 resources; the Job is recreated and
+# the succeeded Pod cleaned up on each release.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ .Release.Name }}-migrate
+  labels:
+    {{- include "agregator.labels" . | nindent 4 }}
+    app.kubernetes.io/component: migrate
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-5"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: {{ .Values.migrator.backoffLimit | default 3 }}
+  activeDeadlineSeconds: {{ .Values.migrator.activeDeadlineSeconds | default 600 }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/component: migrate
+    spec:
+      restartPolicy: Never
+      {{- if .Values.global.imagePullSecrets }}
+      imagePullSecrets:
+        {{- range .Values.global.imagePullSecrets }}
+        - name: {{ . }}
+        {{- end }}
+      {{- end }}
+      containers:
+        - name: migrate
+          image: {{ printf "%s/%s:%s" .Values.global.registry .Values.migrator.image.name (default .Values.global.imageTag .Values.migrator.image.tag) }}
+          imagePullPolicy: {{ default "IfNotPresent" .Values.migrator.image.pullPolicy }}
+          {{- if .Values.migrator.envFromSecrets }}
+          envFrom:
+            {{- range .Values.migrator.envFromSecrets }}
+            - secretRef:
+                name: {{ . }}
+            {{- end }}
+          {{- end }}
+{{- end }}

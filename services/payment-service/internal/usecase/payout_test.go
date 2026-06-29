@@ -26,7 +26,7 @@ func testPayoutUseCase(
 	ledger *mockLedgerRepo,
 	prov *mockPaymentProvider,
 ) *PayoutUseCase {
-	return NewPayoutUseCase(payouts, methods, ledger, prov, "yookassa", PayoutSchedulerConfig{
+	return NewPayoutUseCase(payouts, methods, ledger, prov, "mock", PayoutSchedulerConfig{
 		MinPayoutKopecks: 10000,
 		TickInterval:     time.Hour,
 	}, zerolog.Nop())
@@ -38,7 +38,7 @@ func cardMethod(partnerType domain.PartnerType, partnerID string) *domain.Payout
 		PartnerType:   partnerType,
 		PartnerID:     partnerID,
 		Kind:          domain.PayoutMethodCard,
-		ProviderName:  "yookassa",
+		ProviderName:  "mock",
 		ProviderToken: "tok_live",
 		CardLast4:     "4242",
 	}
@@ -108,7 +108,7 @@ func TestSetPayoutMethod_CardDefaultsProviderName(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.NotNil(t, saved)
-	assert.Equal(t, "yookassa", saved.ProviderName, "active provider should be filled in")
+	assert.Equal(t, "mock", saved.ProviderName, "active provider should be filled in")
 	assert.Equal(t, "m1", got.ID)
 }
 
@@ -252,7 +252,7 @@ func TestScheduler_TransientProviderError_LeavesPending(t *testing.T) {
 	}}
 	prov := &mockPaymentProvider{CreatePayoutFunc: func(_ context.Context, _ provider.PayoutRequest) (*provider.PayoutResult, error) {
 		// Wrap with ErrTransient to mark as transient.
-		return nil, fmt.Errorf("yookassa 503: %w", provider.ErrTransient)
+		return nil, fmt.Errorf("mock 503: %w", provider.ErrTransient)
 	}}
 
 	uc := testPayoutUseCase(payouts, methods, ripeLedger(ref, 20000), prov)
@@ -496,7 +496,7 @@ func TestHandlePayoutWebhook_Succeeded(t *testing.T) {
 	var succeededID string
 	payouts := &mockPayoutRepo{
 		GetByProviderPayoutIDFunc: func(_ context.Context, _ string) (*domain.Payout, error) {
-			return &domain.Payout{ID: "po1", ProviderName: "yookassa", Status: domain.PayoutProcessing}, nil
+			return &domain.Payout{ID: "po1", ProviderName: "mock", Status: domain.PayoutProcessing}, nil
 		},
 		MarkSucceededFunc: func(_ context.Context, id string, _ time.Time) (bool, error) { succeededID = id; return true, nil },
 	}
@@ -512,7 +512,7 @@ func TestHandlePayoutWebhook_Succeeded(t *testing.T) {
 }
 
 // Provider-mismatch guard: a webhook from one provider must not mutate a payout
-// row created by another provider — protects T-Bank/Sber rows from stale ЮKassa
+// row created by another provider — protects T-Bank/Sber rows from stale
 // notifications arriving after a provider migration.
 func TestHandlePayoutWebhook_ProviderMismatch_Rejected(t *testing.T) {
 	t.Parallel()
@@ -520,8 +520,8 @@ func TestHandlePayoutWebhook_ProviderMismatch_Rejected(t *testing.T) {
 	var succeededCalled, failedCalled bool
 	payouts := &mockPayoutRepo{
 		GetByProviderPayoutIDFunc: func(_ context.Context, _ string) (*domain.Payout, error) {
-			// Row was created by yookassa (e.g. before a T-Bank migration).
-			return &domain.Payout{ID: "po1", ProviderName: "yookassa", Status: domain.PayoutProcessing}, nil
+			// Row was created by mock (e.g. before a T-Bank migration).
+			return &domain.Payout{ID: "po1", ProviderName: "mock", Status: domain.PayoutProcessing}, nil
 		},
 		MarkSucceededFunc:          func(_ context.Context, _ string, _ time.Time) (bool, error) { succeededCalled = true; return true, nil },
 		MarkFailedWithReversalFunc: func(_ context.Context, _, _ string, _ time.Time) (bool, error) { failedCalled = true; return true, nil },
@@ -530,7 +530,7 @@ func TestHandlePayoutWebhook_ProviderMismatch_Rejected(t *testing.T) {
 		return &provider.PayoutWebhookEvent{ProviderPayoutID: "pp1", Status: provider.PayoutStatusSucceeded}, nil
 	}}
 
-	// Active provider is now t-bank; the row says yookassa.
+	// Active provider is now t-bank; the row says mock.
 	uc := NewPayoutUseCase(payouts, &mockPayoutMethodRepo{}, &mockLedgerRepo{}, prov, "tbank", PayoutSchedulerConfig{}, zerolog.Nop())
 
 	_, err := uc.HandlePayoutWebhook(context.Background(), []byte(`{}`))
@@ -548,7 +548,7 @@ func TestHandlePayoutWebhook_EmptyActiveProvider_BypassesGuard(t *testing.T) {
 	var succeededID string
 	payouts := &mockPayoutRepo{
 		GetByProviderPayoutIDFunc: func(_ context.Context, _ string) (*domain.Payout, error) {
-			return &domain.Payout{ID: "po1", ProviderName: "yookassa", Status: domain.PayoutProcessing}, nil
+			return &domain.Payout{ID: "po1", ProviderName: "mock", Status: domain.PayoutProcessing}, nil
 		},
 		MarkSucceededFunc: func(_ context.Context, id string, _ time.Time) (bool, error) { succeededID = id; return true, nil },
 	}
@@ -570,7 +570,7 @@ func TestHandlePayoutWebhook_Failed_Reverses(t *testing.T) {
 	var failedReason string
 	payouts := &mockPayoutRepo{
 		GetByProviderPayoutIDFunc: func(_ context.Context, _ string) (*domain.Payout, error) {
-			return &domain.Payout{ID: "po1", ProviderName: "yookassa", Status: domain.PayoutProcessing}, nil
+			return &domain.Payout{ID: "po1", ProviderName: "mock", Status: domain.PayoutProcessing}, nil
 		},
 		MarkFailedWithReversalFunc: func(_ context.Context, _, reason string, _ time.Time) (bool, error) {
 			failedReason = reason

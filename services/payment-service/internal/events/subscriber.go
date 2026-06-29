@@ -16,8 +16,9 @@ import (
 
 const (
 	// handlerTimeout bounds a single delivery's processing time. It must exceed
-	// the provider refund retry budget — yookassa's retryAttempts (3) × per-call
-	// totalTimeout (10s) plus backoff ≈ 38s. At 30s the context cancelled the
+	// the provider refund retry budget — a real acquiring gateway typically does
+	// ~3 retry attempts × per-call timeout (~10s) plus backoff ≈ 38s. At 30s the
+	// context cancelled the
 	// retry loop early and NATS redelivered after AckWait (60s) — correct, but
 	// wasteful. 45s lets the retry loop run to completion within a single
 	// delivery, and still sits comfortably under AckWait so a genuinely stuck
