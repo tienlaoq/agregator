@@ -1,4 +1,4 @@
-package handler
+package httpx
 
 import (
 	"bytes"
@@ -11,14 +11,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// ── readJSONOrRespond ────────────────────────────────────────────────────────
+// ── ReadJSONOrRespond ────────────────────────────────────────────────────────
 
 func TestReadJSONOrRespond_Valid(t *testing.T) {
 	var dst struct{ Name string }
 	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"name":"alice"}`))
 	rec := httptest.NewRecorder()
 
-	ok := readJSONOrRespond(rec, req, &dst)
+	ok := ReadJSONOrRespond(rec, req, &dst)
 
 	require.True(t, ok)
 	assert.Equal(t, "alice", dst.Name)
@@ -30,7 +30,7 @@ func TestReadJSONOrRespond_MalformedJSON_400(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{not valid json`))
 	rec := httptest.NewRecorder()
 
-	ok := readJSONOrRespond(rec, req, &dst)
+	ok := ReadJSONOrRespond(rec, req, &dst)
 
 	assert.False(t, ok)
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
@@ -44,7 +44,7 @@ func TestReadJSONOrRespond_BodyTooLarge_413(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(large))
 	rec := httptest.NewRecorder()
 
-	ok := readJSONOrRespond(rec, req, &dst)
+	ok := ReadJSONOrRespond(rec, req, &dst)
 
 	assert.False(t, ok)
 	assert.Equal(t, http.StatusRequestEntityTooLarge, rec.Code)
@@ -65,7 +65,7 @@ func TestReadJSONOrRespond_ExactLimit_OK(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/", bytes.NewBufferString(body))
 	rec := httptest.NewRecorder()
 
-	ok := readJSONOrRespond(rec, req, &dst)
+	ok := ReadJSONOrRespond(rec, req, &dst)
 
 	assert.True(t, ok)
 	assert.Equal(t, http.StatusOK, rec.Code)

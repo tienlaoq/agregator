@@ -19,6 +19,7 @@ import (
 
 	notificationv1 "github.com/tienlao/agregator/gen/go/notification/v1"
 	"github.com/tienlao/agregator/services/api-gateway/internal/apicatalog"
+	"github.com/tienlao/agregator/services/api-gateway/internal/httpx"
 	"github.com/tienlao/agregator/services/api-gateway/internal/middleware"
 	"github.com/tienlao/agregator/services/api-gateway/internal/realtime/chatws"
 )
@@ -115,7 +116,7 @@ func notificationToJSON(n *notificationv1.Notification) map[string]any {
 func (h *NotificationHandler) List(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.UserIDFromCtx(r.Context())
 	if userID == "" {
-		writeCatalog(w, apicatalog.GatewayAuthUnauthorized)
+		httpx.WriteCatalog(w, apicatalog.GatewayAuthUnauthorized)
 		return
 	}
 	limit := parsePositiveInt(r.URL.Query().Get("limit"), 30, 100)
@@ -129,14 +130,14 @@ func (h *NotificationHandler) List(w http.ResponseWriter, r *http.Request) {
 		UnreadOnly: unreadOnly,
 	})
 	if err != nil {
-		grpcErrorToHTTP(w, err)
+		httpx.GRPCErrorToHTTP(w, err)
 		return
 	}
 	items := make([]map[string]any, 0, len(resp.GetNotifications()))
 	for _, n := range resp.GetNotifications() {
 		items = append(items, notificationToJSON(n))
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{
 		"notifications": items,
 		"total":         resp.GetTotal(),
 		"unread_count":  resp.GetUnreadCount(),
@@ -146,21 +147,21 @@ func (h *NotificationHandler) List(w http.ResponseWriter, r *http.Request) {
 func (h *NotificationHandler) UnreadCount(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.UserIDFromCtx(r.Context())
 	if userID == "" {
-		writeCatalog(w, apicatalog.GatewayAuthUnauthorized)
+		httpx.WriteCatalog(w, apicatalog.GatewayAuthUnauthorized)
 		return
 	}
 	resp, err := h.client.GetUnreadCount(r.Context(), &notificationv1.GetUnreadCountRequest{UserId: userID})
 	if err != nil {
-		grpcErrorToHTTP(w, err)
+		httpx.GRPCErrorToHTTP(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"unread_count": resp.GetUnreadCount()})
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"unread_count": resp.GetUnreadCount()})
 }
 
 func (h *NotificationHandler) MarkRead(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.UserIDFromCtx(r.Context())
 	if userID == "" {
-		writeCatalog(w, apicatalog.GatewayAuthUnauthorized)
+		httpx.WriteCatalog(w, apicatalog.GatewayAuthUnauthorized)
 		return
 	}
 	notificationID := chi.URLParam(r, "notificationId")
@@ -169,24 +170,24 @@ func (h *NotificationHandler) MarkRead(w http.ResponseWriter, r *http.Request) {
 		NotificationId: notificationID,
 	})
 	if err != nil {
-		grpcErrorToHTTP(w, err)
+		httpx.GRPCErrorToHTTP(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"unread_count": resp.GetUnreadCount()})
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"unread_count": resp.GetUnreadCount()})
 }
 
 func (h *NotificationHandler) MarkAllRead(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.UserIDFromCtx(r.Context())
 	if userID == "" {
-		writeCatalog(w, apicatalog.GatewayAuthUnauthorized)
+		httpx.WriteCatalog(w, apicatalog.GatewayAuthUnauthorized)
 		return
 	}
 	resp, err := h.client.MarkAllRead(r.Context(), &notificationv1.MarkAllReadRequest{UserId: userID})
 	if err != nil {
-		grpcErrorToHTTP(w, err)
+		httpx.GRPCErrorToHTTP(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"unread_count": resp.GetUnreadCount()})
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"unread_count": resp.GetUnreadCount()})
 }
 
 // IssueWSTicket mints a one-time Redis ticket for the notifications WebSocket.
@@ -195,11 +196,11 @@ func (h *NotificationHandler) MarkAllRead(w http.ResponseWriter, r *http.Request
 func (h *NotificationHandler) IssueWSTicket(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.UserIDFromCtx(r.Context())
 	if userID == "" {
-		writeCatalog(w, apicatalog.GatewayAuthUnauthorized)
+		httpx.WriteCatalog(w, apicatalog.GatewayAuthUnauthorized)
 		return
 	}
 	if h.ticketRedis == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "ws_ticket_unavailable"})
+		httpx.WriteJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "ws_ticket_unavailable"})
 		return
 	}
 	id := uuid.NewString()
@@ -211,14 +212,14 @@ func (h *NotificationHandler) IssueWSTicket(w http.ResponseWriter, r *http.Reque
 		"origin":  origin,
 	})
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "marshal"})
+		httpx.WriteJSON(w, http.StatusInternalServerError, map[string]any{"error": "marshal"})
 		return
 	}
 	if err := h.ticketRedis.Set(r.Context(), "chat:wst:"+id, payload, wsTicketTTL).Err(); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "redis"})
+		httpx.WriteJSON(w, http.StatusInternalServerError, map[string]any{"error": "redis"})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{
 		"ticket":         id,
 		"expires_in_sec": int(wsTicketTTL.Seconds()),
 	})
@@ -499,7 +500,7 @@ func (h *NotificationHandler) NotifyMasterReviewCreated(ctx context.Context, mas
 func (h *NotificationHandler) WS(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.UserIDFromCtx(r.Context())
 	if userID == "" {
-		writeCatalog(w, apicatalog.GatewayAuthUnauthorized)
+		httpx.WriteCatalog(w, apicatalog.GatewayAuthUnauthorized)
 		return
 	}
 	rawConn, err := h.upgrader.Upgrade(w, r, nil)

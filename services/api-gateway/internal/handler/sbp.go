@@ -1,6 +1,10 @@
 package handler
 
-import "net/http"
+import (
+	"net/http"
+
+	"github.com/tienlao/agregator/services/api-gateway/internal/httpx"
+)
 
 // sbpBank is one selectable СБП member bank: the id used for payout routing plus
 // a human-readable label for the bank picker.
@@ -31,7 +35,7 @@ var stubSBPBanks = []sbpBank{
 // ListSBPBanks GET /api/v1/sbp/banks — directory consumed by the payout bank
 // picker on the owner/master finance pages. STUB: see stubSBPBanks.
 func ListSBPBanks(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{
 		"banks": stubSBPBanks,
 		"stub":  true,
 	})

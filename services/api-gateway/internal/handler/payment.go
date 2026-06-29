@@ -13,6 +13,7 @@ import (
 	"github.com/rs/zerolog"
 	paymentv1 "github.com/tienlao/agregator/gen/go/payment/v1"
 	"github.com/tienlao/agregator/services/api-gateway/internal/apicatalog"
+	"github.com/tienlao/agregator/services/api-gateway/internal/httpx"
 	"github.com/tienlao/agregator/services/api-gateway/internal/limits"
 	"github.com/tienlao/agregator/services/api-gateway/internal/middleware"
 )
@@ -131,10 +132,10 @@ func (h *PaymentHandler) Webhook(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		var mbe *http.MaxBytesError
 		if errors.As(err, &mbe) {
-			writeCatalog(w, apicatalog.GatewayRequestInvalidBody)
+			httpx.WriteCatalog(w, apicatalog.GatewayRequestInvalidBody)
 			return
 		}
-		writeCatalog(w, apicatalog.GatewayRequestBodyReadFailed)
+		httpx.WriteCatalog(w, apicatalog.GatewayRequestBodyReadFailed)
 		return
 	}
 
@@ -147,7 +148,7 @@ func (h *PaymentHandler) Webhook(w http.ResponseWriter, r *http.Request) {
 			h.log.Warn().
 				Str("client_ip", clientIP).
 				Msg("payment webhook rejected: source IP not in allowlist")
-			writeCatalog(w, apicatalog.GatewayPaymentWebhookForbidden)
+			httpx.WriteCatalog(w, apicatalog.GatewayPaymentWebhookForbidden)
 			return
 		}
 	}
@@ -159,7 +160,7 @@ func (h *PaymentHandler) Webhook(w http.ResponseWriter, r *http.Request) {
 			h.log.Warn().
 				Str("client_ip", middleware.ClientIPFromCtx(r.Context())).
 				Msg("payment webhook rejected: invalid or missing X-Signature")
-			writeCatalog(w, apicatalog.GatewayPaymentWebhookForbidden)
+			httpx.WriteCatalog(w, apicatalog.GatewayPaymentWebhookForbidden)
 			return
 		}
 	}
@@ -189,7 +190,7 @@ func (h *PaymentHandler) Webhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	httpx.WriteJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
 // ipAllowed returns true when clientIP string is covered by at least one entry

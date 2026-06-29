@@ -6,6 +6,7 @@ import (
 
 	authv1 "github.com/tienlao/agregator/gen/go/auth/v1"
 	"github.com/tienlao/agregator/services/api-gateway/internal/apicatalog"
+	"github.com/tienlao/agregator/services/api-gateway/internal/httpx"
 	"github.com/tienlao/agregator/services/api-gateway/internal/middleware"
 )
 
@@ -27,11 +28,11 @@ type resendVerificationRequest struct {
 // opened in a browser that may not carry an access token.
 func (h *AuthHandler) VerifyEmail(w http.ResponseWriter, r *http.Request) {
 	var req verifyEmailRequest
-	if !readJSONOrRespond(w, r, &req) {
+	if !httpx.ReadJSONOrRespond(w, r, &req) {
 		return
 	}
 	if strings.TrimSpace(req.Token) == "" {
-		writeCatalog(w, apicatalog.GatewayRequestInvalidBody)
+		httpx.WriteCatalog(w, apicatalog.GatewayRequestInvalidBody)
 		return
 	}
 
@@ -39,11 +40,11 @@ func (h *AuthHandler) VerifyEmail(w http.ResponseWriter, r *http.Request) {
 		Token: strings.TrimSpace(req.Token),
 	})
 	if err != nil {
-		grpcErrorToHTTP(w, err)
+		httpx.GRPCErrorToHTTP(w, err)
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]string{"status": "email_verified"})
+	httpx.WriteJSON(w, http.StatusOK, map[string]string{"status": "email_verified"})
 }
 
 // ResendVerification re-issues a verification link. Anti-enumeration: always
@@ -51,11 +52,11 @@ func (h *AuthHandler) VerifyEmail(w http.ResponseWriter, r *http.Request) {
 // or is already verified — auth-service silently no-ops those cases.
 func (h *AuthHandler) ResendVerification(w http.ResponseWriter, r *http.Request) {
 	var req resendVerificationRequest
-	if !readJSONOrRespond(w, r, &req) {
+	if !httpx.ReadJSONOrRespond(w, r, &req) {
 		return
 	}
 	if strings.TrimSpace(req.Email) == "" {
-		writeCatalog(w, apicatalog.GatewayRequestEmailRequired)
+		httpx.WriteCatalog(w, apicatalog.GatewayRequestEmailRequired)
 		return
 	}
 
@@ -63,11 +64,11 @@ func (h *AuthHandler) ResendVerification(w http.ResponseWriter, r *http.Request)
 		Email: strings.TrimSpace(req.Email),
 	})
 	if err != nil {
-		grpcErrorToHTTP(w, err)
+		httpx.GRPCErrorToHTTP(w, err)
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]string{"message": resendVerificationSuccessMessageRU})
+	httpx.WriteJSON(w, http.StatusOK, map[string]string{"message": resendVerificationSuccessMessageRU})
 }
 
 // GetEmailVerificationStatus reports whether the authenticated user's email is
@@ -76,7 +77,7 @@ func (h *AuthHandler) ResendVerification(w http.ResponseWriter, r *http.Request)
 func (h *AuthHandler) GetEmailVerificationStatus(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.UserIDFromCtx(r.Context())
 	if userID == "" {
-		writeCatalog(w, apicatalog.GatewayAuthUnauthorized)
+		httpx.WriteCatalog(w, apicatalog.GatewayAuthUnauthorized)
 		return
 	}
 
@@ -84,9 +85,9 @@ func (h *AuthHandler) GetEmailVerificationStatus(w http.ResponseWriter, r *http.
 		UserId: userID,
 	})
 	if err != nil {
-		grpcErrorToHTTP(w, err)
+		httpx.GRPCErrorToHTTP(w, err)
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]bool{"email_verified": resp.GetEmailVerified()})
+	httpx.WriteJSON(w, http.StatusOK, map[string]bool{"email_verified": resp.GetEmailVerified()})
 }

@@ -11,6 +11,7 @@ import (
 	userv1 "github.com/tienlao/agregator/gen/go/user/v1"
 	venuev1 "github.com/tienlao/agregator/gen/go/venue/v1"
 	"github.com/tienlao/agregator/services/api-gateway/internal/apicatalog"
+	"github.com/tienlao/agregator/services/api-gateway/internal/httpx"
 	"github.com/tienlao/agregator/services/api-gateway/internal/middleware"
 )
 
@@ -54,7 +55,7 @@ func NewBookingHandler(
 func (h *BookingHandler) Create(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.UserIDFromCtx(r.Context())
 	if userID == "" {
-		writeCatalog(w, apicatalog.GatewayAuthUnauthorized)
+		httpx.WriteCatalog(w, apicatalog.GatewayAuthUnauthorized)
 		return
 	}
 
@@ -70,7 +71,7 @@ func (h *BookingHandler) Create(w http.ResponseWriter, r *http.Request) {
 		Guests     int32    `json:"guests"`
 		Comment    string   `json:"comment"`
 	}
-	if !readJSONOrRespond(w, r, &req) {
+	if !httpx.ReadJSONOrRespond(w, r, &req) {
 		return
 	}
 
@@ -79,7 +80,7 @@ func (h *BookingHandler) Create(w http.ResponseWriter, r *http.Request) {
 		timeFrom = req.Time
 	}
 	if timeFrom == "" {
-		writeCatalog(w, apicatalog.GatewayBookingTimeFromRequired)
+		httpx.WriteCatalog(w, apicatalog.GatewayBookingTimeFromRequired)
 		return
 	}
 	timeTo := req.TimeTo
@@ -112,7 +113,7 @@ func (h *BookingHandler) Create(w http.ResponseWriter, r *http.Request) {
 		Comment:    req.Comment,
 	})
 	if err != nil {
-		grpcErrorToHTTP(w, err)
+		httpx.GRPCErrorToHTTP(w, err)
 		return
 	}
 
@@ -127,22 +128,22 @@ func (h *BookingHandler) Create(w http.ResponseWriter, r *http.Request) {
 		)
 	}
 
-	writeJSON(w, http.StatusCreated, bookingToJSON(resp))
+	httpx.WriteJSON(w, http.StatusCreated, bookingToJSON(resp))
 }
 
 func (h *BookingHandler) ListMy(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.UserIDFromCtx(r.Context())
 	if userID == "" {
-		writeCatalog(w, apicatalog.GatewayAuthUnauthorized)
+		httpx.WriteCatalog(w, apicatalog.GatewayAuthUnauthorized)
 		return
 	}
 
 	q := r.URL.Query()
-	page, ok := queryInt(w, r, "page", 0, 0, 10000)
+	page, ok := httpx.QueryInt(w, r, "page", 0, 0, 10000)
 	if !ok {
 		return
 	}
-	pageSize, ok := queryInt(w, r, "page_size", 0, 0, 200)
+	pageSize, ok := httpx.QueryInt(w, r, "page_size", 0, 0, 200)
 	if !ok {
 		return
 	}
@@ -154,11 +155,11 @@ func (h *BookingHandler) ListMy(w http.ResponseWriter, r *http.Request) {
 		PageSize: int32(pageSize),
 	})
 	if err != nil {
-		grpcErrorToHTTP(w, err)
+		httpx.GRPCErrorToHTTP(w, err)
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{
 		"bookings": bookingList(resp.GetBookings()),
 		"total":    resp.GetTotal(),
 	})
@@ -171,17 +172,17 @@ func (h *BookingHandler) Get(w http.ResponseWriter, r *http.Request) {
 		Id: id,
 	})
 	if err != nil {
-		grpcErrorToHTTP(w, err)
+		httpx.GRPCErrorToHTTP(w, err)
 		return
 	}
 
-	writeJSON(w, http.StatusOK, bookingToJSON(resp))
+	httpx.WriteJSON(w, http.StatusOK, bookingToJSON(resp))
 }
 
 func (h *BookingHandler) Cancel(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.UserIDFromCtx(r.Context())
 	if userID == "" {
-		writeCatalog(w, apicatalog.GatewayAuthUnauthorized)
+		httpx.WriteCatalog(w, apicatalog.GatewayAuthUnauthorized)
 		return
 	}
 	id := chi.URLParam(r, "id")
@@ -191,23 +192,23 @@ func (h *BookingHandler) Cancel(w http.ResponseWriter, r *http.Request) {
 		UserId: userID,
 	})
 	if err != nil {
-		grpcErrorToHTTP(w, err)
+		httpx.GRPCErrorToHTTP(w, err)
 		return
 	}
 
-	writeJSON(w, http.StatusOK, bookingToJSON(resp))
+	httpx.WriteJSON(w, http.StatusOK, bookingToJSON(resp))
 }
 
 func (h *BookingHandler) ListVenueBookings(w http.ResponseWriter, r *http.Request) {
 	ownerID := middleware.UserIDFromCtx(r.Context())
 	if ownerID == "" {
-		writeCatalog(w, apicatalog.GatewayAuthUnauthorized)
+		httpx.WriteCatalog(w, apicatalog.GatewayAuthUnauthorized)
 		return
 	}
 	venueID := chi.URLParam(r, "venueId")
 
 	q := r.URL.Query()
-	pageSize, ok := queryInt(w, r, "page_size", 20, 1, 200)
+	pageSize, ok := httpx.QueryInt(w, r, "page_size", 20, 1, 200)
 	if !ok {
 		return
 	}
@@ -222,7 +223,7 @@ func (h *BookingHandler) ListVenueBookings(w http.ResponseWriter, r *http.Reques
 		Cursor:   cursor,
 	})
 	if err != nil {
-		grpcErrorToHTTP(w, err)
+		httpx.GRPCErrorToHTTP(w, err)
 		return
 	}
 
@@ -238,7 +239,7 @@ func (h *BookingHandler) ListVenueBookings(w http.ResponseWriter, r *http.Reques
 	if nc := resp.GetNextCursor(); nc != "" {
 		result["next_cursor"] = nc
 	}
-	writeJSON(w, http.StatusOK, result)
+	httpx.WriteJSON(w, http.StatusOK, result)
 }
 
 func (h *BookingHandler) resolveUserNames(r *http.Request, bookings []map[string]any) map[string]string {
@@ -312,7 +313,7 @@ func bookingList(bookings []*bookingv1.BookingResponse) []map[string]any {
 func (h *BookingHandler) ListBookingStaffNotes(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.UserIDFromCtx(r.Context())
 	if userID == "" {
-		writeCatalog(w, apicatalog.GatewayAuthUnauthorized)
+		httpx.WriteCatalog(w, apicatalog.GatewayAuthUnauthorized)
 		return
 	}
 	bookingID := chi.URLParam(r, "bookingId")
@@ -322,7 +323,7 @@ func (h *BookingHandler) ListBookingStaffNotes(w http.ResponseWriter, r *http.Re
 		RequesterUserId: userID,
 	})
 	if err != nil {
-		grpcErrorToHTTP(w, err)
+		httpx.GRPCErrorToHTTP(w, err)
 		return
 	}
 	notes := make([]map[string]any, 0, len(resp.GetNotes()))
@@ -336,13 +337,13 @@ func (h *BookingHandler) ListBookingStaffNotes(w http.ResponseWriter, r *http.Re
 			"created_at":     n.GetCreatedAt().AsTime(),
 		})
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"notes": notes})
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"notes": notes})
 }
 
 func (h *BookingHandler) AddBookingStaffNote(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.UserIDFromCtx(r.Context())
 	if userID == "" {
-		writeCatalog(w, apicatalog.GatewayAuthUnauthorized)
+		httpx.WriteCatalog(w, apicatalog.GatewayAuthUnauthorized)
 		return
 	}
 	bookingID := chi.URLParam(r, "bookingId")
@@ -350,7 +351,7 @@ func (h *BookingHandler) AddBookingStaffNote(w http.ResponseWriter, r *http.Requ
 	var req struct {
 		Body string `json:"body"`
 	}
-	if !readJSONOrRespond(w, r, &req) {
+	if !httpx.ReadJSONOrRespond(w, r, &req) {
 		return
 	}
 
@@ -360,11 +361,11 @@ func (h *BookingHandler) AddBookingStaffNote(w http.ResponseWriter, r *http.Requ
 		Body:            req.Body,
 	})
 	if err != nil {
-		grpcErrorToHTTP(w, err)
+		httpx.GRPCErrorToHTTP(w, err)
 		return
 	}
 	n := resp.GetNote()
-	writeJSON(w, http.StatusCreated, map[string]any{
+	httpx.WriteJSON(w, http.StatusCreated, map[string]any{
 		"note": map[string]any{
 			"id":             n.GetId(),
 			"booking_id":     n.GetBookingId(),

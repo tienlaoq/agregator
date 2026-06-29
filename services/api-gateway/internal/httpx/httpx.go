@@ -1,4 +1,13 @@
-package handler
+// Package httpx holds domain-agnostic HTTP helpers shared by every gateway
+// handler: JSON request/response coding, query-param parsing, and gRPC→HTTP
+// error mapping.
+//
+// It is a leaf package — it depends only on apicatalog and limits, never on
+// the handler package. This is deliberate: keeping these helpers out of
+// package handler lets per-domain handler subpackages import them without
+// creating an import cycle back through the handler root (see docs/TECH_DEBT.md,
+// the api-gateway god-package entry).
+package httpx
 
 import (
 	"encoding/json"
@@ -12,10 +21,10 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-// writeJSON serialises v to a buffer first, then writes status + headers + body
+// WriteJSON serialises v to a buffer first, then writes status + headers + body
 // atomically. This prevents the client from receiving a partial JSON body with a
 // 200 OK when json.Marshal encounters an un-serialisable value (NaN, cyclic ref).
-func writeJSON(w http.ResponseWriter, code int, v any) {
+func WriteJSON(w http.ResponseWriter, code int, v any) {
 	b, err := json.Marshal(v)
 	if err != nil {
 		http.Error(w, `{"error":"internal serialisation error"}`, http.StatusInternalServerError)
@@ -28,27 +37,19 @@ func writeJSON(w http.ResponseWriter, code int, v any) {
 	_, _ = w.Write(b)
 }
 
-// readJSON decodes a JSON request body into v.
-//
-// The body is capped at limits.JSONMaxBodyBytes (default 64 KiB) via
-// http.MaxBytesReader before decoding begins. Requests that exceed the limit
-// cause the connection to be closed after the 413 response; the error is
-// returned as-is so callers can distinguish it from malformed JSON if needed.
-//
-// Callers should respond with 413 on *http.MaxBytesError and 400 on any other
-// error. The convenience wrapper readJSONOrRespond handles both cases.
-// readJSON decodes a JSON request body into v, capping the read at
-// limits.JSONMaxBodyBytes (default 64 KiB).
+// ReadJSON decodes a JSON request body into v, capping the read at
+// limits.JSONMaxBodyBytes (default 64 KiB) via http.MaxBytesReader before
+// decoding begins.
 //
 // Returns *http.MaxBytesError when the body exceeds the limit, or a JSON
-// syntax/type error otherwise. Prefer readJSONOrRespond at call sites.
-func readJSON(w http.ResponseWriter, r *http.Request, v any) error {
+// syntax/type error otherwise. Prefer ReadJSONOrRespond at call sites.
+func ReadJSON(w http.ResponseWriter, r *http.Request, v any) error {
 	r.Body = http.MaxBytesReader(w, r.Body, limits.JSONMaxBodyBytes)
 	defer r.Body.Close()
 	return json.NewDecoder(r.Body).Decode(v)
 }
 
-// readJSONOrRespond decodes the JSON body into v and writes the appropriate
+// ReadJSONOrRespond decodes the JSON body into v and writes the appropriate
 // error response on failure:
 //   - 413 Request Entity Too Large when the body exceeds JSONMaxBodyBytes
 //   - 400 Bad Request for malformed JSON
@@ -56,21 +57,21 @@ func readJSON(w http.ResponseWriter, r *http.Request, v any) error {
 // Returns false when an error response was written; the caller must return
 // immediately in that case.
 //
-//	if !readJSONOrRespond(w, r, &req) { return }
-func readJSONOrRespond(w http.ResponseWriter, r *http.Request, v any) bool {
-	if err := readJSON(w, r, v); err != nil {
+//	if !httpx.ReadJSONOrRespond(w, r, &req) { return }
+func ReadJSONOrRespond(w http.ResponseWriter, r *http.Request, v any) bool {
+	if err := ReadJSON(w, r, v); err != nil {
 		var maxErr *http.MaxBytesError
 		if errors.As(err, &maxErr) {
-			writeCatalog(w, apicatalog.GatewayRequestBodyTooLarge)
+			WriteCatalog(w, apicatalog.GatewayRequestBodyTooLarge)
 			return false
 		}
-		writeCatalog(w, apicatalog.GatewayRequestInvalidBody)
+		WriteCatalog(w, apicatalog.GatewayRequestInvalidBody)
 		return false
 	}
 	return true
 }
 
-// queryInt reads a query parameter as an integer.
+// QueryInt reads a query parameter as an integer.
 //
 // Behaviour:
 //   - Parameter absent or empty string → returns (def, true). No error.
@@ -79,16 +80,16 @@ func readJSONOrRespond(w http.ResponseWriter, r *http.Request, v any) bool {
 //
 // The caller must return immediately when ok is false (the 400 was already written).
 //
-//	page, ok := queryInt(w, r, "page", 0, 0, 10000)
+//	page, ok := httpx.QueryInt(w, r, "page", 0, 0, 10000)
 //	if !ok { return }
-func queryInt(w http.ResponseWriter, r *http.Request, key string, def, min, max int) (int, bool) {
+func QueryInt(w http.ResponseWriter, r *http.Request, key string, def, min, max int) (int, bool) {
 	raw := strings.TrimSpace(r.URL.Query().Get(key))
 	if raw == "" {
 		return def, true
 	}
 	v, err := strconv.Atoi(raw)
 	if err != nil || v < min || (max > 0 && v > max) {
-		writeCatalog(w, apicatalog.GatewayRequestInvalidQuery.WithMessage(
+		WriteCatalog(w, apicatalog.GatewayRequestInvalidQuery.WithMessage(
 			"параметр «"+key+"» должен быть целым числом",
 		))
 		return 0, false
@@ -96,13 +97,16 @@ func queryInt(w http.ResponseWriter, r *http.Request, key string, def, min, max 
 	return v, true
 }
 
-func writeCatalog(w http.ResponseWriter, e apicatalog.Entry) {
+// WriteCatalog writes a catalogued API error to w.
+func WriteCatalog(w http.ResponseWriter, e apicatalog.Entry) {
 	e.Write(w)
 }
 
-func grpcErrorToHTTP(w http.ResponseWriter, err error) {
+// GRPCErrorToHTTP maps a gRPC status error onto the matching catalogued HTTP
+// response, falling back to GatewayUpstreamUnknown for unmapped codes.
+func GRPCErrorToHTTP(w http.ResponseWriter, err error) {
 	if err == nil {
-		writeCatalog(w, apicatalog.GatewayUpstreamUnknown.WithMessage("unknown error"))
+		WriteCatalog(w, apicatalog.GatewayUpstreamUnknown.WithMessage("unknown error"))
 		return
 	}
 	st := status.Convert(err)
@@ -111,12 +115,12 @@ func grpcErrorToHTTP(w http.ResponseWriter, err error) {
 		if msg == "" {
 			msg = strings.TrimSpace(err.Error())
 		}
-		writeCatalog(w, ent.WithMessage(msg))
+		WriteCatalog(w, ent.WithMessage(msg))
 		return
 	}
 	msg := strings.TrimSpace(st.Message())
 	if msg == "" {
 		msg = strings.TrimSpace(err.Error())
 	}
-	writeCatalog(w, apicatalog.GatewayUpstreamUnknown.WithMessage(msg))
+	WriteCatalog(w, apicatalog.GatewayUpstreamUnknown.WithMessage(msg))
 }

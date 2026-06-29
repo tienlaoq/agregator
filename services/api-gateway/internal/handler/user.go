@@ -9,6 +9,7 @@ import (
 	userv1 "github.com/tienlao/agregator/gen/go/user/v1"
 	venuev1 "github.com/tienlao/agregator/gen/go/venue/v1"
 	"github.com/tienlao/agregator/services/api-gateway/internal/apicatalog"
+	"github.com/tienlao/agregator/services/api-gateway/internal/httpx"
 	"github.com/tienlao/agregator/services/api-gateway/internal/middleware"
 )
 
@@ -31,17 +32,17 @@ func NewUserHandler(
 func (h *UserHandler) GetMe(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.UserIDFromCtx(r.Context())
 	if userID == "" {
-		writeCatalog(w, apicatalog.GatewayAuthUnauthorized)
+		httpx.WriteCatalog(w, apicatalog.GatewayAuthUnauthorized)
 		return
 	}
 
 	resp, err := h.client.GetUser(r.Context(), &userv1.GetUserRequest{Id: userID})
 	if err != nil {
-		grpcErrorToHTTP(w, err)
+		httpx.GRPCErrorToHTTP(w, err)
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{
 		"id":         resp.GetId(),
 		"email":      resp.GetEmail(),
 		"phone":      resp.GetPhone(),
@@ -71,18 +72,18 @@ func (h *UserHandler) GetMe(w http.ResponseWriter, r *http.Request) {
 func (h *UserHandler) DeleteMe(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.UserIDFromCtx(r.Context())
 	if userID == "" {
-		writeCatalog(w, apicatalog.GatewayAuthUnauthorized)
+		httpx.WriteCatalog(w, apicatalog.GatewayAuthUnauthorized)
 		return
 	}
 
 	var req struct {
 		Confirmation string `json:"confirmation"`
 	}
-	if !readJSONOrRespond(w, r, &req) {
+	if !httpx.ReadJSONOrRespond(w, r, &req) {
 		return
 	}
 	if strings.TrimSpace(req.Confirmation) == "" {
-		writeCatalog(w, apicatalog.GatewayAccountConfirmationRequired)
+		httpx.WriteCatalog(w, apicatalog.GatewayAccountConfirmationRequired)
 		return
 	}
 
@@ -90,17 +91,17 @@ func (h *UserHandler) DeleteMe(w http.ResponseWriter, r *http.Request) {
 	// the cascade decision (more trustworthy than the JWT claim).
 	user, err := h.client.GetUser(r.Context(), &userv1.GetUserRequest{Id: userID})
 	if err != nil {
-		grpcErrorToHTTP(w, err)
+		httpx.GRPCErrorToHTTP(w, err)
 		return
 	}
 
 	if user.GetRole() == "admin" {
-		writeCatalog(w, apicatalog.GatewayAccountAdminSelfDeleteForbidden)
+		httpx.WriteCatalog(w, apicatalog.GatewayAccountAdminSelfDeleteForbidden)
 		return
 	}
 
 	if !strings.EqualFold(strings.TrimSpace(req.Confirmation), strings.TrimSpace(user.GetEmail())) {
-		writeCatalog(w, apicatalog.GatewayAccountConfirmationMismatch)
+		httpx.WriteCatalog(w, apicatalog.GatewayAccountConfirmationMismatch)
 		return
 	}
 
@@ -108,25 +109,25 @@ func (h *UserHandler) DeleteMe(w http.ResponseWriter, r *http.Request) {
 	switch user.GetRole() {
 	case "venue_owner":
 		if _, err := h.venue.SuspendVenuesByOwner(r.Context(), &venuev1.SuspendVenuesByOwnerRequest{OwnerId: userID}); err != nil {
-			grpcErrorToHTTP(w, err)
+			httpx.GRPCErrorToHTTP(w, err)
 			return
 		}
 	case "master":
 		if _, err := h.master.SuspendMasterByUser(r.Context(), &masterv1.SuspendMasterByUserRequest{UserId: userID}); err != nil {
-			grpcErrorToHTTP(w, err)
+			httpx.GRPCErrorToHTTP(w, err)
 			return
 		}
 	}
 
 	// 2. Revoke authentication material (credential + refresh tokens).
 	if _, err := h.auth.DeleteAccount(r.Context(), &authv1.DeleteAccountRequest{UserId: userID}); err != nil {
-		grpcErrorToHTTP(w, err)
+		httpx.GRPCErrorToHTTP(w, err)
 		return
 	}
 
 	// 3. Soft-delete + anonymise the user record.
 	if _, err := h.client.DeleteUser(r.Context(), &userv1.DeleteUserRequest{Id: userID}); err != nil {
-		grpcErrorToHTTP(w, err)
+		httpx.GRPCErrorToHTTP(w, err)
 		return
 	}
 
@@ -136,7 +137,7 @@ func (h *UserHandler) DeleteMe(w http.ResponseWriter, r *http.Request) {
 func (h *UserHandler) UpdateMe(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.UserIDFromCtx(r.Context())
 	if userID == "" {
-		writeCatalog(w, apicatalog.GatewayAuthUnauthorized)
+		httpx.WriteCatalog(w, apicatalog.GatewayAuthUnauthorized)
 		return
 	}
 
@@ -146,7 +147,7 @@ func (h *UserHandler) UpdateMe(w http.ResponseWriter, r *http.Request) {
 		AvatarURL *string `json:"avatar_url"`
 		Bio       *string `json:"bio"`
 	}
-	if !readJSONOrRespond(w, r, &req) {
+	if !httpx.ReadJSONOrRespond(w, r, &req) {
 		return
 	}
 
@@ -166,11 +167,11 @@ func (h *UserHandler) UpdateMe(w http.ResponseWriter, r *http.Request) {
 
 	resp, err := h.client.UpdateUser(r.Context(), grpcReq)
 	if err != nil {
-		grpcErrorToHTTP(w, err)
+		httpx.GRPCErrorToHTTP(w, err)
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{
 		"id":         resp.GetId(),
 		"email":      resp.GetEmail(),
 		"phone":      resp.GetPhone(),

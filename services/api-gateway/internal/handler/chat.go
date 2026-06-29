@@ -23,6 +23,7 @@ import (
 	userv1 "github.com/tienlao/agregator/gen/go/user/v1"
 	venuev1 "github.com/tienlao/agregator/gen/go/venue/v1"
 	"github.com/tienlao/agregator/services/api-gateway/internal/apicatalog"
+	"github.com/tienlao/agregator/services/api-gateway/internal/httpx"
 	"github.com/tienlao/agregator/services/api-gateway/internal/limits"
 	"github.com/tienlao/agregator/services/api-gateway/internal/middleware"
 	"github.com/tienlao/agregator/services/api-gateway/internal/ratelimit"
@@ -290,11 +291,11 @@ func (h *ChatHandler) HandleFanoutMessage(data []byte) {
 func (h *ChatHandler) IssueWSTicket(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.UserIDFromCtx(r.Context())
 	if userID == "" {
-		writeCatalog(w, apicatalog.GatewayAuthUnauthorized)
+		httpx.WriteCatalog(w, apicatalog.GatewayAuthUnauthorized)
 		return
 	}
 	if h.ticketRedis == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]any{
+		httpx.WriteJSON(w, http.StatusServiceUnavailable, map[string]any{
 			"error": "ws_ticket_unavailable",
 		})
 		return
@@ -310,15 +311,15 @@ func (h *ChatHandler) IssueWSTicket(w http.ResponseWriter, r *http.Request) {
 		"origin":  origin,
 	})
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "marshal"})
+		httpx.WriteJSON(w, http.StatusInternalServerError, map[string]any{"error": "marshal"})
 		return
 	}
 	key := "chat:wst:" + id
 	if err := h.ticketRedis.Set(r.Context(), key, payload, wsTicketTTL).Err(); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "redis"})
+		httpx.WriteJSON(w, http.StatusInternalServerError, map[string]any{"error": "redis"})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{
 		"ticket":         id,
 		"expires_in_sec": int(wsTicketTTL.Seconds()),
 	})
@@ -341,14 +342,14 @@ func parsePositiveInt(raw string, def, max int32) int32 {
 func (h *ChatHandler) EnsureThread(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.UserIDFromCtx(r.Context())
 	if userID == "" {
-		writeCatalog(w, apicatalog.GatewayAuthUnauthorized)
+		httpx.WriteCatalog(w, apicatalog.GatewayAuthUnauthorized)
 		return
 	}
 	var body struct {
 		Kind  string `json:"kind"`
 		RefID string `json:"ref_id"`
 	}
-	if !readJSONOrRespond(w, r, &body) {
+	if !httpx.ReadJSONOrRespond(w, r, &body) {
 		return
 	}
 	var (
@@ -363,22 +364,22 @@ func (h *ChatHandler) EnsureThread(w http.ResponseWriter, r *http.Request) {
 	case "master_booking":
 		t, err = h.resolver.ensureMasterBookingThread(r, userID, strings.TrimSpace(body.RefID))
 	default:
-		writeCatalog(w, apicatalog.GatewayRequestInvalidBody.WithMessage("unsupported thread kind"))
+		httpx.WriteCatalog(w, apicatalog.GatewayRequestInvalidBody.WithMessage("unsupported thread kind"))
 		return
 	}
 	if err != nil {
-		grpcErrorToHTTP(w, err)
+		httpx.GRPCErrorToHTTP(w, err)
 		return
 	}
 	item := chatThreadToJSON(t)
 	attachPeerDisplayToThreadJSON(item, t.GetId(), h.resolver.peerDisplayNamesBatch(r.Context(), userID, []*chatv1.ChatThread{t}))
-	writeJSON(w, http.StatusOK, map[string]any{"thread": item})
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"thread": item})
 }
 
 func (h *ChatHandler) ListThreads(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.UserIDFromCtx(r.Context())
 	if userID == "" {
-		writeCatalog(w, apicatalog.GatewayAuthUnauthorized)
+		httpx.WriteCatalog(w, apicatalog.GatewayAuthUnauthorized)
 		return
 	}
 	limit := parsePositiveInt(r.URL.Query().Get("limit"), 100, 200)
@@ -389,7 +390,7 @@ func (h *ChatHandler) ListThreads(w http.ResponseWriter, r *http.Request) {
 		Offset: offset,
 	})
 	if err != nil {
-		grpcErrorToHTTP(w, err)
+		httpx.GRPCErrorToHTTP(w, err)
 		return
 	}
 	rawThreads := resp.GetThreads()
@@ -400,13 +401,13 @@ func (h *ChatHandler) ListThreads(w http.ResponseWriter, r *http.Request) {
 		attachPeerDisplayToThreadJSON(item, t.GetId(), peerByThread)
 		threads = append(threads, item)
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"threads": threads, "total": resp.GetTotal()})
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"threads": threads, "total": resp.GetTotal()})
 }
 
 func (h *ChatHandler) ListMessages(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.UserIDFromCtx(r.Context())
 	if userID == "" {
-		writeCatalog(w, apicatalog.GatewayAuthUnauthorized)
+		httpx.WriteCatalog(w, apicatalog.GatewayAuthUnauthorized)
 		return
 	}
 	limit := parsePositiveInt(r.URL.Query().Get("limit"), 200, 500)
@@ -419,32 +420,32 @@ func (h *ChatHandler) ListMessages(w http.ResponseWriter, r *http.Request) {
 		Offset:   offset,
 	})
 	if err != nil {
-		grpcErrorToHTTP(w, err)
+		httpx.GRPCErrorToHTTP(w, err)
 		return
 	}
 	messages := make([]map[string]any, 0, len(resp.GetMessages()))
 	for _, m := range resp.GetMessages() {
 		messages = append(messages, chatMessageToJSON(m))
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"messages": messages, "total": resp.GetTotal()})
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"messages": messages, "total": resp.GetTotal()})
 }
 
 func (h *ChatHandler) SendMessage(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.UserIDFromCtx(r.Context())
 	if userID == "" {
-		writeCatalog(w, apicatalog.GatewayAuthUnauthorized)
+		httpx.WriteCatalog(w, apicatalog.GatewayAuthUnauthorized)
 		return
 	}
 	threadID := chi.URLParam(r, "threadId")
 	if !h.allowSend(r.Context(), userID, threadID) {
-		writeCatalog(w, apicatalog.GatewayRequestRateLimited.WithMessage("chat send rate limit exceeded"))
+		httpx.WriteCatalog(w, apicatalog.GatewayRequestRateLimited.WithMessage("chat send rate limit exceeded"))
 		return
 	}
 	var body struct {
 		Text        string `json:"text"`
 		ClientMsgID string `json:"client_msg_id"`
 	}
-	if !readJSONOrRespond(w, r, &body) {
+	if !httpx.ReadJSONOrRespond(w, r, &body) {
 		return
 	}
 	resp, err := h.client.SendMessage(r.Context(), &chatv1.SendMessageRequest{
@@ -454,7 +455,7 @@ func (h *ChatHandler) SendMessage(w http.ResponseWriter, r *http.Request) {
 		ClientMsgId: strings.TrimSpace(body.ClientMsgID),
 	})
 	if err != nil {
-		grpcErrorToHTTP(w, err)
+		httpx.GRPCErrorToHTTP(w, err)
 		return
 	}
 	// Both "type" (v1 WS clients) and "event" (v2 WS clients) are included in
@@ -467,7 +468,7 @@ func (h *ChatHandler) SendMessage(w http.ResponseWriter, r *http.Request) {
 		"message": chatMessageToJSON(resp.GetMessage()),
 	}
 	h.emitToUsers(resp.GetThread().GetParticipantUserIds(), payload)
-	writeJSON(w, http.StatusCreated, map[string]any{
+	httpx.WriteJSON(w, http.StatusCreated, map[string]any{
 		"thread":  chatThreadToJSON(resp.GetThread()),
 		"message": chatMessageToJSON(resp.GetMessage()),
 	})
@@ -476,7 +477,7 @@ func (h *ChatHandler) SendMessage(w http.ResponseWriter, r *http.Request) {
 func (h *ChatHandler) MarkRead(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.UserIDFromCtx(r.Context())
 	if userID == "" {
-		writeCatalog(w, apicatalog.GatewayAuthUnauthorized)
+		httpx.WriteCatalog(w, apicatalog.GatewayAuthUnauthorized)
 		return
 	}
 	threadID := chi.URLParam(r, "threadId")
@@ -485,7 +486,7 @@ func (h *ChatHandler) MarkRead(w http.ResponseWriter, r *http.Request) {
 		UserId:   userID,
 	})
 	if err != nil {
-		grpcErrorToHTTP(w, err)
+		httpx.GRPCErrorToHTTP(w, err)
 		return
 	}
 	// See SendMessage: both keys present for v1/v2 client compatibility.
@@ -495,7 +496,7 @@ func (h *ChatHandler) MarkRead(w http.ResponseWriter, r *http.Request) {
 		"thread": chatThreadToJSON(resp.GetThread()),
 	}
 	h.emitToUsers(resp.GetThread().GetParticipantUserIds(), payload)
-	writeJSON(w, http.StatusOK, map[string]any{"thread": chatThreadToJSON(resp.GetThread())})
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"thread": chatThreadToJSON(resp.GetThread())})
 }
 
 var (
@@ -525,7 +526,7 @@ func init() {
 func (h *ChatHandler) WS(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.UserIDFromCtx(r.Context())
 	if userID == "" {
-		writeCatalog(w, apicatalog.GatewayAuthUnauthorized)
+		httpx.WriteCatalog(w, apicatalog.GatewayAuthUnauthorized)
 		return
 	}
 	rawConn, err := h.upgrader.Upgrade(w, r, nil)

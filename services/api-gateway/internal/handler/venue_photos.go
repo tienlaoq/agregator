@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 	venuev1 "github.com/tienlao/agregator/gen/go/venue/v1"
 	"github.com/tienlao/agregator/services/api-gateway/internal/apicatalog"
+	"github.com/tienlao/agregator/services/api-gateway/internal/httpx"
 	"github.com/tienlao/agregator/services/api-gateway/internal/limits"
 	"github.com/tienlao/agregator/services/api-gateway/internal/middleware"
 )
@@ -65,12 +66,12 @@ func keyFromPublicURL(publicURL string) string {
 func (h *VenueHandler) UploadVenuePhoto(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.UserIDFromCtx(r.Context())
 	if userID == "" {
-		writeCatalog(w, apicatalog.GatewayAuthUnauthorized)
+		httpx.WriteCatalog(w, apicatalog.GatewayAuthUnauthorized)
 		return
 	}
 	venueID := chi.URLParam(r, "id")
 	if _, err := uuid.Parse(venueID); err != nil {
-		writeCatalog(w, apicatalog.GatewayRequestInvalidVenueId)
+		httpx.WriteCatalog(w, apicatalog.GatewayRequestInvalidVenueId)
 		return
 	}
 
@@ -83,7 +84,7 @@ func (h *VenueHandler) UploadVenuePhoto(w http.ResponseWriter, r *http.Request) 
 	key := "venues/" + venueID + "/" + uuid.NewString() + photo.Ext
 	publicURL, err := h.storage.Put(r.Context(), key, photo.ContentType, -1, photo.Body)
 	if err != nil {
-		writeCatalog(w, apicatalog.GatewayStorageFailed)
+		httpx.WriteCatalog(w, apicatalog.GatewayStorageFailed)
 		return
 	}
 
@@ -95,28 +96,28 @@ func (h *VenueHandler) UploadVenuePhoto(w http.ResponseWriter, r *http.Request) 
 	if err != nil {
 		// Best-effort cleanup: remove the uploaded object if the DB write fails.
 		_ = h.storage.Delete(r.Context(), key)
-		grpcErrorToHTTP(w, err)
+		httpx.GRPCErrorToHTTP(w, err)
 		return
 	}
 
-	writeJSON(w, http.StatusCreated, venueToJSON(resp, true))
+	httpx.WriteJSON(w, http.StatusCreated, venueToJSON(resp, true))
 }
 
 // DeleteVenuePhoto handles DELETE /venues/{id}/photos/{photoId}.
 func (h *VenueHandler) DeleteVenuePhoto(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.UserIDFromCtx(r.Context())
 	if userID == "" {
-		writeCatalog(w, apicatalog.GatewayAuthUnauthorized)
+		httpx.WriteCatalog(w, apicatalog.GatewayAuthUnauthorized)
 		return
 	}
 	venueID := chi.URLParam(r, "id")
 	photoID := chi.URLParam(r, "photoId")
 	if _, err := uuid.Parse(venueID); err != nil {
-		writeCatalog(w, apicatalog.GatewayRequestInvalidVenueId)
+		httpx.WriteCatalog(w, apicatalog.GatewayRequestInvalidVenueId)
 		return
 	}
 	if _, err := uuid.Parse(photoID); err != nil {
-		writeCatalog(w, apicatalog.GatewayRequestInvalidPhotoId)
+		httpx.WriteCatalog(w, apicatalog.GatewayRequestInvalidPhotoId)
 		return
 	}
 
@@ -126,7 +127,7 @@ func (h *VenueHandler) DeleteVenuePhoto(w http.ResponseWriter, r *http.Request) 
 		PhotoId: photoID,
 	})
 	if err != nil {
-		grpcErrorToHTTP(w, err)
+		httpx.GRPCErrorToHTTP(w, err)
 		return
 	}
 	if u := delResp.GetUrl(); u != "" {
@@ -137,27 +138,27 @@ func (h *VenueHandler) DeleteVenuePhoto(w http.ResponseWriter, r *http.Request) 
 
 	v, err := h.client.GetVenue(r.Context(), &venuev1.GetVenueRequest{Id: venueID})
 	if err != nil {
-		grpcErrorToHTTP(w, err)
+		httpx.GRPCErrorToHTTP(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, venueToJSON(v, true))
+	httpx.WriteJSON(w, http.StatusOK, venueToJSON(v, true))
 }
 
 // SetVenueCoverPhoto handles POST /venues/{id}/photos/{photoId}/cover.
 func (h *VenueHandler) SetVenueCoverPhoto(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.UserIDFromCtx(r.Context())
 	if userID == "" {
-		writeCatalog(w, apicatalog.GatewayAuthUnauthorized)
+		httpx.WriteCatalog(w, apicatalog.GatewayAuthUnauthorized)
 		return
 	}
 	venueID := chi.URLParam(r, "id")
 	photoID := chi.URLParam(r, "photoId")
 	if _, err := uuid.Parse(venueID); err != nil {
-		writeCatalog(w, apicatalog.GatewayRequestInvalidVenueId)
+		httpx.WriteCatalog(w, apicatalog.GatewayRequestInvalidVenueId)
 		return
 	}
 	if _, err := uuid.Parse(photoID); err != nil {
-		writeCatalog(w, apicatalog.GatewayRequestInvalidPhotoId)
+		httpx.WriteCatalog(w, apicatalog.GatewayRequestInvalidPhotoId)
 		return
 	}
 
@@ -167,8 +168,8 @@ func (h *VenueHandler) SetVenueCoverPhoto(w http.ResponseWriter, r *http.Request
 		PhotoId: photoID,
 	})
 	if err != nil {
-		grpcErrorToHTTP(w, err)
+		httpx.GRPCErrorToHTTP(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, venueToJSON(resp, true))
+	httpx.WriteJSON(w, http.StatusOK, venueToJSON(resp, true))
 }
