@@ -13,6 +13,7 @@ import (
 	paymentv1 "github.com/tienlao/agregator/gen/go/payment/v1"
 	venuev1 "github.com/tienlao/agregator/gen/go/venue/v1"
 	"github.com/tienlao/agregator/services/api-gateway/internal/apicatalog"
+	"github.com/tienlao/agregator/services/api-gateway/internal/httpx"
 	"github.com/tienlao/agregator/services/api-gateway/internal/middleware"
 )
 
@@ -59,21 +60,21 @@ func NewPayoutHandler(
 func (h *PayoutHandler) resolveVenuePartner(w http.ResponseWriter, r *http.Request) (string, string, bool) {
 	actorID := middleware.UserIDFromCtx(r.Context())
 	if actorID == "" {
-		writeCatalog(w, apicatalog.GatewayAuthUnauthorized)
+		httpx.WriteCatalog(w, apicatalog.GatewayAuthUnauthorized)
 		return "", "", false
 	}
 	venueID := strings.TrimSpace(chi.URLParam(r, "venueId"))
 	if venueID == "" {
-		writeCatalog(w, apicatalog.GatewayRequestInvalidVenueId)
+		httpx.WriteCatalog(w, apicatalog.GatewayRequestInvalidVenueId)
 		return "", "", false
 	}
 	v, err := h.venue.GetVenue(r.Context(), &venuev1.GetVenueRequest{Id: venueID})
 	if err != nil {
-		grpcErrorToHTTP(w, err)
+		httpx.GRPCErrorToHTTP(w, err)
 		return "", "", false
 	}
 	if v.GetOwnerId() != actorID {
-		writeCatalog(w, apicatalog.GatewayPayoutForbidden)
+		httpx.WriteCatalog(w, apicatalog.GatewayPayoutForbidden)
 		return "", "", false
 	}
 	return "venue", venueID, true
@@ -84,7 +85,7 @@ func (h *PayoutHandler) resolveVenuePartner(w http.ResponseWriter, r *http.Reque
 func (h *PayoutHandler) resolveMasterPartner(w http.ResponseWriter, r *http.Request) (string, string, bool) {
 	actorID := middleware.UserIDFromCtx(r.Context())
 	if actorID == "" {
-		writeCatalog(w, apicatalog.GatewayAuthUnauthorized)
+		httpx.WriteCatalog(w, apicatalog.GatewayAuthUnauthorized)
 		return "", "", false
 	}
 	resp, err := h.master.GetMyProfile(r.Context(), &masterv1.GetMyProfileRequest{UserId: actorID})
@@ -93,15 +94,15 @@ func (h *PayoutHandler) resolveMasterPartner(w http.ResponseWriter, r *http.Requ
 		// than surfacing a bare upstream 404. Payouts require a profile to key
 		// the partner ledger on.
 		if status.Code(err) == codes.NotFound {
-			writeCatalog(w, apicatalog.GatewayMasterNotCreated)
+			httpx.WriteCatalog(w, apicatalog.GatewayMasterNotCreated)
 			return "", "", false
 		}
-		grpcErrorToHTTP(w, err)
+		httpx.GRPCErrorToHTTP(w, err)
 		return "", "", false
 	}
 	masterID := strings.TrimSpace(resp.GetMaster().GetId())
 	if masterID == "" {
-		writeCatalog(w, apicatalog.GatewayMasterNotCreated)
+		httpx.WriteCatalog(w, apicatalog.GatewayMasterNotCreated)
 		return "", "", false
 	}
 	return "master", masterID, true
@@ -201,13 +202,13 @@ func (h *PayoutHandler) getPayoutMethod(w http.ResponseWriter, r *http.Request, 
 	if err != nil {
 		// No method configured yet is a normal state, not an error for the UI.
 		if status.Code(err) == codes.NotFound {
-			writeJSON(w, http.StatusOK, map[string]any{"payout_method": nil})
+			httpx.WriteJSON(w, http.StatusOK, map[string]any{"payout_method": nil})
 			return
 		}
-		grpcErrorToHTTP(w, err)
+		httpx.GRPCErrorToHTTP(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"payout_method": payoutMethodToJSON(resp)})
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"payout_method": payoutMethodToJSON(resp)})
 }
 
 func (h *PayoutHandler) setPayoutMethod(w http.ResponseWriter, r *http.Request, partnerType, partnerID string) {
@@ -235,13 +236,13 @@ func (h *PayoutHandler) setPayoutMethod(w http.ResponseWriter, r *http.Request, 
 		SBPPhone  string `json:"sbp_phone"`
 		SBPBankID string `json:"sbp_bank_id"`
 	}
-	if !readJSONOrRespond(w, r, &req) {
+	if !httpx.ReadJSONOrRespond(w, r, &req) {
 		return
 	}
 
 	kind, ok := payoutKindFromString(req.Kind)
 	if !ok {
-		writeCatalog(w, apicatalog.GatewayPayoutInvalidKind)
+		httpx.WriteCatalog(w, apicatalog.GatewayPayoutInvalidKind)
 		return
 	}
 
@@ -266,7 +267,7 @@ func (h *PayoutHandler) setPayoutMethod(w http.ResponseWriter, r *http.Request, 
 		SbpBankId: strings.TrimSpace(req.SBPBankID),
 	})
 	if err != nil {
-		grpcErrorToHTTP(w, err)
+		httpx.GRPCErrorToHTTP(w, err)
 		return
 	}
 
@@ -284,7 +285,7 @@ func (h *PayoutHandler) setPayoutMethod(w http.ResponseWriter, r *http.Request, 
 		Str("kind", payoutKindToString(kind)).
 		Msg("partner payout method updated")
 
-	writeJSON(w, http.StatusOK, map[string]any{"payout_method": payoutMethodToJSON(resp)})
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"payout_method": payoutMethodToJSON(resp)})
 }
 
 func (h *PayoutHandler) getBalance(w http.ResponseWriter, r *http.Request, partnerType, partnerID string) {
@@ -293,7 +294,7 @@ func (h *PayoutHandler) getBalance(w http.ResponseWriter, r *http.Request, partn
 		PartnerId:   partnerID,
 	})
 	if err != nil {
-		grpcErrorToHTTP(w, err)
+		httpx.GRPCErrorToHTTP(w, err)
 		return
 	}
 	out := map[string]any{
@@ -306,15 +307,15 @@ func (h *PayoutHandler) getBalance(w http.ResponseWriter, r *http.Request, partn
 	if ts := resp.GetLastEntryAt(); ts != nil {
 		out["last_entry_at"] = ts.AsTime()
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"balance": out})
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"balance": out})
 }
 
 func (h *PayoutHandler) listLedger(w http.ResponseWriter, r *http.Request, partnerType, partnerID string) {
-	limit, ok := queryInt(w, r, "limit", 50, 1, 200)
+	limit, ok := httpx.QueryInt(w, r, "limit", 50, 1, 200)
 	if !ok {
 		return
 	}
-	offset, ok := queryInt(w, r, "offset", 0, 0, 1_000_000)
+	offset, ok := httpx.QueryInt(w, r, "offset", 0, 0, 1_000_000)
 	if !ok {
 		return
 	}
@@ -325,22 +326,22 @@ func (h *PayoutHandler) listLedger(w http.ResponseWriter, r *http.Request, partn
 		Offset:      int32(offset),
 	})
 	if err != nil {
-		grpcErrorToHTTP(w, err)
+		httpx.GRPCErrorToHTTP(w, err)
 		return
 	}
 	entries := make([]map[string]any, 0, len(resp.GetEntries()))
 	for _, e := range resp.GetEntries() {
 		entries = append(entries, ledgerEntryToJSON(e))
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"entries": entries})
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"entries": entries})
 }
 
 func (h *PayoutHandler) listPayouts(w http.ResponseWriter, r *http.Request, partnerType, partnerID string) {
-	limit, ok := queryInt(w, r, "limit", 50, 1, 200)
+	limit, ok := httpx.QueryInt(w, r, "limit", 50, 1, 200)
 	if !ok {
 		return
 	}
-	offset, ok := queryInt(w, r, "offset", 0, 0, 1_000_000)
+	offset, ok := httpx.QueryInt(w, r, "offset", 0, 0, 1_000_000)
 	if !ok {
 		return
 	}
@@ -351,14 +352,14 @@ func (h *PayoutHandler) listPayouts(w http.ResponseWriter, r *http.Request, part
 		Offset:      int32(offset),
 	})
 	if err != nil {
-		grpcErrorToHTTP(w, err)
+		httpx.GRPCErrorToHTTP(w, err)
 		return
 	}
 	payouts := make([]map[string]any, 0, len(resp.GetPayouts()))
 	for _, p := range resp.GetPayouts() {
 		payouts = append(payouts, payoutToJSON(p))
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"payouts": payouts})
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"payouts": payouts})
 }
 
 // ── Converters ───────────────────────────────────────────────────────────────

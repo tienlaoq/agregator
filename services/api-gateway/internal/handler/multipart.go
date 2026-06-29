@@ -9,6 +9,7 @@ import (
 	"net/http"
 
 	"github.com/tienlao/agregator/services/api-gateway/internal/apicatalog"
+	"github.com/tienlao/agregator/services/api-gateway/internal/httpx"
 )
 
 // photoReadResult holds the streaming reader and detected metadata for the
@@ -39,7 +40,7 @@ func readPhotoFromMultipart(w http.ResponseWriter, r *http.Request) (res photoRe
 	// multipart.Reader requires the boundary from Content-Type.
 	_, params, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
 	if err != nil || params["boundary"] == "" {
-		writeCatalog(w, apicatalog.GatewayRequestInvalidMultipart)
+		httpx.WriteCatalog(w, apicatalog.GatewayRequestInvalidMultipart)
 		return
 	}
 
@@ -49,11 +50,11 @@ func readPhotoFromMultipart(w http.ResponseWriter, r *http.Request) (res photoRe
 		part, err := mr.NextPart()
 		if errors.Is(err, io.EOF) {
 			// Exhausted all parts without finding "photo".
-			writeCatalog(w, apicatalog.GatewayRequestPhotoFieldRequired)
+			httpx.WriteCatalog(w, apicatalog.GatewayRequestPhotoFieldRequired)
 			return
 		}
 		if err != nil {
-			writeCatalog(w, apicatalog.GatewayRequestInvalidMultipart)
+			httpx.WriteCatalog(w, apicatalog.GatewayRequestInvalidMultipart)
 			return
 		}
 
@@ -70,18 +71,18 @@ func readPhotoFromMultipart(w http.ResponseWriter, r *http.Request) (res photoRe
 		head := make([]byte, 512)
 		n, readErr := io.ReadFull(part, head)
 		if readErr != nil && readErr != io.ErrUnexpectedEOF && readErr != io.EOF {
-			writeCatalog(w, apicatalog.GatewayRequestInvalidFileRead)
+			httpx.WriteCatalog(w, apicatalog.GatewayRequestInvalidFileRead)
 			return
 		}
 		if n == 0 {
-			writeCatalog(w, apicatalog.GatewayRequestEmptyFile)
+			httpx.WriteCatalog(w, apicatalog.GatewayRequestEmptyFile)
 			return
 		}
 
 		ct := http.DetectContentType(head[:n])
 		ext, valid := venuePhotoExt(ct, head[:n])
 		if !valid {
-			writeCatalog(w, apicatalog.GatewayRequestInvalidImageType)
+			httpx.WriteCatalog(w, apicatalog.GatewayRequestInvalidImageType)
 			return
 		}
 

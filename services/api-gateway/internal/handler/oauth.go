@@ -16,6 +16,7 @@ import (
 	"github.com/rs/zerolog"
 	authv1 "github.com/tienlao/agregator/gen/go/auth/v1"
 	"github.com/tienlao/agregator/services/api-gateway/internal/apicatalog"
+	"github.com/tienlao/agregator/services/api-gateway/internal/httpx"
 	"golang.org/x/oauth2"
 )
 
@@ -306,13 +307,13 @@ func generatePKCE() (verifier, challenge string, err error) {
 
 func (h *OAuthHandler) VKRedirect(w http.ResponseWriter, r *http.Request) {
 	if h.vk == nil {
-		writeCatalog(w, apicatalog.GatewayOauthVkNotConfigured)
+		httpx.WriteCatalog(w, apicatalog.GatewayOauthVkNotConfigured)
 		return
 	}
 	state, err := generateState()
 	if err != nil {
 		h.log.Error().Err(err).Msg("vk redirect: failed to generate state")
-		writeCatalog(w, apicatalog.GatewayUpstreamInternal)
+		httpx.WriteCatalog(w, apicatalog.GatewayUpstreamInternal)
 		return
 	}
 	h.setStateCookie(w, "vk_oauth_state", state)
@@ -323,7 +324,7 @@ func (h *OAuthHandler) VKRedirect(w http.ResponseWriter, r *http.Request) {
 	verifier, challenge, err := generatePKCE()
 	if err != nil {
 		h.log.Error().Err(err).Msg("vk redirect: failed to generate PKCE")
-		writeCatalog(w, apicatalog.GatewayUpstreamInternal)
+		httpx.WriteCatalog(w, apicatalog.GatewayUpstreamInternal)
 		return
 	}
 	h.setPKCECookie(w, verifier)
@@ -343,7 +344,7 @@ func (h *OAuthHandler) VKRedirect(w http.ResponseWriter, r *http.Request) {
 
 func (h *OAuthHandler) VKCallback(w http.ResponseWriter, r *http.Request) {
 	if h.vk == nil {
-		writeCatalog(w, apicatalog.GatewayOauthVkNotConfigured)
+		httpx.WriteCatalog(w, apicatalog.GatewayOauthVkNotConfigured)
 		return
 	}
 
@@ -477,13 +478,13 @@ func fetchVKIDUserInfo(ctx context.Context, client *http.Client, clientID, acces
 
 func (h *OAuthHandler) YandexRedirect(w http.ResponseWriter, r *http.Request) {
 	if h.yandex == nil {
-		writeCatalog(w, apicatalog.GatewayOauthYandexNotConfigured)
+		httpx.WriteCatalog(w, apicatalog.GatewayOauthYandexNotConfigured)
 		return
 	}
 	state, err := generateState()
 	if err != nil {
 		h.log.Error().Err(err).Msg("yandex redirect: failed to generate state")
-		writeCatalog(w, apicatalog.GatewayUpstreamInternal)
+		httpx.WriteCatalog(w, apicatalog.GatewayUpstreamInternal)
 		return
 	}
 	h.setStateCookie(w, "yandex_oauth_state", state)
@@ -493,7 +494,7 @@ func (h *OAuthHandler) YandexRedirect(w http.ResponseWriter, r *http.Request) {
 
 func (h *OAuthHandler) YandexCallback(w http.ResponseWriter, r *http.Request) {
 	if h.yandex == nil {
-		writeCatalog(w, apicatalog.GatewayOauthYandexNotConfigured)
+		httpx.WriteCatalog(w, apicatalog.GatewayOauthYandexNotConfigured)
 		return
 	}
 

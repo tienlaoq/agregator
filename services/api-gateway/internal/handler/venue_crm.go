@@ -11,6 +11,7 @@ import (
 	crmv1 "github.com/tienlao/agregator/gen/go/crm/v1"
 	userv1 "github.com/tienlao/agregator/gen/go/user/v1"
 	"github.com/tienlao/agregator/services/api-gateway/internal/apicatalog"
+	"github.com/tienlao/agregator/services/api-gateway/internal/httpx"
 	"github.com/tienlao/agregator/services/api-gateway/internal/middleware"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -64,7 +65,7 @@ func venueStaffLoadUserDisplays(ctx context.Context, c userv1.UserServiceClient,
 func (h *VenueHandler) ListVenueStaff(w http.ResponseWriter, r *http.Request) {
 	actorID := middleware.UserIDFromCtx(r.Context())
 	if actorID == "" {
-		writeCatalog(w, apicatalog.GatewayAuthUnauthorized)
+		httpx.WriteCatalog(w, apicatalog.GatewayAuthUnauthorized)
 		return
 	}
 	venueID := chi.URLParam(r, "venueId")
@@ -73,7 +74,7 @@ func (h *VenueHandler) ListVenueStaff(w http.ResponseWriter, r *http.Request) {
 		ActorId: actorID,
 	})
 	if err != nil {
-		grpcErrorToHTTP(w, err)
+		httpx.GRPCErrorToHTTP(w, err)
 		return
 	}
 	members := resp.GetMembers()
@@ -113,17 +114,17 @@ func (h *VenueHandler) ListVenueStaff(w http.ResponseWriter, r *http.Request) {
 		}
 		out = append(out, row)
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"staff": out})
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"staff": out})
 }
 
 func (h *VenueHandler) AddVenueStaffByEmail(w http.ResponseWriter, r *http.Request) {
 	if h.userClient == nil {
-		writeCatalog(w, apicatalog.GatewayDependencyUserServiceUnavailable.WithMessage("user service not configured"))
+		httpx.WriteCatalog(w, apicatalog.GatewayDependencyUserServiceUnavailable.WithMessage("user service not configured"))
 		return
 	}
 	actorID := middleware.UserIDFromCtx(r.Context())
 	if actorID == "" {
-		writeCatalog(w, apicatalog.GatewayAuthUnauthorized)
+		httpx.WriteCatalog(w, apicatalog.GatewayAuthUnauthorized)
 		return
 	}
 	venueID := chi.URLParam(r, "venueId")
@@ -132,26 +133,26 @@ func (h *VenueHandler) AddVenueStaffByEmail(w http.ResponseWriter, r *http.Reque
 		Email string `json:"email"`
 		Role  string `json:"role"`
 	}
-	if !readJSONOrRespond(w, r, &req) {
+	if !httpx.ReadJSONOrRespond(w, r, &req) {
 		return
 	}
 	email := strings.TrimSpace(strings.ToLower(req.Email))
 	if email == "" {
-		writeCatalog(w, apicatalog.GatewayRequestEmailRequired)
+		httpx.WriteCatalog(w, apicatalog.GatewayRequestEmailRequired)
 		return
 	}
 
 	u, err := h.userClient.GetUserByEmail(r.Context(), &userv1.GetUserByEmailRequest{Email: email})
 	if err != nil {
 		if st, ok := status.FromError(err); ok && st.Code() == codes.NotFound {
-			writeCatalog(w, apicatalog.GatewayCrmStaffEmailNotRegistered)
+			httpx.WriteCatalog(w, apicatalog.GatewayCrmStaffEmailNotRegistered)
 			return
 		}
-		grpcErrorToHTTP(w, err)
+		httpx.GRPCErrorToHTTP(w, err)
 		return
 	}
 	if u == nil || strings.TrimSpace(u.GetId()) == "" {
-		writeCatalog(w, apicatalog.GatewayCrmStaffEmailNotRegistered)
+		httpx.WriteCatalog(w, apicatalog.GatewayCrmStaffEmailNotRegistered)
 		return
 	}
 
@@ -162,7 +163,7 @@ func (h *VenueHandler) AddVenueStaffByEmail(w http.ResponseWriter, r *http.Reque
 		Role:    req.Role,
 	})
 	if err != nil {
-		grpcErrorToHTTP(w, err)
+		httpx.GRPCErrorToHTTP(w, err)
 		return
 	}
 	// Bell notification for the invited worker (best-effort, never fails the
@@ -170,13 +171,13 @@ func (h *VenueHandler) AddVenueStaffByEmail(w http.ResponseWriter, r *http.Reque
 	if h.staffNotifier != nil {
 		h.staffNotifier.NotifyStaffInvited(r.Context(), u.GetId(), venueID, req.Role)
 	}
-	writeJSON(w, http.StatusCreated, map[string]any{"user_id": u.GetId(), "email": u.GetEmail(), "role": req.Role})
+	httpx.WriteJSON(w, http.StatusCreated, map[string]any{"user_id": u.GetId(), "email": u.GetEmail(), "role": req.Role})
 }
 
 func (h *VenueHandler) RemoveVenueStaff(w http.ResponseWriter, r *http.Request) {
 	actorID := middleware.UserIDFromCtx(r.Context())
 	if actorID == "" {
-		writeCatalog(w, apicatalog.GatewayAuthUnauthorized)
+		httpx.WriteCatalog(w, apicatalog.GatewayAuthUnauthorized)
 		return
 	}
 	venueID := chi.URLParam(r, "venueId")
@@ -188,7 +189,7 @@ func (h *VenueHandler) RemoveVenueStaff(w http.ResponseWriter, r *http.Request) 
 		UserId:  targetID,
 	})
 	if err != nil {
-		grpcErrorToHTTP(w, err)
+		httpx.GRPCErrorToHTTP(w, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -261,7 +262,7 @@ func (h *VenueHandler) notifyTaskAssignee(ctx context.Context, t *crmv1.Task, ve
 func (h *VenueHandler) ListVenueCRMTasks(w http.ResponseWriter, r *http.Request) {
 	actorID := middleware.UserIDFromCtx(r.Context())
 	if actorID == "" {
-		writeCatalog(w, apicatalog.GatewayAuthUnauthorized)
+		httpx.WriteCatalog(w, apicatalog.GatewayAuthUnauthorized)
 		return
 	}
 	venueID := chi.URLParam(r, "venueId")
@@ -273,20 +274,20 @@ func (h *VenueHandler) ListVenueCRMTasks(w http.ResponseWriter, r *http.Request)
 		Status:  statusFilter,
 	})
 	if err != nil {
-		grpcErrorToHTTP(w, err)
+		httpx.GRPCErrorToHTTP(w, err)
 		return
 	}
 	tasks := make([]map[string]any, 0, len(resp.GetTasks()))
 	for _, t := range resp.GetTasks() {
 		tasks = append(tasks, crmTaskToMap(t))
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"tasks": tasks})
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"tasks": tasks})
 }
 
 func (h *VenueHandler) CreateVenueCRMTask(w http.ResponseWriter, r *http.Request) {
 	actorID := middleware.UserIDFromCtx(r.Context())
 	if actorID == "" {
-		writeCatalog(w, apicatalog.GatewayAuthUnauthorized)
+		httpx.WriteCatalog(w, apicatalog.GatewayAuthUnauthorized)
 		return
 	}
 	venueID := chi.URLParam(r, "venueId")
@@ -299,12 +300,12 @@ func (h *VenueHandler) CreateVenueCRMTask(w http.ResponseWriter, r *http.Request
 		Priority       string  `json:"priority"`
 		DueAt          *string `json:"due_at"`
 	}
-	if !readJSONOrRespond(w, r, &req) {
+	if !httpx.ReadJSONOrRespond(w, r, &req) {
 		return
 	}
 	dueAt, ok := parseCRMDueAt(req.DueAt)
 	if !ok {
-		writeCatalog(w, apicatalog.GatewayRequestInvalidBody.WithMessage("неверный формат срока (ожидается RFC3339)"))
+		httpx.WriteCatalog(w, apicatalog.GatewayRequestInvalidBody.WithMessage("неверный формат срока (ожидается RFC3339)"))
 		return
 	}
 
@@ -325,22 +326,22 @@ func (h *VenueHandler) CreateVenueCRMTask(w http.ResponseWriter, r *http.Request
 
 	resp, err := h.crm.CreateTask(r.Context(), grpcReq)
 	if err != nil {
-		grpcErrorToHTTP(w, err)
+		httpx.GRPCErrorToHTTP(w, err)
 		return
 	}
 	t := resp.GetTask()
 	if t == nil {
-		writeJSON(w, http.StatusOK, map[string]any{"task": map[string]any{}})
+		httpx.WriteJSON(w, http.StatusOK, map[string]any{"task": map[string]any{}})
 		return
 	}
 	h.notifyTaskAssignee(r.Context(), t, venueID, actorID)
-	writeJSON(w, http.StatusCreated, map[string]any{"task": crmTaskToMap(t)})
+	httpx.WriteJSON(w, http.StatusCreated, map[string]any{"task": crmTaskToMap(t)})
 }
 
 func (h *VenueHandler) CompleteVenueCRMTask(w http.ResponseWriter, r *http.Request) {
 	actorID := middleware.UserIDFromCtx(r.Context())
 	if actorID == "" {
-		writeCatalog(w, apicatalog.GatewayAuthUnauthorized)
+		httpx.WriteCatalog(w, apicatalog.GatewayAuthUnauthorized)
 		return
 	}
 	venueID := chi.URLParam(r, "venueId")
@@ -352,7 +353,7 @@ func (h *VenueHandler) CompleteVenueCRMTask(w http.ResponseWriter, r *http.Reque
 		TaskId:  taskID,
 	})
 	if err != nil {
-		grpcErrorToHTTP(w, err)
+		httpx.GRPCErrorToHTTP(w, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -361,7 +362,7 @@ func (h *VenueHandler) CompleteVenueCRMTask(w http.ResponseWriter, r *http.Reque
 func (h *VenueHandler) UpdateVenueCRMTask(w http.ResponseWriter, r *http.Request) {
 	actorID := middleware.UserIDFromCtx(r.Context())
 	if actorID == "" {
-		writeCatalog(w, apicatalog.GatewayAuthUnauthorized)
+		httpx.WriteCatalog(w, apicatalog.GatewayAuthUnauthorized)
 		return
 	}
 	venueID := chi.URLParam(r, "venueId")
@@ -374,12 +375,12 @@ func (h *VenueHandler) UpdateVenueCRMTask(w http.ResponseWriter, r *http.Request
 		AssigneeUserID *string `json:"assignee_user_id"`
 		DueAt          *string `json:"due_at"`
 	}
-	if !readJSONOrRespond(w, r, &req) {
+	if !httpx.ReadJSONOrRespond(w, r, &req) {
 		return
 	}
 	dueAt, ok := parseCRMDueAt(req.DueAt)
 	if !ok {
-		writeCatalog(w, apicatalog.GatewayRequestInvalidBody.WithMessage("неверный формат срока (ожидается RFC3339)"))
+		httpx.WriteCatalog(w, apicatalog.GatewayRequestInvalidBody.WithMessage("неверный формат срока (ожидается RFC3339)"))
 		return
 	}
 
@@ -398,18 +399,18 @@ func (h *VenueHandler) UpdateVenueCRMTask(w http.ResponseWriter, r *http.Request
 
 	resp, err := h.crm.UpdateTask(r.Context(), grpcReq)
 	if err != nil {
-		grpcErrorToHTTP(w, err)
+		httpx.GRPCErrorToHTTP(w, err)
 		return
 	}
 	t := resp.GetTask()
 	h.notifyTaskAssignee(r.Context(), t, venueID, actorID)
-	writeJSON(w, http.StatusOK, map[string]any{"task": crmTaskToMap(t)})
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"task": crmTaskToMap(t)})
 }
 
 func (h *VenueHandler) ReopenVenueCRMTask(w http.ResponseWriter, r *http.Request) {
 	actorID := middleware.UserIDFromCtx(r.Context())
 	if actorID == "" {
-		writeCatalog(w, apicatalog.GatewayAuthUnauthorized)
+		httpx.WriteCatalog(w, apicatalog.GatewayAuthUnauthorized)
 		return
 	}
 	venueID := chi.URLParam(r, "venueId")
@@ -421,16 +422,16 @@ func (h *VenueHandler) ReopenVenueCRMTask(w http.ResponseWriter, r *http.Request
 		TaskId:  taskID,
 	})
 	if err != nil {
-		grpcErrorToHTTP(w, err)
+		httpx.GRPCErrorToHTTP(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"task": crmTaskToMap(resp.GetTask())})
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"task": crmTaskToMap(resp.GetTask())})
 }
 
 func (h *VenueHandler) CancelVenueCRMTask(w http.ResponseWriter, r *http.Request) {
 	actorID := middleware.UserIDFromCtx(r.Context())
 	if actorID == "" {
-		writeCatalog(w, apicatalog.GatewayAuthUnauthorized)
+		httpx.WriteCatalog(w, apicatalog.GatewayAuthUnauthorized)
 		return
 	}
 	venueID := chi.URLParam(r, "venueId")
@@ -442,7 +443,7 @@ func (h *VenueHandler) CancelVenueCRMTask(w http.ResponseWriter, r *http.Request
 		TaskId:  taskID,
 	})
 	if err != nil {
-		grpcErrorToHTTP(w, err)
+		httpx.GRPCErrorToHTTP(w, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -487,7 +488,7 @@ func crmGuestToMap(g *crmv1.GuestProfile, d venueStaffUserDisplay) map[string]an
 func (h *VenueHandler) ListVenueGuests(w http.ResponseWriter, r *http.Request) {
 	actorID := middleware.UserIDFromCtx(r.Context())
 	if actorID == "" {
-		writeCatalog(w, apicatalog.GatewayAuthUnauthorized)
+		httpx.WriteCatalog(w, apicatalog.GatewayAuthUnauthorized)
 		return
 	}
 	venueID := chi.URLParam(r, "venueId")
@@ -504,7 +505,7 @@ func (h *VenueHandler) ListVenueGuests(w http.ResponseWriter, r *http.Request) {
 		Offset:  int32(offset),
 	})
 	if err != nil {
-		grpcErrorToHTTP(w, err)
+		httpx.GRPCErrorToHTTP(w, err)
 		return
 	}
 	guests := resp.GetGuests()
@@ -518,13 +519,13 @@ func (h *VenueHandler) ListVenueGuests(w http.ResponseWriter, r *http.Request) {
 	for _, g := range guests {
 		out = append(out, crmGuestToMap(g, displays[g.GetUserId()]))
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"guests": out, "total": resp.GetTotal()})
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"guests": out, "total": resp.GetTotal()})
 }
 
 func (h *VenueHandler) GetVenueGuest(w http.ResponseWriter, r *http.Request) {
 	actorID := middleware.UserIDFromCtx(r.Context())
 	if actorID == "" {
-		writeCatalog(w, apicatalog.GatewayAuthUnauthorized)
+		httpx.WriteCatalog(w, apicatalog.GatewayAuthUnauthorized)
 		return
 	}
 	venueID := chi.URLParam(r, "venueId")
@@ -536,7 +537,7 @@ func (h *VenueHandler) GetVenueGuest(w http.ResponseWriter, r *http.Request) {
 		UserId:  userID,
 	})
 	if err != nil {
-		grpcErrorToHTTP(w, err)
+		httpx.GRPCErrorToHTTP(w, err)
 		return
 	}
 	display := venueStaffLoadUserDisplays(r.Context(), h.userClient, uniqueNonEmptyUserIDs([]string{userID}))[userID]
@@ -554,7 +555,7 @@ func (h *VenueHandler) GetVenueGuest(w http.ResponseWriter, r *http.Request) {
 		}
 		bookings = append(bookings, bm)
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{
 		"guest":           crmGuestToMap(resp.GetProfile(), display),
 		"recent_bookings": bookings,
 	})

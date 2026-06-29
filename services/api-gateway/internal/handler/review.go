@@ -11,6 +11,7 @@ import (
 	userv1 "github.com/tienlao/agregator/gen/go/user/v1"
 	venuev1 "github.com/tienlao/agregator/gen/go/venue/v1"
 	"github.com/tienlao/agregator/services/api-gateway/internal/apicatalog"
+	"github.com/tienlao/agregator/services/api-gateway/internal/httpx"
 	"github.com/tienlao/agregator/services/api-gateway/internal/middleware"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -111,7 +112,7 @@ func (h *ReviewHandler) notifyMasterOfReview(r *http.Request, authorID, masterID
 func (h *ReviewHandler) Create(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.UserIDFromCtx(r.Context())
 	if userID == "" {
-		writeCatalog(w, apicatalog.GatewayAuthUnauthorized)
+		httpx.WriteCatalog(w, apicatalog.GatewayAuthUnauthorized)
 		return
 	}
 
@@ -122,7 +123,7 @@ func (h *ReviewHandler) Create(w http.ResponseWriter, r *http.Request) {
 		Text        string `json:"text"`
 		IsAnonymous bool   `json:"is_anonymous"`
 	}
-	if !readJSONOrRespond(w, r, &req) {
+	if !httpx.ReadJSONOrRespond(w, r, &req) {
 		return
 	}
 
@@ -140,26 +141,26 @@ func (h *ReviewHandler) Create(w http.ResponseWriter, r *http.Request) {
 		if handleReviewCreateError(w, err) {
 			return
 		}
-		grpcErrorToHTTP(w, err)
+		httpx.GRPCErrorToHTTP(w, err)
 		return
 	}
 
 	h.notifyVenueOwnerOfReview(r, userID, req.VenueID, req.Rating)
 	h.notifyMasterOfReview(r, userID, req.MasterID, req.Rating)
 
-	writeJSON(w, http.StatusCreated, reviewToJSON(resp, ""))
+	httpx.WriteJSON(w, http.StatusCreated, reviewToJSON(resp, ""))
 }
 
 func (h *ReviewHandler) CreateForVenue(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.UserIDFromCtx(r.Context())
 	if userID == "" {
-		writeCatalog(w, apicatalog.GatewayAuthUnauthorized)
+		httpx.WriteCatalog(w, apicatalog.GatewayAuthUnauthorized)
 		return
 	}
 
 	venueID := chi.URLParam(r, "venueId")
 	if venueID == "" {
-		writeCatalog(w, apicatalog.GatewayReviewVenueIdRequired)
+		httpx.WriteCatalog(w, apicatalog.GatewayReviewVenueIdRequired)
 		return
 	}
 
@@ -168,7 +169,7 @@ func (h *ReviewHandler) CreateForVenue(w http.ResponseWriter, r *http.Request) {
 		Text        string `json:"text"`
 		IsAnonymous bool   `json:"is_anonymous"`
 	}
-	if !readJSONOrRespond(w, r, &req) {
+	if !httpx.ReadJSONOrRespond(w, r, &req) {
 		return
 	}
 
@@ -185,23 +186,23 @@ func (h *ReviewHandler) CreateForVenue(w http.ResponseWriter, r *http.Request) {
 		if handleReviewCreateError(w, err) {
 			return
 		}
-		grpcErrorToHTTP(w, err)
+		httpx.GRPCErrorToHTTP(w, err)
 		return
 	}
 
 	h.notifyVenueOwnerOfReview(r, userID, venueID, req.Rating)
 
-	writeJSON(w, http.StatusCreated, reviewToJSON(resp, ""))
+	httpx.WriteJSON(w, http.StatusCreated, reviewToJSON(resp, ""))
 }
 
 func (h *ReviewHandler) ListByVenue(w http.ResponseWriter, r *http.Request) {
 	venueID := chi.URLParam(r, "venueId")
 
-	page, ok := queryInt(w, r, "page", 0, 0, 10000)
+	page, ok := httpx.QueryInt(w, r, "page", 0, 0, 10000)
 	if !ok {
 		return
 	}
-	pageSize, ok := queryInt(w, r, "page_size", 0, 0, 200)
+	pageSize, ok := httpx.QueryInt(w, r, "page_size", 0, 0, 200)
 	if !ok {
 		return
 	}
@@ -215,7 +216,7 @@ func (h *ReviewHandler) ListByVenue(w http.ResponseWriter, r *http.Request) {
 		if handleReviewCreateError(w, err) {
 			return
 		}
-		grpcErrorToHTTP(w, err)
+		httpx.GRPCErrorToHTTP(w, err)
 		return
 	}
 
@@ -229,7 +230,7 @@ func (h *ReviewHandler) ListByVenue(w http.ResponseWriter, r *http.Request) {
 		reviews[i] = reviewToJSON(rv, name)
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{
 		"reviews": reviews,
 		"total":   resp.GetTotal(),
 	})
@@ -238,13 +239,13 @@ func (h *ReviewHandler) ListByVenue(w http.ResponseWriter, r *http.Request) {
 func (h *ReviewHandler) CreateForMaster(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.UserIDFromCtx(r.Context())
 	if userID == "" {
-		writeCatalog(w, apicatalog.GatewayAuthUnauthorized)
+		httpx.WriteCatalog(w, apicatalog.GatewayAuthUnauthorized)
 		return
 	}
 
 	masterID := chi.URLParam(r, "masterId")
 	if masterID == "" {
-		writeCatalog(w, apicatalog.GatewayRequestInvalidBody)
+		httpx.WriteCatalog(w, apicatalog.GatewayRequestInvalidBody)
 		return
 	}
 
@@ -253,7 +254,7 @@ func (h *ReviewHandler) CreateForMaster(w http.ResponseWriter, r *http.Request) 
 		Text        string `json:"text"`
 		IsAnonymous bool   `json:"is_anonymous"`
 	}
-	if !readJSONOrRespond(w, r, &req) {
+	if !httpx.ReadJSONOrRespond(w, r, &req) {
 		return
 	}
 
@@ -267,13 +268,13 @@ func (h *ReviewHandler) CreateForMaster(w http.ResponseWriter, r *http.Request) 
 		IsAnonymous: req.IsAnonymous,
 	})
 	if err != nil {
-		grpcErrorToHTTP(w, err)
+		httpx.GRPCErrorToHTTP(w, err)
 		return
 	}
 
 	h.notifyMasterOfReview(r, userID, masterID, req.Rating)
 
-	writeJSON(w, http.StatusCreated, reviewToJSON(resp, ""))
+	httpx.WriteJSON(w, http.StatusCreated, reviewToJSON(resp, ""))
 }
 
 // MasterRating GET /api/v1/masters/{masterId}/rating
@@ -286,10 +287,10 @@ func (h *ReviewHandler) MasterRating(w http.ResponseWriter, r *http.Request) {
 		MasterId: masterID,
 	})
 	if err != nil {
-		grpcErrorToHTTP(w, err)
+		httpx.GRPCErrorToHTTP(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{
 		"master_id":    resp.GetMasterId(),
 		"avg_rating":   resp.GetAvgRating(),
 		"review_count": resp.GetReviewCount(),
@@ -298,11 +299,11 @@ func (h *ReviewHandler) MasterRating(w http.ResponseWriter, r *http.Request) {
 
 func (h *ReviewHandler) ListByMaster(w http.ResponseWriter, r *http.Request) {
 	masterID := chi.URLParam(r, "masterId")
-	page, ok := queryInt(w, r, "page", 0, 0, 10000)
+	page, ok := httpx.QueryInt(w, r, "page", 0, 0, 10000)
 	if !ok {
 		return
 	}
-	pageSize, ok := queryInt(w, r, "page_size", 0, 0, 200)
+	pageSize, ok := httpx.QueryInt(w, r, "page_size", 0, 0, 200)
 	if !ok {
 		return
 	}
@@ -313,7 +314,7 @@ func (h *ReviewHandler) ListByMaster(w http.ResponseWriter, r *http.Request) {
 		PageSize: int32(pageSize),
 	})
 	if err != nil {
-		grpcErrorToHTTP(w, err)
+		httpx.GRPCErrorToHTTP(w, err)
 		return
 	}
 
@@ -327,7 +328,7 @@ func (h *ReviewHandler) ListByMaster(w http.ResponseWriter, r *http.Request) {
 		reviews[i] = reviewToJSON(rv, name)
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{
 		"reviews": reviews,
 		"total":   resp.GetTotal(),
 	})
@@ -386,6 +387,6 @@ func handleReviewCreateError(w http.ResponseWriter, err error) bool {
 	if !strings.Contains(strings.ToLower(st.Message()), "booking is not confirmed by platform") {
 		return false
 	}
-	writeCatalog(w, apicatalog.GatewayReviewBookingNotVerified)
+	httpx.WriteCatalog(w, apicatalog.GatewayReviewBookingNotVerified)
 	return true
 }

@@ -64,12 +64,18 @@ npm run test:e2e     # Playwright (e2e)
 
 ## Handler structure
 
-`services/api-gateway/internal/handler/` — один пакет, ~32 файла. Файлы уже
+`services/api-gateway/internal/handler/` — один пакет, ~30 файлов. Файлы уже
 разделены по доменам (`venue_photos.go`, `venue_crm.go`, `chat_thread_resolver.go`
 и т.д.). При добавлении нового домена (goods, notifications, search) — создавай
-отдельный файл `{domain}.go` в том же пакете. Если пакет перевалит за ~40 файлов,
-смотри `docs/TECH_DEBT.md` — там описан план разбивки на подпакеты и главная
-ловушка (циклический импорт через `response.go`).
+отдельный файл `{domain}.go` в том же пакете.
+
+Общие HTTP-хелперы (`WriteJSON`, `ReadJSONOrRespond`, `QueryInt`, `WriteCatalog`,
+`GRPCErrorToHTTP`) вынесены в leaf-пакет `internal/httpx` — он зависит только от
+`apicatalog` + `limits` и не импортирует `handler`. Это снимает главную ловушку
+будущей разбивки на подпакеты (раньше — циклический импорт через `response.go`,
+теперь файл удалён): доменные подпакеты могут импортировать `httpx` без цикла
+назад в корень `handler`. Новые домен-агностичные хелперы клади в `httpx`,
+домен-специфичные — в файл своего домена.
 
 ## Rules
 

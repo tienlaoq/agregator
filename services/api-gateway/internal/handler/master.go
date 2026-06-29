@@ -16,6 +16,7 @@ import (
 	pkgcities "github.com/tienlao/agregator/pkg/cities"
 	"github.com/tienlao/agregator/pkg/storage"
 	"github.com/tienlao/agregator/services/api-gateway/internal/apicatalog"
+	"github.com/tienlao/agregator/services/api-gateway/internal/httpx"
 	"github.com/tienlao/agregator/services/api-gateway/internal/limits"
 	"github.com/tienlao/agregator/services/api-gateway/internal/middleware"
 	"google.golang.org/grpc/codes"
@@ -184,19 +185,19 @@ func masterProtoToJSONPublic(m *masterv1.Master) map[string]any {
 // ListPublic GET /api/v1/masters
 func (h *MasterHandler) ListPublic(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	page, ok := queryInt(w, r, "page", 0, 0, 10000)
+	page, ok := httpx.QueryInt(w, r, "page", 0, 0, 10000)
 	if !ok {
 		return
 	}
-	pageSize, ok := queryInt(w, r, "page_size", 0, 0, 200)
+	pageSize, ok := httpx.QueryInt(w, r, "page_size", 0, 0, 200)
 	if !ok {
 		return
 	}
-	limit, ok := queryInt(w, r, "limit", 0, 0, 500)
+	limit, ok := httpx.QueryInt(w, r, "limit", 0, 0, 500)
 	if !ok {
 		return
 	}
-	off, ok := queryInt(w, r, "offset", 0, 0, 1000000)
+	off, ok := httpx.QueryInt(w, r, "offset", 0, 0, 1000000)
 	if !ok {
 		return
 	}
@@ -260,14 +261,14 @@ func (h *MasterHandler) ListPublic(w http.ResponseWriter, r *http.Request) {
 		PriceMaxKopecks: priceMaxKop,
 	})
 	if err != nil {
-		grpcErrorToHTTP(w, err)
+		httpx.GRPCErrorToHTTP(w, err)
 		return
 	}
 	list := make([]map[string]any, 0, len(resp.GetMasters()))
 	for _, m := range resp.GetMasters() {
 		list = append(list, masterProtoToJSONPublic(m))
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"masters": list, "total": resp.GetTotal()})
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"masters": list, "total": resp.GetTotal()})
 }
 
 // GetPublic GET /api/v1/masters/{slug}
@@ -275,23 +276,23 @@ func (h *MasterHandler) GetPublic(w http.ResponseWriter, r *http.Request) {
 	slug := chi.URLParam(r, "slug")
 	resp, err := h.client.GetPublicMaster(r.Context(), &masterv1.GetPublicMasterRequest{Slug: slug})
 	if err != nil {
-		grpcErrorToHTTP(w, err)
+		httpx.GRPCErrorToHTTP(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, masterProtoToJSONPublic(resp.GetMaster()))
+	httpx.WriteJSON(w, http.StatusOK, masterProtoToJSONPublic(resp.GetMaster()))
 }
 
 // CreateMyProfile POST /api/v1/owner/master/profile
 func (h *MasterHandler) CreateMyProfile(w http.ResponseWriter, r *http.Request) {
 	uid := middleware.UserIDFromCtx(r.Context())
 	if uid == "" {
-		writeCatalog(w, apicatalog.GatewayAuthUnauthorized)
+		httpx.WriteCatalog(w, apicatalog.GatewayAuthUnauthorized)
 		return
 	}
 	var body struct {
 		DisplayName string `json:"display_name"`
 	}
-	if !readJSONOrRespond(w, r, &body) {
+	if !httpx.ReadJSONOrRespond(w, r, &body) {
 		return
 	}
 	resp, err := h.client.CreateMyProfile(r.Context(), &masterv1.CreateMyProfileRequest{
@@ -299,10 +300,10 @@ func (h *MasterHandler) CreateMyProfile(w http.ResponseWriter, r *http.Request) 
 		DisplayName: strings.TrimSpace(body.DisplayName),
 	})
 	if err != nil {
-		grpcErrorToHTTP(w, err)
+		httpx.GRPCErrorToHTTP(w, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, masterProtoToJSON(resp.GetMaster()))
+	httpx.WriteJSON(w, http.StatusCreated, masterProtoToJSON(resp.GetMaster()))
 }
 
 // GetMyProfile GET /api/v1/owner/master/profile
@@ -310,19 +311,19 @@ func (h *MasterHandler) CreateMyProfile(w http.ResponseWriter, r *http.Request) 
 func (h *MasterHandler) GetMyProfile(w http.ResponseWriter, r *http.Request) {
 	uid := middleware.UserIDFromCtx(r.Context())
 	if uid == "" {
-		writeCatalog(w, apicatalog.GatewayAuthUnauthorized)
+		httpx.WriteCatalog(w, apicatalog.GatewayAuthUnauthorized)
 		return
 	}
 	resp, err := h.client.GetMyProfile(r.Context(), &masterv1.GetMyProfileRequest{UserId: uid})
 	if err != nil {
 		if st, ok := status.FromError(err); ok && st.Code() == codes.NotFound {
-			writeJSON(w, http.StatusOK, map[string]any{"profile": nil})
+			httpx.WriteJSON(w, http.StatusOK, map[string]any{"profile": nil})
 			return
 		}
-		grpcErrorToHTTP(w, err)
+		httpx.GRPCErrorToHTTP(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"profile": masterProtoToJSON(resp.GetMaster())})
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"profile": masterProtoToJSON(resp.GetMaster())})
 }
 
 type masterServicePatch struct {
@@ -503,25 +504,25 @@ func (h *MasterHandler) updateReqFromRaw(uid string, raw map[string]json.RawMess
 func (h *MasterHandler) PatchMyProfile(w http.ResponseWriter, r *http.Request) {
 	uid := middleware.UserIDFromCtx(r.Context())
 	if uid == "" {
-		writeCatalog(w, apicatalog.GatewayAuthUnauthorized)
+		httpx.WriteCatalog(w, apicatalog.GatewayAuthUnauthorized)
 		return
 	}
 	var raw map[string]json.RawMessage
-	if !readJSONOrRespond(w, r, &raw) {
+	if !httpx.ReadJSONOrRespond(w, r, &raw) {
 		return
 	}
 	req, err := h.updateReqFromRaw(uid, raw)
 	if err != nil {
-		writeCatalog(w, apicatalog.GatewayMasterInvalidServices)
+		httpx.WriteCatalog(w, apicatalog.GatewayMasterInvalidServices)
 		return
 	}
 
 	resp, err := h.client.UpdateMyProfile(r.Context(), req)
 	if err != nil {
-		grpcErrorToHTTP(w, err)
+		httpx.GRPCErrorToHTTP(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, masterProtoToJSON(resp.GetMaster()))
+	httpx.WriteJSON(w, http.StatusOK, masterProtoToJSON(resp.GetMaster()))
 }
 
 // SubmitForReview POST /api/v1/owner/master/profile/submit-for-review
@@ -529,39 +530,39 @@ func (h *MasterHandler) PatchMyProfile(w http.ResponseWriter, r *http.Request) {
 func (h *MasterHandler) SubmitForReview(w http.ResponseWriter, r *http.Request) {
 	uid := middleware.UserIDFromCtx(r.Context())
 	if uid == "" {
-		writeCatalog(w, apicatalog.GatewayAuthUnauthorized)
+		httpx.WriteCatalog(w, apicatalog.GatewayAuthUnauthorized)
 		return
 	}
 	bodyBytes, err := io.ReadAll(http.MaxBytesReader(w, r.Body, limits.MasterImportMaxBodyBytes))
 	if err != nil {
-		writeCatalog(w, apicatalog.GatewayRequestInvalidBody)
+		httpx.WriteCatalog(w, apicatalog.GatewayRequestInvalidBody)
 		return
 	}
 	trimmed := bytes.TrimSpace(bodyBytes)
 	if len(trimmed) > 0 {
 		var raw map[string]json.RawMessage
 		if err := json.Unmarshal(trimmed, &raw); err != nil {
-			writeCatalog(w, apicatalog.GatewayRequestInvalidJson)
+			httpx.WriteCatalog(w, apicatalog.GatewayRequestInvalidJson)
 			return
 		}
 		if len(raw) > 0 {
 			upd, err := h.updateReqFromRaw(uid, raw)
 			if err != nil {
-				writeCatalog(w, apicatalog.GatewayMasterInvalidServices)
+				httpx.WriteCatalog(w, apicatalog.GatewayMasterInvalidServices)
 				return
 			}
 			if _, err := h.client.UpdateMyProfile(r.Context(), upd); err != nil {
-				grpcErrorToHTTP(w, err)
+				httpx.GRPCErrorToHTTP(w, err)
 				return
 			}
 		}
 	}
 	resp, err := h.client.SubmitForReview(r.Context(), &masterv1.SubmitMasterForReviewRequest{UserId: uid})
 	if err != nil {
-		grpcErrorToHTTP(w, err)
+		httpx.GRPCErrorToHTTP(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, masterProtoToJSON(resp.GetMaster()))
+	httpx.WriteJSON(w, http.StatusOK, masterProtoToJSON(resp.GetMaster()))
 }
 
 // resolveClientName returns the booking client's display name, or "" when it
@@ -587,7 +588,7 @@ func (h *MasterHandler) resolveClientName(r *http.Request, userID string, cache 
 func (h *MasterHandler) ListMyBookings(w http.ResponseWriter, r *http.Request) {
 	uid := middleware.UserIDFromCtx(r.Context())
 	if uid == "" {
-		writeCatalog(w, apicatalog.GatewayAuthUnauthorized)
+		httpx.WriteCatalog(w, apicatalog.GatewayAuthUnauthorized)
 		return
 	}
 	resp, err := h.client.ListMyMasterBookings(r.Context(), &masterv1.ListMyMasterBookingsRequest{
@@ -595,7 +596,7 @@ func (h *MasterHandler) ListMyBookings(w http.ResponseWriter, r *http.Request) {
 		StatusFilter: r.URL.Query().Get("status"),
 	})
 	if err != nil {
-		grpcErrorToHTTP(w, err)
+		httpx.GRPCErrorToHTTP(w, err)
 		return
 	}
 	nameCache := make(map[string]string, len(resp.GetBookings()))
@@ -618,14 +619,14 @@ func (h *MasterHandler) ListMyBookings(w http.ResponseWriter, r *http.Request) {
 			"created_at":        b.GetCreatedAt().AsTime().Format("2006-01-02T15:04:05Z07:00"),
 		})
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"bookings": out})
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"bookings": out})
 }
 
 // ListMyClientBookings GET /api/v1/my/master-bookings
 func (h *MasterHandler) ListMyClientBookings(w http.ResponseWriter, r *http.Request) {
 	uid := middleware.UserIDFromCtx(r.Context())
 	if uid == "" {
-		writeCatalog(w, apicatalog.GatewayAuthUnauthorized)
+		httpx.WriteCatalog(w, apicatalog.GatewayAuthUnauthorized)
 		return
 	}
 	resp, err := h.client.ListClientMasterBookings(r.Context(), &masterv1.ListClientMasterBookingsRequest{
@@ -633,7 +634,7 @@ func (h *MasterHandler) ListMyClientBookings(w http.ResponseWriter, r *http.Requ
 		StatusFilter: r.URL.Query().Get("status"),
 	})
 	if err != nil {
-		grpcErrorToHTTP(w, err)
+		httpx.GRPCErrorToHTTP(w, err)
 		return
 	}
 	out := make([]map[string]any, 0, len(resp.GetBookings()))
@@ -654,14 +655,14 @@ func (h *MasterHandler) ListMyClientBookings(w http.ResponseWriter, r *http.Requ
 			"created_at":        b.GetCreatedAt().AsTime().Format("2006-01-02T15:04:05Z07:00"),
 		})
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"bookings": out})
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"bookings": out})
 }
 
 // CreateBooking POST /api/v1/masters/{slug}/bookings
 func (h *MasterHandler) CreateBooking(w http.ResponseWriter, r *http.Request) {
 	uid := middleware.UserIDFromCtx(r.Context())
 	if uid == "" {
-		writeCatalog(w, apicatalog.GatewayAuthUnauthorized)
+		httpx.WriteCatalog(w, apicatalog.GatewayAuthUnauthorized)
 		return
 	}
 	slug := chi.URLParam(r, "slug")
@@ -672,7 +673,7 @@ func (h *MasterHandler) CreateBooking(w http.ResponseWriter, r *http.Request) {
 		TimeTo          string `json:"time_to"`
 		Comment         string `json:"comment"`
 	}
-	if !readJSONOrRespond(w, r, &body) {
+	if !httpx.ReadJSONOrRespond(w, r, &body) {
 		return
 	}
 	grpcReq := &masterv1.CreateMasterBookingRequest{
@@ -688,7 +689,7 @@ func (h *MasterHandler) CreateBooking(w http.ResponseWriter, r *http.Request) {
 	}
 	resp, err := h.client.CreateMasterBooking(r.Context(), grpcReq)
 	if err != nil {
-		grpcErrorToHTTP(w, err)
+		httpx.GRPCErrorToHTTP(w, err)
 		return
 	}
 	b := resp.GetBooking()
@@ -707,7 +708,7 @@ func (h *MasterHandler) CreateBooking(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	writeJSON(w, http.StatusCreated, map[string]any{
+	httpx.WriteJSON(w, http.StatusCreated, map[string]any{
 		"id":                b.GetId(),
 		"master_id":         b.GetMasterId(),
 		"client_user_id":    b.GetClientUserId(),
@@ -727,11 +728,11 @@ func (h *MasterHandler) CreateBooking(w http.ResponseWriter, r *http.Request) {
 // ListForModeration GET /api/v1/admin/masters
 func (h *MasterHandler) ListForModeration(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	limit, ok := queryInt(w, r, "limit", 0, 0, 500)
+	limit, ok := httpx.QueryInt(w, r, "limit", 0, 0, 500)
 	if !ok {
 		return
 	}
-	off, ok := queryInt(w, r, "offset", 0, 0, 1000000)
+	off, ok := httpx.QueryInt(w, r, "offset", 0, 0, 1000000)
 	if !ok {
 		return
 	}
@@ -741,21 +742,21 @@ func (h *MasterHandler) ListForModeration(w http.ResponseWriter, r *http.Request
 		Offset:       int32(off),
 	})
 	if err != nil {
-		grpcErrorToHTTP(w, err)
+		httpx.GRPCErrorToHTTP(w, err)
 		return
 	}
 	list := make([]map[string]any, 0, len(resp.GetMasters()))
 	for _, m := range resp.GetMasters() {
 		list = append(list, masterProtoToJSON(m))
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"masters": list, "total": resp.GetTotal()})
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"masters": list, "total": resp.GetTotal()})
 }
 
 // Moderate POST /api/v1/admin/masters/{id}/moderate
 func (h *MasterHandler) Moderate(w http.ResponseWriter, r *http.Request) {
 	modID := middleware.UserIDFromCtx(r.Context())
 	if modID == "" {
-		writeCatalog(w, apicatalog.GatewayAuthUnauthorized)
+		httpx.WriteCatalog(w, apicatalog.GatewayAuthUnauthorized)
 		return
 	}
 	id := chi.URLParam(r, "id")
@@ -763,7 +764,7 @@ func (h *MasterHandler) Moderate(w http.ResponseWriter, r *http.Request) {
 		Action  string `json:"action"`
 		Comment string `json:"comment"`
 	}
-	if !readJSONOrRespond(w, r, &body) {
+	if !httpx.ReadJSONOrRespond(w, r, &body) {
 		return
 	}
 	resp, err := h.client.ModerateMaster(r.Context(), &masterv1.ModerateMasterRequest{
@@ -773,7 +774,7 @@ func (h *MasterHandler) Moderate(w http.ResponseWriter, r *http.Request) {
 		Comment:     body.Comment,
 	})
 	if err != nil {
-		grpcErrorToHTTP(w, err)
+		httpx.GRPCErrorToHTTP(w, err)
 		return
 	}
 
@@ -792,13 +793,13 @@ func (h *MasterHandler) Moderate(w http.ResponseWriter, r *http.Request) {
 		)
 	}
 
-	writeJSON(w, http.StatusOK, masterProtoToJSON(resp.GetMaster()))
+	httpx.WriteJSON(w, http.StatusOK, masterProtoToJSON(resp.GetMaster()))
 }
 
 // ModerationHistory GET /api/v1/admin/masters/{id}/moderation-history
 func (h *MasterHandler) ModerationHistory(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
-	lim, ok := queryInt(w, r, "limit", 0, 0, 500)
+	lim, ok := httpx.QueryInt(w, r, "limit", 0, 0, 500)
 	if !ok {
 		return
 	}
@@ -807,7 +808,7 @@ func (h *MasterHandler) ModerationHistory(w http.ResponseWriter, r *http.Request
 		Limit:    int32(lim),
 	})
 	if err != nil {
-		grpcErrorToHTTP(w, err)
+		httpx.GRPCErrorToHTTP(w, err)
 		return
 	}
 	entries := make([]map[string]any, 0, len(resp.GetEntries()))
@@ -822,5 +823,5 @@ func (h *MasterHandler) ModerationHistory(w http.ResponseWriter, r *http.Request
 			"created_at": e.GetCreatedAt().AsTime().Format("2006-01-02T15:04:05Z07:00"),
 		})
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"entries": entries})
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"entries": entries})
 }

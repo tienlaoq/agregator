@@ -9,6 +9,7 @@ import (
 	masterv1 "github.com/tienlao/agregator/gen/go/master/v1"
 	userv1 "github.com/tienlao/agregator/gen/go/user/v1"
 	"github.com/tienlao/agregator/services/api-gateway/internal/apicatalog"
+	"github.com/tienlao/agregator/services/api-gateway/internal/httpx"
 	"github.com/tienlao/agregator/services/api-gateway/internal/limits"
 	"github.com/tienlao/agregator/services/api-gateway/internal/middleware"
 	"google.golang.org/grpc/codes"
@@ -34,13 +35,13 @@ func (h *MasterHandler) resolveOrCreateMasterID(w http.ResponseWriter, r *http.R
 			return id, true
 		}
 	} else if st, ok := status.FromError(err); !ok || st.Code() != codes.NotFound {
-		grpcErrorToHTTP(w, err)
+		httpx.GRPCErrorToHTTP(w, err)
 		return "", false
 	}
 
 	// No profile yet — create one lazily.
 	if h.userClient == nil {
-		writeCatalog(w, apicatalog.GatewayMasterNotCreated)
+		httpx.WriteCatalog(w, apicatalog.GatewayMasterNotCreated)
 		return "", false
 	}
 	name := "Мастер"
@@ -62,13 +63,13 @@ func (h *MasterHandler) resolveOrCreateMasterID(w http.ResponseWriter, r *http.R
 				}
 			}
 		}
-		grpcErrorToHTTP(w, cerr)
+		httpx.GRPCErrorToHTTP(w, cerr)
 		return "", false
 	}
 	if id := created.GetMaster().GetId(); id != "" {
 		return id, true
 	}
-	writeCatalog(w, apicatalog.GatewayMasterNotCreated)
+	httpx.WriteCatalog(w, apicatalog.GatewayMasterNotCreated)
 	return "", false
 }
 
@@ -76,7 +77,7 @@ func (h *MasterHandler) resolveOrCreateMasterID(w http.ResponseWriter, r *http.R
 func (h *MasterHandler) UploadMasterPhoto(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.UserIDFromCtx(r.Context())
 	if userID == "" {
-		writeCatalog(w, apicatalog.GatewayAuthUnauthorized)
+		httpx.WriteCatalog(w, apicatalog.GatewayAuthUnauthorized)
 		return
 	}
 
@@ -85,7 +86,7 @@ func (h *MasterHandler) UploadMasterPhoto(w http.ResponseWriter, r *http.Request
 		return // helper already wrote the error response
 	}
 	if _, err := uuid.Parse(masterID); err != nil {
-		writeCatalog(w, apicatalog.GatewayInternalInvalidMasterId)
+		httpx.WriteCatalog(w, apicatalog.GatewayInternalInvalidMasterId)
 		return
 	}
 
@@ -98,7 +99,7 @@ func (h *MasterHandler) UploadMasterPhoto(w http.ResponseWriter, r *http.Request
 	key := "masters/" + masterID + "/" + uuid.NewString() + photo.Ext
 	publicURL, err := h.storage.Put(r.Context(), key, photo.ContentType, -1, photo.Body)
 	if err != nil {
-		writeCatalog(w, apicatalog.GatewayStorageFailed)
+		httpx.WriteCatalog(w, apicatalog.GatewayStorageFailed)
 		return
 	}
 
@@ -108,22 +109,22 @@ func (h *MasterHandler) UploadMasterPhoto(w http.ResponseWriter, r *http.Request
 	})
 	if err != nil {
 		_ = h.storage.Delete(r.Context(), key)
-		grpcErrorToHTTP(w, err)
+		httpx.GRPCErrorToHTTP(w, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, masterProtoToJSON(resp.GetMaster()))
+	httpx.WriteJSON(w, http.StatusCreated, masterProtoToJSON(resp.GetMaster()))
 }
 
 // DeleteMasterPhoto handles DELETE /owner/master/profile/photos/{photoId}.
 func (h *MasterHandler) DeleteMasterPhoto(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.UserIDFromCtx(r.Context())
 	if userID == "" {
-		writeCatalog(w, apicatalog.GatewayAuthUnauthorized)
+		httpx.WriteCatalog(w, apicatalog.GatewayAuthUnauthorized)
 		return
 	}
 	photoID := chi.URLParam(r, "photoId")
 	if _, err := uuid.Parse(photoID); err != nil {
-		writeCatalog(w, apicatalog.GatewayRequestInvalidPhotoId)
+		httpx.WriteCatalog(w, apicatalog.GatewayRequestInvalidPhotoId)
 		return
 	}
 	del, err := h.client.DeleteMasterPhoto(r.Context(), &masterv1.DeleteMasterPhotoRequest{
@@ -131,7 +132,7 @@ func (h *MasterHandler) DeleteMasterPhoto(w http.ResponseWriter, r *http.Request
 		PhotoId: photoID,
 	})
 	if err != nil {
-		grpcErrorToHTTP(w, err)
+		httpx.GRPCErrorToHTTP(w, err)
 		return
 	}
 	if u := del.GetDeletedUrl(); u != "" {
@@ -139,19 +140,19 @@ func (h *MasterHandler) DeleteMasterPhoto(w http.ResponseWriter, r *http.Request
 			_ = h.storage.Delete(r.Context(), key)
 		}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"deleted_url": del.GetDeletedUrl()})
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"deleted_url": del.GetDeletedUrl()})
 }
 
 // SetMasterCoverPhoto handles POST /owner/master/profile/photos/{photoId}/cover.
 func (h *MasterHandler) SetMasterCoverPhoto(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.UserIDFromCtx(r.Context())
 	if userID == "" {
-		writeCatalog(w, apicatalog.GatewayAuthUnauthorized)
+		httpx.WriteCatalog(w, apicatalog.GatewayAuthUnauthorized)
 		return
 	}
 	photoID := chi.URLParam(r, "photoId")
 	if _, err := uuid.Parse(photoID); err != nil {
-		writeCatalog(w, apicatalog.GatewayRequestInvalidPhotoId)
+		httpx.WriteCatalog(w, apicatalog.GatewayRequestInvalidPhotoId)
 		return
 	}
 	resp, err := h.client.SetMasterCoverPhoto(r.Context(), &masterv1.SetMasterCoverPhotoRequest{
@@ -159,8 +160,8 @@ func (h *MasterHandler) SetMasterCoverPhoto(w http.ResponseWriter, r *http.Reque
 		PhotoId: photoID,
 	})
 	if err != nil {
-		grpcErrorToHTTP(w, err)
+		httpx.GRPCErrorToHTTP(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, masterProtoToJSON(resp.GetMaster()))
+	httpx.WriteJSON(w, http.StatusOK, masterProtoToJSON(resp.GetMaster()))
 }

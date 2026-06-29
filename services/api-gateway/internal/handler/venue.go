@@ -17,6 +17,7 @@ import (
 	pkgcities "github.com/tienlao/agregator/pkg/cities"
 	"github.com/tienlao/agregator/pkg/storage"
 	"github.com/tienlao/agregator/services/api-gateway/internal/apicatalog"
+	"github.com/tienlao/agregator/services/api-gateway/internal/httpx"
 	"github.com/tienlao/agregator/services/api-gateway/internal/middleware"
 	"github.com/tienlao/agregator/services/api-gateway/internal/suspendnotify"
 	"google.golang.org/grpc/metadata"
@@ -112,11 +113,11 @@ func socialLinksMapForJSON(s string) map[string]any {
 }
 
 func (h *VenueHandler) List(w http.ResponseWriter, r *http.Request) {
-	page, ok := queryInt(w, r, "page", 0, 0, 10000)
+	page, ok := httpx.QueryInt(w, r, "page", 0, 0, 10000)
 	if !ok {
 		return
 	}
-	pageSize, ok := queryInt(w, r, "page_size", 0, 0, 200)
+	pageSize, ok := httpx.QueryInt(w, r, "page_size", 0, 0, 200)
 	if !ok {
 		return
 	}
@@ -128,11 +129,11 @@ func (h *VenueHandler) List(w http.ResponseWriter, r *http.Request) {
 		SortBy:   r.URL.Query().Get("sort_by"),
 	})
 	if err != nil {
-		grpcErrorToHTTP(w, err)
+		httpx.GRPCErrorToHTTP(w, err)
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{
 		"venues":    venueList(resp.GetVenues(), false),
 		"total":     resp.GetTotal(),
 		"page":      resp.GetPage(),
@@ -148,11 +149,11 @@ func (h *VenueHandler) Search(w http.ResponseWriter, r *http.Request) {
 	priceMin, _ := strconv.ParseInt(q.Get("price_min"), 10, 64)
 	priceMax, _ := strconv.ParseInt(q.Get("price_max"), 10, 64)
 	ratingMin, _ := strconv.ParseFloat(q.Get("rating_min"), 64)
-	page, ok := queryInt(w, r, "page", 0, 0, 10000)
+	page, ok := httpx.QueryInt(w, r, "page", 0, 0, 10000)
 	if !ok {
 		return
 	}
-	pageSize, ok := queryInt(w, r, "page_size", 0, 0, 200)
+	pageSize, ok := httpx.QueryInt(w, r, "page_size", 0, 0, 200)
 	if !ok {
 		return
 	}
@@ -213,11 +214,11 @@ func (h *VenueHandler) Search(w http.ResponseWriter, r *http.Request) {
 		PageSize:  int32(pageSize),
 	})
 	if err != nil {
-		grpcErrorToHTTP(w, err)
+		httpx.GRPCErrorToHTTP(w, err)
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{
 		"venues":    venueList(resp.GetVenues(), false),
 		"total":     resp.GetTotal(),
 		"page":      resp.GetPage(),
@@ -243,17 +244,17 @@ func (h *VenueHandler) GetBySlug(w http.ResponseWriter, r *http.Request) {
 		Slug: slug,
 	})
 	if err != nil {
-		grpcErrorToHTTP(w, err)
+		httpx.GRPCErrorToHTTP(w, err)
 		return
 	}
 	viewer := middleware.UserIDFromCtx(r.Context())
 	role := middleware.RoleFromCtx(r.Context())
 	if !venueDraftVisibleToViewer(resp.GetStatus(), resp.GetOwnerId(), viewer, role) {
-		writeCatalog(w, apicatalog.GatewayVenueNotFound)
+		httpx.WriteCatalog(w, apicatalog.GatewayVenueNotFound)
 		return
 	}
 
-	writeJSON(w, http.StatusOK, venueToJSON(resp, false))
+	httpx.WriteJSON(w, http.StatusOK, venueToJSON(resp, false))
 }
 
 // slotEndFromDuration returns time_from + durationMin minutes (HH:MM).
@@ -284,24 +285,24 @@ func (h *VenueHandler) AvailabilityBySlug(w http.ResponseWriter, r *http.Request
 	slug := chi.URLParam(r, "slug")
 	date := r.URL.Query().Get("date")
 	if date == "" {
-		writeCatalog(w, apicatalog.GatewayRequestMissingDate)
+		httpx.WriteCatalog(w, apicatalog.GatewayRequestMissingDate)
 		return
 	}
 
-	durationMin, ok := queryInt(w, r, "duration_min", 120, 30, 720)
+	durationMin, ok := httpx.QueryInt(w, r, "duration_min", 120, 30, 720)
 	if !ok {
 		return
 	}
 
 	v, err := h.client.GetVenueBySlug(r.Context(), &venuev1.GetVenueBySlugRequest{Slug: slug})
 	if err != nil {
-		grpcErrorToHTTP(w, err)
+		httpx.GRPCErrorToHTTP(w, err)
 		return
 	}
 	viewer := middleware.UserIDFromCtx(r.Context())
 	role := middleware.RoleFromCtx(r.Context())
 	if !venueDraftVisibleToViewer(v.GetStatus(), v.GetOwnerId(), viewer, role) {
-		writeCatalog(w, apicatalog.GatewayVenueNotFound)
+		httpx.WriteCatalog(w, apicatalog.GatewayVenueNotFound)
 		return
 	}
 
@@ -322,7 +323,7 @@ func (h *VenueHandler) AvailabilityBySlug(w http.ResponseWriter, r *http.Request
 		Slots:   batchSlots,
 	})
 	if err != nil {
-		grpcErrorToHTTP(w, err)
+		httpx.GRPCErrorToHTTP(w, err)
 		return
 	}
 
@@ -334,7 +335,7 @@ func (h *VenueHandler) AvailabilityBySlug(w http.ResponseWriter, r *http.Request
 		}
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{
 		"date":            date,
 		"available_slots": available,
 	})
@@ -343,7 +344,7 @@ func (h *VenueHandler) AvailabilityBySlug(w http.ResponseWriter, r *http.Request
 func (h *VenueHandler) Create(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.UserIDFromCtx(r.Context())
 	if userID == "" {
-		writeCatalog(w, apicatalog.GatewayAuthUnauthorized)
+		httpx.WriteCatalog(w, apicatalog.GatewayAuthUnauthorized)
 		return
 	}
 
@@ -371,7 +372,7 @@ func (h *VenueHandler) Create(w http.ResponseWriter, r *http.Request) {
 		StartAsDraft     bool                  `json:"start_as_draft"`
 		PayoutLegalForm  string                `json:"payout_legal_form"`
 	}
-	if !readJSONOrRespond(w, r, &req) {
+	if !httpx.ReadJSONOrRespond(w, r, &req) {
 		return
 	}
 
@@ -421,17 +422,17 @@ func (h *VenueHandler) Create(w http.ResponseWriter, r *http.Request) {
 		PayoutLegalForm:  req.PayoutLegalForm,
 	})
 	if err != nil {
-		grpcErrorToHTTP(w, err)
+		httpx.GRPCErrorToHTTP(w, err)
 		return
 	}
 
-	writeJSON(w, http.StatusCreated, venueToJSON(resp, true))
+	httpx.WriteJSON(w, http.StatusCreated, venueToJSON(resp, true))
 }
 
 func (h *VenueHandler) SubmitForReview(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.UserIDFromCtx(r.Context())
 	if userID == "" {
-		writeCatalog(w, apicatalog.GatewayAuthUnauthorized)
+		httpx.WriteCatalog(w, apicatalog.GatewayAuthUnauthorized)
 		return
 	}
 	venueID := chi.URLParam(r, "id")
@@ -440,16 +441,16 @@ func (h *VenueHandler) SubmitForReview(w http.ResponseWriter, r *http.Request) {
 		OwnerId: userID,
 	})
 	if err != nil {
-		grpcErrorToHTTP(w, err)
+		httpx.GRPCErrorToHTTP(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, venueToJSON(resp, true))
+	httpx.WriteJSON(w, http.StatusOK, venueToJSON(resp, true))
 }
 
 func (h *VenueHandler) Update(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.UserIDFromCtx(r.Context())
 	if userID == "" {
-		writeCatalog(w, apicatalog.GatewayAuthUnauthorized)
+		httpx.WriteCatalog(w, apicatalog.GatewayAuthUnauthorized)
 		return
 	}
 	venueID := chi.URLParam(r, "id")
@@ -476,7 +477,7 @@ func (h *VenueHandler) Update(w http.ResponseWriter, r *http.Request) {
 		Halls            *[]venueHallItemReq    `json:"halls"`
 		PayoutLegalForm  *string                `json:"payout_legal_form"`
 	}
-	if !readJSONOrRespond(w, r, &req) {
+	if !httpx.ReadJSONOrRespond(w, r, &req) {
 		return
 	}
 
@@ -557,17 +558,17 @@ func (h *VenueHandler) Update(w http.ResponseWriter, r *http.Request) {
 
 	resp, err := h.client.UpdateVenue(r.Context(), grpcReq)
 	if err != nil {
-		grpcErrorToHTTP(w, err)
+		httpx.GRPCErrorToHTTP(w, err)
 		return
 	}
 
-	writeJSON(w, http.StatusOK, venueToJSON(resp, true))
+	httpx.WriteJSON(w, http.StatusOK, venueToJSON(resp, true))
 }
 
 func (h *VenueHandler) ListOwnerVenues(w http.ResponseWriter, r *http.Request) {
 	userID := middleware.UserIDFromCtx(r.Context())
 	if userID == "" {
-		writeCatalog(w, apicatalog.GatewayAuthUnauthorized)
+		httpx.WriteCatalog(w, apicatalog.GatewayAuthUnauthorized)
 		return
 	}
 
@@ -578,12 +579,12 @@ func (h *VenueHandler) ListOwnerVenues(w http.ResponseWriter, r *http.Request) {
 		UserId: userID,
 	})
 	if err != nil {
-		grpcErrorToHTTP(w, err)
+		httpx.GRPCErrorToHTTP(w, err)
 		return
 	}
 	mvs := managed.GetVenues()
 	if len(mvs) == 0 {
-		writeJSON(w, http.StatusOK, map[string]any{
+		httpx.WriteJSON(w, http.StatusOK, map[string]any{
 			"venues":    []map[string]any{},
 			"total":     0,
 			"page":      1,
@@ -605,7 +606,7 @@ func (h *VenueHandler) ListOwnerVenues(w http.ResponseWriter, r *http.Request) {
 	}
 	batch, err := h.client.GetVenuesBatch(r.Context(), &venuev1.GetVenuesBatchRequest{Ids: ids})
 	if err != nil {
-		grpcErrorToHTTP(w, err)
+		httpx.GRPCErrorToHTTP(w, err)
 		return
 	}
 
@@ -624,7 +625,7 @@ func (h *VenueHandler) ListOwnerVenues(w http.ResponseWriter, r *http.Request) {
 		out = append(out, m)
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{
 		"venues":    out,
 		"total":     int32(len(out)),
 		"page":      int32(1),
@@ -636,7 +637,7 @@ func (h *VenueHandler) ListOwnerVenues(w http.ResponseWriter, r *http.Request) {
 func (h *VenueHandler) ListOwnerSlotBlocks(w http.ResponseWriter, r *http.Request) {
 	ownerID := middleware.UserIDFromCtx(r.Context())
 	if ownerID == "" {
-		writeCatalog(w, apicatalog.GatewayAuthUnauthorized)
+		httpx.WriteCatalog(w, apicatalog.GatewayAuthUnauthorized)
 		return
 	}
 	venueID := chi.URLParam(r, "venueId")
@@ -644,7 +645,7 @@ func (h *VenueHandler) ListOwnerSlotBlocks(w http.ResponseWriter, r *http.Reques
 	dateFrom := q.Get("date_from")
 	dateTo := q.Get("date_to")
 	if dateFrom == "" || dateTo == "" {
-		writeCatalog(w, apicatalog.GatewayRequestMissingDateRange)
+		httpx.WriteCatalog(w, apicatalog.GatewayRequestMissingDateRange)
 		return
 	}
 
@@ -655,7 +656,7 @@ func (h *VenueHandler) ListOwnerSlotBlocks(w http.ResponseWriter, r *http.Reques
 		DateTo:   dateTo,
 	})
 	if err != nil {
-		grpcErrorToHTTP(w, err)
+		httpx.GRPCErrorToHTTP(w, err)
 		return
 	}
 
@@ -663,14 +664,14 @@ func (h *VenueHandler) ListOwnerSlotBlocks(w http.ResponseWriter, r *http.Reques
 	for _, b := range resp.GetBlocks() {
 		blocks = append(blocks, manualSlotBlockToJSON(b))
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"blocks": blocks})
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"blocks": blocks})
 }
 
 // CreateOwnerSlotBlock adds a manual busy interval (e.g. external booking).
 func (h *VenueHandler) CreateOwnerSlotBlock(w http.ResponseWriter, r *http.Request) {
 	ownerID := middleware.UserIDFromCtx(r.Context())
 	if ownerID == "" {
-		writeCatalog(w, apicatalog.GatewayAuthUnauthorized)
+		httpx.WriteCatalog(w, apicatalog.GatewayAuthUnauthorized)
 		return
 	}
 	venueID := chi.URLParam(r, "venueId")
@@ -681,7 +682,7 @@ func (h *VenueHandler) CreateOwnerSlotBlock(w http.ResponseWriter, r *http.Reque
 		TimeTo   string `json:"time_to"`
 		Note     string `json:"note"`
 	}
-	if !readJSONOrRespond(w, r, &req) {
+	if !httpx.ReadJSONOrRespond(w, r, &req) {
 		return
 	}
 
@@ -694,18 +695,18 @@ func (h *VenueHandler) CreateOwnerSlotBlock(w http.ResponseWriter, r *http.Reque
 		Note:     req.Note,
 	})
 	if err != nil {
-		grpcErrorToHTTP(w, err)
+		httpx.GRPCErrorToHTTP(w, err)
 		return
 	}
 
-	writeJSON(w, http.StatusCreated, map[string]any{"block": manualSlotBlockToJSON(resp.GetBlock())})
+	httpx.WriteJSON(w, http.StatusCreated, map[string]any{"block": manualSlotBlockToJSON(resp.GetBlock())})
 }
 
 // DeleteOwnerSlotBlock removes a manual busy interval.
 func (h *VenueHandler) DeleteOwnerSlotBlock(w http.ResponseWriter, r *http.Request) {
 	ownerID := middleware.UserIDFromCtx(r.Context())
 	if ownerID == "" {
-		writeCatalog(w, apicatalog.GatewayAuthUnauthorized)
+		httpx.WriteCatalog(w, apicatalog.GatewayAuthUnauthorized)
 		return
 	}
 	venueID := chi.URLParam(r, "venueId")
@@ -717,7 +718,7 @@ func (h *VenueHandler) DeleteOwnerSlotBlock(w http.ResponseWriter, r *http.Reque
 		BlockId: blockID,
 	})
 	if err != nil {
-		grpcErrorToHTTP(w, err)
+		httpx.GRPCErrorToHTTP(w, err)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -779,11 +780,11 @@ func venueHallItemsToProto(items []venueHallItemReq) []*venuev1.VenueHallInput {
 }
 
 func (h *VenueHandler) ListPending(w http.ResponseWriter, r *http.Request) {
-	page, ok := queryInt(w, r, "page", 0, 0, 10000)
+	page, ok := httpx.QueryInt(w, r, "page", 0, 0, 10000)
 	if !ok {
 		return
 	}
-	pageSize, ok := queryInt(w, r, "page_size", 0, 0, 200)
+	pageSize, ok := httpx.QueryInt(w, r, "page_size", 0, 0, 200)
 	if !ok {
 		return
 	}
@@ -797,11 +798,11 @@ func (h *VenueHandler) ListPending(w http.ResponseWriter, r *http.Request) {
 		NameQuery: nameQuery,
 	})
 	if err != nil {
-		grpcErrorToHTTP(w, err)
+		httpx.GRPCErrorToHTTP(w, err)
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{
 		"venues":    venueList(resp.GetVenues(), true),
 		"total":     resp.GetTotal(),
 		"page":      resp.GetPage(),
@@ -812,7 +813,7 @@ func (h *VenueHandler) ListPending(w http.ResponseWriter, r *http.Request) {
 func (h *VenueHandler) Moderate(w http.ResponseWriter, r *http.Request) {
 	adminID := middleware.UserIDFromCtx(r.Context())
 	if adminID == "" {
-		writeCatalog(w, apicatalog.GatewayAuthUnauthorized)
+		httpx.WriteCatalog(w, apicatalog.GatewayAuthUnauthorized)
 		return
 	}
 
@@ -822,7 +823,7 @@ func (h *VenueHandler) Moderate(w http.ResponseWriter, r *http.Request) {
 		Action  string `json:"action"`
 		Comment string `json:"comment"`
 	}
-	if !readJSONOrRespond(w, r, &req) {
+	if !httpx.ReadJSONOrRespond(w, r, &req) {
 		return
 	}
 
@@ -833,7 +834,7 @@ func (h *VenueHandler) Moderate(w http.ResponseWriter, r *http.Request) {
 		ModeratedBy: adminID,
 	})
 	if err != nil {
-		grpcErrorToHTTP(w, err)
+		httpx.GRPCErrorToHTTP(w, err)
 		return
 	}
 
@@ -873,7 +874,7 @@ func (h *VenueHandler) Moderate(w http.ResponseWriter, r *http.Request) {
 		)
 	}
 
-	writeJSON(w, http.StatusOK, venueToJSON(resp, true))
+	httpx.WriteJSON(w, http.StatusOK, venueToJSON(resp, true))
 }
 
 // venuePrimaryImageURL — обложка или первое фото (для image_url в JSON каталога/карточки).

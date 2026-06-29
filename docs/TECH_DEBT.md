@@ -656,50 +656,57 @@ Slug и phone по-прежнему фильтруются через `ILIKE '%q
 
 ---
 
-## [MASTER-GOD-USECASE] — MasterUseCase god-object (~1000 строк, 6 ответственностей)
+## [MASTER-GOD-USECASE] — MasterUseCase god-object (~1350 строк, 6 ответственностей)
 
-**File**: `services/master-service/internal/usecase/master.go`
+**Status: ЧАСТИЧНО РЕШЕНО** — файловое разбиение выполнено (Шаг 1);
+struct-уровневое разбиение отложено до триггера (Шаг 2, см. ниже).
+
+**File**: `services/master-service/internal/usecase/{master,profile,moderation,booking,photo,public}.go`
 
 **Current behaviour**  
-`MasterUseCase` объединяет шесть логически различимых ответственностей:
-профиль мастера, публичный каталог, модерация, выплатные реквизиты,
-бронирования (включая платёжный флоу) и управление фотографиями.
-Структура компилируется и тестируется нормально; расхождения между ними
-на уровне зависимостей пока нет — все методы читают/пишут через один `repo`.
-
-**Accepted residual risk**  
-Мёрж-конфликты при параллельной разработке нескольких фич. Сложность
-навигации по файлу по мере роста числа методов.
-
-**Upgrade path**  
-При появлении нового домена (CRM, уведомления, аналитика) или при первом
-мёрж-конфликте в `master.go` — разбить по одному usecase за раз, не всё сразу:
+`MasterUseCase` по-прежнему один struct с одним набором зависимостей
+(`repo` + `paymentClient` + `log`), но его 24 метода теперь разложены по
+шести файлам одного пакета — чистый перенос, поведение не менялось:
 
 ```
 internal/usecase/
-  profile.go      — CreateMyProfile, UpdateMyProfile, SubmitForReview
-  moderation.go   — ListForModeration, Moderate, ModerationHistory
-  booking.go      — CreateBooking, GetBooking, ListBookings, CancelBooking,
-                    ConfirmBookingByPayment, CancelBookingByPayment
-  photo.go        — AddMasterPhoto, DeleteMasterPhoto, SetMasterCoverPhoto
-  public.go       — GetPublicBySlug, ListPublic
+  master.go      — struct, paymentGatewayClient, NewMasterUseCase + сквозные
+                   геттеры (GetByID, MasterOwnerUserID, GetMasterUserIDsBatch)
+  profile.go     — CreateMyProfile, UpdateMyProfile, GetMyProfile, SubmitForReview
+                   + валидация services/credentials/travel/payout
+  moderation.go  — ListForModeration, SuspendByUser, Moderate, ListModerationHistory
+  booking.go     — CreateBooking, list/get bookings, Confirm/CancelBookingByPayment,
+                   slot+price-валидация, idempotency-key
+  photo.go       — Add/Delete/SetCover photo + нормализация photo-URL
+  public.go      — ListPublic, GetPublicBySlug
 ```
 
-Все пять structs разделяют одну зависимость `domain.MasterRepository`;
-`NewMasterServer` (delivery/grpc) принимает их по отдельности или через
-агрегирующий `MasterFacade` — в зависимости от того, сколько из них
-нужно в одном gRPC-сервере.
+Это сняло боль навигации и сузило поверхность мёрж-конфликтов (домены теперь
+в разных файлах). `delivery/grpc/server.go` не тронут — сигнатуры стабильны.
 
-**Ловушка при разбиении**  
-`delivery/grpc/server.go` принимает сейчас `*usecase.MasterUseCase` конкретным
-типом — потребует либо интерфейсов для каждого usecase, либо агрегатора.
-Менять это надо одним PR вместе с разбиением, иначе сломаются сигнатуры.
+**Accepted residual risk**  
+Все методы всё ещё висят на одном struct и делят один `repo`/`paymentClient`.
+Расхождение зависимостей не выражено в типах: `paymentClient` нужен только
+`CreateBooking`, но доступен всем методам.
 
-**Triggers for prioritisation**  
+**Upgrade path — Шаг 2 (struct-уровневое разбиение, отложен)**  
+Когда зависимости реально разойдутся — повысить домен до отдельного struct.
+Естественный первый кандидат — `BookingUseCase{repo, paymentClient, log}`
+(единственный, кому нужен `paymentClient`); `MasterUseCase` тогда усыхает до
+`{repo, log}`. Остальные домены делят только `repo` — их выделять смысла нет.
+
+**Ловушка при Шаге 2**  
+`delivery/grpc/server.go` принимает `*usecase.MasterUseCase` конкретным типом.
+Выделение второго struct потребует, чтобы `Server` держал оба
+(`Server{master *MasterUseCase; booking *BookingUseCase}`) — менять это надо
+одним PR вместе с разбиением, иначе сломаются сигнатуры. Интерфейсы/`MasterFacade`
+вводить только если появится третий struct.
+
+**Triggers for prioritisation (Шаг 2)**  
 - Появление нового домена (CRM-задачи, push-уведомления, аналитика мастера),
   который потребует отдельного usecase с другими зависимостями.
-- Первый мёрж-конфликт в `master.go` при параллельной разработке.
-- Файл перевалит за ~1500 строк.
+- Первый мёрж-конфликт уже после файлового разбиения.
+- Любой из доменных файлов снова перевалит за ~1500 строк.
 
 ---
 

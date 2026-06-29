@@ -4,6 +4,7 @@ import (
 	"net/http"
 
 	authv1 "github.com/tienlao/agregator/gen/go/auth/v1"
+	"github.com/tienlao/agregator/services/api-gateway/internal/httpx"
 )
 
 type AuthHandler struct {
@@ -22,7 +23,7 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 		Name     string `json:"name"`
 		Role     string `json:"role"`
 	}
-	if !readJSONOrRespond(w, r, &req) {
+	if !httpx.ReadJSONOrRespond(w, r, &req) {
 		return
 	}
 
@@ -34,11 +35,11 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 		Role:     req.Role,
 	})
 	if err != nil {
-		grpcErrorToHTTP(w, err)
+		httpx.GRPCErrorToHTTP(w, err)
 		return
 	}
 
-	writeJSON(w, http.StatusCreated, map[string]any{
+	httpx.WriteJSON(w, http.StatusCreated, map[string]any{
 		"user_id":       resp.GetUserId(),
 		"access_token":  resp.GetAccessToken(),
 		"refresh_token": resp.GetRefreshToken(),
@@ -50,7 +51,7 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		Email    string `json:"email"`
 		Password string `json:"password"`
 	}
-	if !readJSONOrRespond(w, r, &req) {
+	if !httpx.ReadJSONOrRespond(w, r, &req) {
 		return
 	}
 
@@ -59,11 +60,11 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		Password: req.Password,
 	})
 	if err != nil {
-		grpcErrorToHTTP(w, err)
+		httpx.GRPCErrorToHTTP(w, err)
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{
 		"user_id":       resp.GetUserId(),
 		"access_token":  resp.GetAccessToken(),
 		"refresh_token": resp.GetRefreshToken(),
@@ -74,7 +75,7 @@ func (h *AuthHandler) RefreshToken(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		RefreshToken string `json:"refresh_token"`
 	}
-	if !readJSONOrRespond(w, r, &req) {
+	if !httpx.ReadJSONOrRespond(w, r, &req) {
 		return
 	}
 
@@ -82,11 +83,11 @@ func (h *AuthHandler) RefreshToken(w http.ResponseWriter, r *http.Request) {
 		RefreshToken: req.RefreshToken,
 	})
 	if err != nil {
-		grpcErrorToHTTP(w, err)
+		httpx.GRPCErrorToHTTP(w, err)
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]any{
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{
 		"access_token":  resp.GetAccessToken(),
 		"refresh_token": resp.GetRefreshToken(),
 	})
@@ -96,7 +97,7 @@ func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		RefreshToken string `json:"refresh_token"`
 	}
-	if !readJSONOrRespond(w, r, &req) {
+	if !httpx.ReadJSONOrRespond(w, r, &req) {
 		return
 	}
 
@@ -104,9 +105,9 @@ func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
 		RefreshToken: req.RefreshToken,
 	})
 	if err != nil {
-		grpcErrorToHTTP(w, err)
+		httpx.GRPCErrorToHTTP(w, err)
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]string{"status": "logged_out"})
+	httpx.WriteJSON(w, http.StatusOK, map[string]string{"status": "logged_out"})
 }

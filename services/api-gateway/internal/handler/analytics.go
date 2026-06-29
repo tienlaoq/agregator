@@ -11,6 +11,7 @@ import (
 	"github.com/rs/zerolog"
 
 	"github.com/tienlao/agregator/services/api-gateway/internal/apicatalog"
+	"github.com/tienlao/agregator/services/api-gateway/internal/httpx"
 	"github.com/tienlao/agregator/services/api-gateway/internal/middleware"
 )
 
@@ -71,22 +72,22 @@ type analyticsRequest struct {
 // CollectEvent POST /api/v1/analytics/events — публичный endpoint, без PII в props по контракту клиента.
 func (h *AnalyticsHandler) CollectEvent(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		writeCatalog(w, apicatalog.GatewayRequestMethodNotAllowed)
+		httpx.WriteCatalog(w, apicatalog.GatewayRequestMethodNotAllowed)
 		return
 	}
 	body, err := io.ReadAll(io.LimitReader(r.Body, 8192))
 	if err != nil {
-		writeCatalog(w, apicatalog.GatewayRequestInvalidBody)
+		httpx.WriteCatalog(w, apicatalog.GatewayRequestInvalidBody)
 		return
 	}
 	var req analyticsRequest
 	if err := json.Unmarshal(body, &req); err != nil {
-		writeCatalog(w, apicatalog.GatewayRequestInvalidJson)
+		httpx.WriteCatalog(w, apicatalog.GatewayRequestInvalidJson)
 		return
 	}
 	name := strings.TrimSpace(req.Name)
 	if !analyticsEventName.MatchString(name) {
-		writeCatalog(w, apicatalog.GatewayAnalyticsInvalidEventName)
+		httpx.WriteCatalog(w, apicatalog.GatewayAnalyticsInvalidEventName)
 		return
 	}
 	if req.Props == nil {
@@ -98,7 +99,7 @@ func (h *AnalyticsHandler) CollectEvent(w http.ResponseWriter, r *http.Request) 
 	safeProps := filterProps(req.Props)
 	propsJSON, err := json.Marshal(safeProps)
 	if err != nil || len(propsJSON) > 4096 {
-		writeCatalog(w, apicatalog.GatewayAnalyticsPropsInvalidOrTooLarge)
+		httpx.WriteCatalog(w, apicatalog.GatewayAnalyticsPropsInvalidOrTooLarge)
 		return
 	}
 

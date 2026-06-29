@@ -16,6 +16,7 @@ import (
 	"github.com/rs/zerolog"
 	pkgmail "github.com/tienlao/agregator/pkg/mail"
 	"github.com/tienlao/agregator/services/api-gateway/internal/apicatalog"
+	"github.com/tienlao/agregator/services/api-gateway/internal/httpx"
 	"github.com/tienlao/agregator/services/api-gateway/internal/limits"
 	gwmetrics "github.com/tienlao/agregator/services/api-gateway/internal/metrics"
 	"github.com/tienlao/agregator/services/api-gateway/internal/middleware"
@@ -92,12 +93,12 @@ func (h *SupportHandler) Contact(w http.ResponseWriter, r *http.Request) {
 	canEmailMods := len(h.recipients) > 0 && h.mail != nil && h.mail.Enabled()
 	canWebhook := strings.TrimSpace(h.webhookURL) != ""
 	if !canEmailMods && !canWebhook && h.tickets == nil {
-		writeCatalog(w, apicatalog.GatewayUpstreamUnavailable.WithMessage("support service is not configured"))
+		httpx.WriteCatalog(w, apicatalog.GatewayUpstreamUnavailable.WithMessage("support service is not configured"))
 		return
 	}
 
 	var req supportContactRequest
-	if !readJSONOrRespond(w, r, &req) {
+	if !httpx.ReadJSONOrRespond(w, r, &req) {
 		return
 	}
 
@@ -116,7 +117,7 @@ func (h *SupportHandler) Contact(w http.ResponseWriter, r *http.Request) {
 	req.SourcePage = clampString(req.SourcePage, supportMaxSourcePageLen)
 
 	if req.Topic == "" || req.Message == "" {
-		writeCatalog(w, apicatalog.GatewayRequestInvalidBody.WithMessage("topic and message are required"))
+		httpx.WriteCatalog(w, apicatalog.GatewayRequestInvalidBody.WithMessage("topic and message are required"))
 		return
 	}
 	if req.Email == "" {
@@ -127,7 +128,7 @@ func (h *SupportHandler) Contact(w http.ResponseWriter, r *http.Request) {
 	ticketNumber := supportTicketNumber(requestID)
 	reqUUID, err := uuid.Parse(requestID)
 	if err != nil {
-		writeCatalog(w, apicatalog.GatewayUpstreamInternal.WithMessage("failed to allocate ticket id"))
+		httpx.WriteCatalog(w, apicatalog.GatewayUpstreamInternal.WithMessage("failed to allocate ticket id"))
 		return
 	}
 
@@ -146,7 +147,7 @@ func (h *SupportHandler) Contact(w http.ResponseWriter, r *http.Request) {
 		}
 		if err := h.tickets.Insert(r.Context(), insert); err != nil {
 			h.log.Warn().Err(err).Str("request_id", requestID).Msg("support ticket insert failed")
-			writeCatalog(w, apicatalog.GatewayUpstreamUnavailable.WithMessage("failed to store support request"))
+			httpx.WriteCatalog(w, apicatalog.GatewayUpstreamUnavailable.WithMessage("failed to store support request"))
 			return
 		}
 	}
@@ -177,7 +178,7 @@ func (h *SupportHandler) Contact(w http.ResponseWriter, r *http.Request) {
 				Str("request_id", requestID).
 				Str("user_id", strings.TrimSpace(middleware.UserIDFromCtx(r.Context()))).
 				Msg("support contact email send failed")
-			writeCatalog(w, apicatalog.GatewayUpstreamUnavailable.WithMessage("failed to send support request"))
+			httpx.WriteCatalog(w, apicatalog.GatewayUpstreamUnavailable.WithMessage("failed to send support request"))
 			return
 		}
 		if h.tickets != nil {
@@ -188,7 +189,7 @@ func (h *SupportHandler) Contact(w http.ResponseWriter, r *http.Request) {
 	} else if canWebhook {
 		body, err := json.Marshal(payload)
 		if err != nil {
-			writeCatalog(w, apicatalog.GatewayUpstreamInternal.WithMessage("failed to serialize support request"))
+			httpx.WriteCatalog(w, apicatalog.GatewayUpstreamInternal.WithMessage("failed to serialize support request"))
 			return
 		}
 		lastErr := h.postWebhook(body)
@@ -207,7 +208,7 @@ func (h *SupportHandler) Contact(w http.ResponseWriter, r *http.Request) {
 				Str("request_id", requestID).
 				Str("user_id", strings.TrimSpace(middleware.UserIDFromCtx(r.Context()))).
 				Msg("support contact forward failed")
-			writeCatalog(w, apicatalog.GatewayUpstreamUnavailable.WithMessage("failed to send support request"))
+			httpx.WriteCatalog(w, apicatalog.GatewayUpstreamUnavailable.WithMessage("failed to send support request"))
 			return
 		}
 		gwmetrics.ObserveSupportWebhookDelivery("success")
@@ -222,7 +223,7 @@ func (h *SupportHandler) Contact(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	writeJSON(w, http.StatusAccepted, map[string]any{
+	httpx.WriteJSON(w, http.StatusAccepted, map[string]any{
 		"request_id":    requestID,
 		"ticket_number": ticketNumber,
 		"status":        "accepted",
@@ -239,7 +240,7 @@ type adminSupportReplyRequest struct {
 // AdminReply POST /api/v1/admin/support/reply — отправить ответ пользователю по обращению (только SMTP).
 func (h *SupportHandler) AdminReply(w http.ResponseWriter, r *http.Request) {
 	var req adminSupportReplyRequest
-	if !readJSONOrRespond(w, r, &req) {
+	if !httpx.ReadJSONOrRespond(w, r, &req) {
 		return
 	}
 
@@ -249,21 +250,21 @@ func (h *SupportHandler) AdminReply(w http.ResponseWriter, r *http.Request) {
 	req.Reply = clampString(strings.TrimSpace(req.Reply), supportMaxMessageLen)
 
 	if req.UserEmail == "" {
-		writeCatalog(w, apicatalog.GatewayRequestInvalidBody.WithMessage("user_email is required"))
+		httpx.WriteCatalog(w, apicatalog.GatewayRequestInvalidBody.WithMessage("user_email is required"))
 		return
 	}
 	if req.Reply == "" {
-		writeCatalog(w, apicatalog.GatewayRequestInvalidBody.WithMessage("reply is required"))
+		httpx.WriteCatalog(w, apicatalog.GatewayRequestInvalidBody.WithMessage("reply is required"))
 		return
 	}
 	if req.TicketNumber == "" && req.RequestID == "" {
-		writeCatalog(w, apicatalog.GatewayRequestInvalidBody.WithMessage("ticket_number or request_id is required"))
+		httpx.WriteCatalog(w, apicatalog.GatewayRequestInvalidBody.WithMessage("ticket_number or request_id is required"))
 		return
 	}
 
 	if req.RequestID != "" {
 		if _, err := uuid.Parse(req.RequestID); err != nil {
-			writeCatalog(w, apicatalog.GatewayRequestInvalidBody.WithMessage("invalid request_id"))
+			httpx.WriteCatalog(w, apicatalog.GatewayRequestInvalidBody.WithMessage("invalid request_id"))
 			return
 		}
 	}
@@ -277,11 +278,11 @@ func (h *SupportHandler) AdminReply(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			h.log.Warn().Err(err).Msg("support admin reply: resolve ticket")
-			writeCatalog(w, apicatalog.GatewayUpstreamUnavailable.WithMessage("failed to load ticket"))
+			httpx.WriteCatalog(w, apicatalog.GatewayUpstreamUnavailable.WithMessage("failed to load ticket"))
 			return
 		}
 		if !strings.EqualFold(strings.TrimSpace(row.UserEmail), strings.TrimSpace(req.UserEmail)) {
-			writeCatalog(w, apicatalog.GatewayRequestInvalidBody.WithMessage("user_email does not match this ticket"))
+			httpx.WriteCatalog(w, apicatalog.GatewayRequestInvalidBody.WithMessage("user_email does not match this ticket"))
 			return
 		}
 		idCopy := row.RequestID
@@ -290,7 +291,7 @@ func (h *SupportHandler) AdminReply(w http.ResponseWriter, r *http.Request) {
 
 	refLabel := supportReplyReferenceLabel(req.TicketNumber, req.RequestID)
 	if h.mail == nil || !h.mail.Enabled() {
-		writeCatalog(w, apicatalog.GatewayUpstreamUnavailable.WithMessage("support email is not configured"))
+		httpx.WriteCatalog(w, apicatalog.GatewayUpstreamUnavailable.WithMessage("support email is not configured"))
 		return
 	}
 
@@ -317,7 +318,7 @@ func (h *SupportHandler) AdminReply(w http.ResponseWriter, r *http.Request) {
 			Str("user_email", req.UserEmail).
 			Str("ticket_ref", refLabel).
 			Msg("support admin reply email failed")
-		writeCatalog(w, apicatalog.GatewayUpstreamUnavailable.WithMessage("failed to send reply"))
+		httpx.WriteCatalog(w, apicatalog.GatewayUpstreamUnavailable.WithMessage("failed to send reply"))
 		return
 	}
 
@@ -327,46 +328,46 @@ func (h *SupportHandler) AdminReply(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	writeJSON(w, http.StatusAccepted, map[string]any{"status": "sent"})
+	httpx.WriteJSON(w, http.StatusAccepted, map[string]any{"status": "sent"})
 }
 
 // AdminListTickets GET /api/v1/admin/support/tickets
 func (h *SupportHandler) AdminListTickets(w http.ResponseWriter, r *http.Request) {
 	if h.tickets == nil {
-		writeCatalog(w, apicatalog.GatewayUpstreamUnavailable.WithMessage("support ticket storage is not configured"))
+		httpx.WriteCatalog(w, apicatalog.GatewayUpstreamUnavailable.WithMessage("support ticket storage is not configured"))
 		return
 	}
-	limit, ok := queryInt(w, r, "limit", 50, 1, 100)
+	limit, ok := httpx.QueryInt(w, r, "limit", 50, 1, 100)
 	if !ok {
 		return
 	}
-	offset, ok := queryInt(w, r, "offset", 0, 0, 0)
+	offset, ok := httpx.QueryInt(w, r, "offset", 0, 0, 0)
 	if !ok {
 		return
 	}
 	rows, total, err := h.tickets.List(r.Context(), limit, offset)
 	if err != nil {
 		h.log.Warn().Err(err).Msg("support admin list tickets")
-		writeCatalog(w, apicatalog.GatewayUpstreamUnavailable.WithMessage("failed to list tickets"))
+		httpx.WriteCatalog(w, apicatalog.GatewayUpstreamUnavailable.WithMessage("failed to list tickets"))
 		return
 	}
 	out := make([]map[string]any, 0, len(rows))
 	for _, row := range rows {
 		out = append(out, supportTicketToJSON(row))
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"tickets": out, "total": total})
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"tickets": out, "total": total})
 }
 
 // AdminGetTicket GET /api/v1/admin/support/tickets/{requestID}
 func (h *SupportHandler) AdminGetTicket(w http.ResponseWriter, r *http.Request) {
 	if h.tickets == nil {
-		writeCatalog(w, apicatalog.GatewayUpstreamUnavailable.WithMessage("support ticket storage is not configured"))
+		httpx.WriteCatalog(w, apicatalog.GatewayUpstreamUnavailable.WithMessage("support ticket storage is not configured"))
 		return
 	}
 	ridStr := strings.TrimSpace(chi.URLParam(r, "requestID"))
 	uid, err := uuid.Parse(ridStr)
 	if err != nil {
-		writeCatalog(w, apicatalog.GatewayRequestInvalidBody.WithMessage("invalid request id"))
+		httpx.WriteCatalog(w, apicatalog.GatewayRequestInvalidBody.WithMessage("invalid request id"))
 		return
 	}
 	row, err := h.tickets.GetByRequestID(r.Context(), uid)
@@ -375,10 +376,10 @@ func (h *SupportHandler) AdminGetTicket(w http.ResponseWriter, r *http.Request) 
 			http.Error(w, `{"error":"ticket not found"}`, http.StatusNotFound)
 			return
 		}
-		writeCatalog(w, apicatalog.GatewayUpstreamUnavailable.WithMessage("failed to load ticket"))
+		httpx.WriteCatalog(w, apicatalog.GatewayUpstreamUnavailable.WithMessage("failed to load ticket"))
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ticket": supportTicketToJSON(*row)})
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"ticket": supportTicketToJSON(*row)})
 }
 
 func (h *SupportHandler) resolveTicketRow(ctx context.Context, ticketNumber, requestID string) (*supportstore.Row, error) {
