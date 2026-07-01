@@ -15,6 +15,12 @@ ARG NEXT_PUBLIC_API_URL=http://localhost:8080
 ENV NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
 ARG NEXT_PUBLIC_YANDEX_MAPS_API_KEY=
 ENV NEXT_PUBLIC_YANDEX_MAPS_API_KEY=${NEXT_PUBLIC_YANDEX_MAPS_API_KEY}
+# next.config.ts rewrites() is evaluated at BUILD time (output: "standalone"
+# bakes destinations into routes-manifest.json), so the in-cluster gateway host
+# must be present now — the runtime INTERNAL_API_URL env is too late to affect
+# the /api/v1/uploads/* proxy. Defaults to the compose service host.
+ARG INTERNAL_API_URL=http://api-gateway:8080
+ENV INTERNAL_API_URL=${INTERNAL_API_URL}
 RUN npm run build
 
 FROM node:22-alpine AS runner

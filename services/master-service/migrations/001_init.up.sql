@@ -29,8 +29,8 @@ CREATE TABLE IF NOT EXISTS masters (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE INDEX idx_masters_status ON masters (status);
-CREATE INDEX idx_masters_city ON masters (city) WHERE status = 'active';
+CREATE INDEX IF NOT EXISTS idx_masters_status ON masters (status);
+CREATE INDEX IF NOT EXISTS idx_masters_city ON masters (city) WHERE status = 'active';
 
 CREATE TABLE IF NOT EXISTS master_services (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -42,7 +42,7 @@ CREATE TABLE IF NOT EXISTS master_services (
     sort_order INT NOT NULL DEFAULT 0
 );
 
-CREATE INDEX idx_master_services_master ON master_services (master_id);
+CREATE INDEX IF NOT EXISTS idx_master_services_master ON master_services (master_id);
 
 CREATE TABLE IF NOT EXISTS master_moderation_history (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -54,7 +54,7 @@ CREATE TABLE IF NOT EXISTS master_moderation_history (
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE INDEX idx_master_moderation_master ON master_moderation_history (master_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_master_moderation_master ON master_moderation_history (master_id, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS master_bookings (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -71,5 +71,5 @@ CREATE TABLE IF NOT EXISTS master_bookings (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE INDEX idx_master_bookings_master ON master_bookings (master_id, date);
-CREATE INDEX idx_master_bookings_client ON master_bookings (client_user_id);
+CREATE INDEX IF NOT EXISTS idx_master_bookings_master ON master_bookings (master_id, date);
+CREATE INDEX IF NOT EXISTS idx_master_bookings_client ON master_bookings (client_user_id);

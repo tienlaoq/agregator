@@ -21,6 +21,6 @@
 -- from this index, which surfaces as a repo error and is correct behaviour
 -- (the second caller should retry or accept the existing cover).
 
-CREATE UNIQUE INDEX uq_master_photos_one_cover
+CREATE UNIQUE INDEX IF NOT EXISTS uq_master_photos_one_cover
     ON master_photos (master_id)
     WHERE is_cover = TRUE;

@@ -17,6 +17,11 @@ import {
   setNotificationSocketToken,
   subscribeNotificationEvents,
 } from "@/features/notifications/lib/global-notification-socket";
+import { shouldPlayNotificationSound } from "@/features/notifications/lib/notification-sound-policy";
+import {
+  playNotificationSound,
+  unlockNotificationAudio,
+} from "@/lib/notification-sound";
 import type { NotificationListResponse } from "@/features/notifications/types/notification";
 
 const LIST_KEY = ["notifications", "list"] as const;
@@ -72,12 +77,31 @@ export function useNotifications(enabled: boolean) {
     return () => setNotificationSocketToken(null);
   }, [enabled, token, wsTicketQuery.data?.ticket]);
 
-  // Новое уведомление прилетело по сокету — обновляем список (и счётчик в нём).
+  // Web Audio блокируется до первого жеста пользователя. Разблокируем один раз
+  // на первом клике/тапе по странице — общий AudioContext включает звук и для
+  // колокольчика, и для чата, даже если виджет чата ни разу не открывали.
+  useEffect(() => {
+    if (!enabled) return;
+    const unlock = () => void unlockNotificationAudio();
+    window.addEventListener("pointerdown", unlock, { once: true });
+    return () => window.removeEventListener("pointerdown", unlock);
+  }, [enabled]);
+
+  // Новое уведомление прилетело по сокету — обновляем список (и счётчик в нём)
+  // и проигрываем короткий сигнал.
   useEffect(() => {
     if (!enabled) return;
     return subscribeNotificationEvents((evt) => {
       if (evt.event !== "notification.created") return;
       void queryClient.invalidateQueries({ queryKey: LIST_KEY });
+      if (
+        shouldPlayNotificationSound({
+          eventName: evt.event,
+          hasNotification: Boolean(evt.notification),
+        })
+      ) {
+        playNotificationSound();
+      }
     });
   }, [enabled, queryClient]);
 

@@ -72,7 +72,7 @@ BEGIN
 END;
 $$;
 
-CREATE TRIGGER trg_master_min_price_insert
+CREATE OR REPLACE TRIGGER trg_master_min_price_insert
     AFTER INSERT ON master_services
     REFERENCING NEW TABLE AS inserted_rows
     FOR EACH STATEMENT EXECUTE FUNCTION fn_min_price_after_insert();
@@ -101,8 +101,15 @@ BEGIN
 END;
 $$;
 
-CREATE TRIGGER trg_master_min_price_update
-    AFTER UPDATE OF price ON master_services
+-- NOTE: no `OF price` column list here. PostgreSQL forbids combining a column
+-- list with transition tables ("transition tables cannot be specified for
+-- triggers with column lists"), which made the original statement fail outright.
+-- Firing on every UPDATE is correct: fn_min_price_after_update recomputes the
+-- derived min price, which is a no-op when price did not actually change. In
+-- practice ReplaceServices rewrites rows via DELETE+INSERT, so this trigger
+-- rarely fires at all.
+CREATE OR REPLACE TRIGGER trg_master_min_price_update
+    AFTER UPDATE ON master_services
     REFERENCING NEW TABLE AS updated_new_rows OLD TABLE AS updated_old_rows
     FOR EACH STATEMENT EXECUTE FUNCTION fn_min_price_after_update();
 
@@ -125,7 +132,7 @@ BEGIN
 END;
 $$;
 
-CREATE TRIGGER trg_master_min_price_delete
+CREATE OR REPLACE TRIGGER trg_master_min_price_delete
     AFTER DELETE ON master_services
     REFERENCING OLD TABLE AS deleted_rows
     FOR EACH STATEMENT EXECUTE FUNCTION fn_min_price_after_delete();

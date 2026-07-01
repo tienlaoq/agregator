@@ -20,3 +20,5 @@ ALTER TABLE bookings
             ELSE array_to_json(package_service_ids::text[])::text
         END
     );
+
+DROP FUNCTION IF EXISTS json_text_to_uuid_array(text);

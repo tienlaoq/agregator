@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net/http"
 	"strings"
 
 	"github.com/minio/minio-go/v7"
@@ -74,4 +75,61 @@ func (u *MinioUploader) Delete(ctx context.Context, key string) error {
 		return fmt.Errorf("storage: delete %q: %w", key, err)
 	}
 	return nil
+}
+
+// ServesViaGateway reports whether objects are served back through the gateway
+// (relative publicBaseURL like "/api/v1/uploads") rather than directly from
+// MinIO/CDN (absolute publicBaseURL like "https://cdn.example.com/photos").
+//
+// When true, mount ServeHTTP on the /uploads/* route: the gateway streams
+// objects from MinIO so a single relative path works for both browsers and the
+// server-side next/image optimizer (which fetches via an in-cluster rewrite and
+// cannot reach a localhost MinIO endpoint). When false, clients fetch the
+// absolute URL directly and the proxy route is unnecessary.
+func (u *MinioUploader) ServesViaGateway() bool {
+	return strings.HasPrefix(u.publicBaseURL, "/")
+}
+
+// ServeHTTP streams objects from the bucket, stripping the relative
+// publicBaseURL prefix (e.g. "/api/v1/uploads") from the request path to derive
+// the object key. Only meaningful when ServesViaGateway is true; attach it to
+// the /uploads/* route in that mode (mirrors DiskUploader.ServeHTTP).
+func (u *MinioUploader) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	key := strings.TrimPrefix(r.URL.Path, u.publicBaseURL)
+	key = strings.TrimPrefix(key, "/")
+	if key == "" || strings.Contains(key, "..") {
+		http.NotFound(w, r)
+		return
+	}
+
+	obj, err := u.client.GetObject(r.Context(), u.bucket, key, minio.GetObjectOptions{})
+	if err != nil {
+		http.Error(w, "storage error", http.StatusBadGateway)
+		return
+	}
+	defer obj.Close()
+
+	// Stat resolves the request; a missing object surfaces here as NoSuchKey.
+	info, err := obj.Stat()
+	if err != nil {
+		if minio.ToErrorResponse(err).Code == "NoSuchKey" {
+			http.NotFound(w, r)
+			return
+		}
+		http.Error(w, "storage error", http.StatusBadGateway)
+		return
+	}
+
+	if info.ContentType != "" {
+		w.Header().Set("Content-Type", info.ContentType)
+	}
+	// User-generated media is immutable (unique UUID keys) — cache aggressively.
+	w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+	// minio.Object is an io.ReadSeeker, so ServeContent adds Range + conditional
+	// request support for free.
+	http.ServeContent(w, r, key, info.LastModified, obj)
 }

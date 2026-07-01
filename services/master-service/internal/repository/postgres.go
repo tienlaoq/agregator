@@ -586,12 +586,10 @@ func (r *MasterRepo) ListPublic(ctx context.Context, p domain.ListPublicMastersP
 			`(
   (
     plainto_tsquery('russian', $%[1]d) <> ''::tsquery
-    AND to_tsvector('russian',
-      m.display_name || ' ' ||
-      COALESCE(m.bio, '') || ' ' ||
-      COALESCE(m.city, '') || ' ' ||
-      COALESCE(array_to_string(m.specializations, ' '), '')
-    ) @@ plainto_tsquery('russian', $%[1]d)
+    -- masters_search_tsv (migration 011) is an IMMUTABLE wrapper so this
+    -- expression matches the GIN index idx_masters_fts and the planner can use it.
+    AND masters_search_tsv(m.display_name, m.bio, m.city, m.specializations)
+        @@ plainto_tsquery('russian', $%[1]d)
   )
   OR m.slug  ILIKE '%%' || $%[1]d || '%%'
   OR m.phone ILIKE '%%' || $%[1]d || '%%'
