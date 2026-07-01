@@ -21,18 +21,41 @@
 -- plainto_tsquery is used in the query (not to_tsquery) so raw user input is
 -- safe without escaping.
 --
+-- ── IMMUTABLE wrapper (why this function exists) ──────────────────────────────
+-- The tsvector expression concatenates specializations via array_to_string,
+-- which PostgreSQL catalogues as STABLE (not IMMUTABLE). CREATE INDEX rejects a
+-- STABLE expression ("functions in index expression must be marked IMMUTABLE"),
+-- so the raw expression cannot be indexed directly. masters_search_tsv wraps the
+-- exact same expression in a function declared IMMUTABLE — for text[] joined by a
+-- constant delimiter the result is in fact deterministic, so the declaration is
+-- safe. CREATE INDEX only checks the *declared* volatility of the top-level
+-- function, so this lets the GIN index build. ListPublic MUST call this same
+-- function in its WHERE clause for the planner to use the index (the index and
+-- query expressions have to match textually).
+--
 -- pg_trgm is NOT required for this index — tsvector handles word-boundary
 -- search. Trigram similarity (pg_trgm + GIN) would additionally handle
 -- typos / partial-word matches and can be added in a follow-up migration when
 -- Meilisearch integration is not yet ready (see TECH_DEBT.md [MASTER-FTS-MEILI]).
 
-CREATE INDEX idx_masters_fts
-    ON masters
-    USING GIN (
-        to_tsvector('russian',
-            display_name || ' ' ||
-            COALESCE(bio, '') || ' ' ||
-            COALESCE(city, '') || ' ' ||
-            COALESCE(array_to_string(specializations, ' '), '')
-        )
+CREATE OR REPLACE FUNCTION masters_search_tsv(
+    p_display_name  TEXT,
+    p_bio           TEXT,
+    p_city          TEXT,
+    p_specializations TEXT[]
+) RETURNS tsvector
+    LANGUAGE sql
+    IMMUTABLE
+    PARALLEL SAFE
+AS $$
+    SELECT to_tsvector('russian',
+        p_display_name || ' ' ||
+        COALESCE(p_bio, '') || ' ' ||
+        COALESCE(p_city, '') || ' ' ||
+        COALESCE(array_to_string(p_specializations, ' '), '')
     );
+$$;
+
+CREATE INDEX IF NOT EXISTS idx_masters_fts
+    ON masters
+    USING GIN (masters_search_tsv(display_name, bio, city, specializations));

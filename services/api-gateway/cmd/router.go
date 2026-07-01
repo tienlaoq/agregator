@@ -220,10 +220,20 @@ func buildRouter(ctx context.Context, log zerolog.Logger, cfg Config, d *deps) (
 	// METRICS_ADDR listener started in main.go instead.
 
 	r.Route("/api/v1", func(api chi.Router) {
-		// /uploads/* is only mounted when using DiskUploader (dev/single-replica).
-		// In production (MinIO), files are served directly from MinIO/CDN.
-		if disk, ok := d.Storage.(*storage.DiskUploader); ok {
-			api.Handle("/uploads/*", disk)
+		// /uploads/* serves user-generated media. Mounted for:
+		//   - DiskUploader (dev/single-replica): files from the local filesystem.
+		//   - MinioUploader when ServesViaGateway (relative publicBaseURL): the
+		//     gateway streams objects from MinIO so one relative path works for
+		//     browsers and the server-side next/image optimizer alike.
+		// When MinIO uses an absolute CDN publicBaseURL, clients fetch it
+		// directly and this route stays unmounted.
+		switch s := d.Storage.(type) {
+		case *storage.DiskUploader:
+			api.Handle("/uploads/*", s)
+		case *storage.MinioUploader:
+			if s.ServesViaGateway() {
+				api.Handle("/uploads/*", s)
+			}
 		}
 
 		// All other API routes get gzip at level 3 and a hard write timeout.

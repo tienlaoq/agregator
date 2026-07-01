@@ -69,6 +69,53 @@ jobs:
       - name: Test
         run: go test ./...
 
+  migrations:
+    name: Migration from-scratch check
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        # PostGIS image because venue-service migrations use PostGIS types.
+        image: postgis/postgis:16-3.4
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Wait for Postgres
+        env:
+          PGPASSWORD: postgres
+        # The PostGIS entrypoint restarts once during init (logs "ready" twice),
+        # so require two consecutive successful queries before proceeding.
+        run: |
+          ok=0
+          for i in $(seq 1 60); do
+            if psql -h localhost -U postgres -tAc 'SELECT 1' >/dev/null 2>&1; then
+              ok=$((ok + 1))
+              [ "$ok" -ge 2 ] && exit 0
+            else
+              ok=0
+            fi
+            sleep 1
+          done
+          echo "Postgres did not become ready in time" >&2
+          exit 1
+
+      - name: Apply every service's migrations from scratch
+        env:
+          PGHOST: localhost
+          PGPORT: 5432
+          PGUSER: postgres
+          PGPASSWORD: postgres
+        run: bash deploy/check-migrations.sh
+
   frontend:
     name: Frontend lint/test/build
     runs-on: ubuntu-latest

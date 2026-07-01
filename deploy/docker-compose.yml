@@ -429,6 +429,9 @@ services:
       args:
         NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8080}
         NEXT_PUBLIC_YANDEX_MAPS_API_KEY: ${NEXT_PUBLIC_YANDEX_MAPS_API_KEY:-}
+        # next.config rewrites bake at build time → gateway host must be set now,
+        # not just at runtime (see frontend/Dockerfile).
+        INTERNAL_API_URL: ${INTERNAL_API_URL:-http://api-gateway:8080}
     container_name: banya-frontend
     ports:
       - "${FRONTEND_PORT:-3000}:3000"

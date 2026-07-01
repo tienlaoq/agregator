@@ -93,5 +93,5 @@ SET min_effective_price_kopecks = (
 );
 
 -- B-Tree index for range queries in ListPublic (>= min, <= max).
-CREATE INDEX idx_masters_min_price ON masters (min_effective_price_kopecks)
+CREATE INDEX IF NOT EXISTS idx_masters_min_price ON masters (min_effective_price_kopecks)
     WHERE status = 'active';

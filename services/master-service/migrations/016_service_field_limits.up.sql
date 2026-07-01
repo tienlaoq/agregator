@@ -12,6 +12,14 @@
 -- char_length counts Unicode code points (same as Go's len([]rune(s))),
 -- consistent with the usecase validation.
 
+-- DROP-then-ADD makes this idempotent: deploy/migrate.sh re-applies every
+-- *.up.sql on each deploy, and PostgreSQL has no ADD CONSTRAINT IF NOT EXISTS.
+ALTER TABLE master_services
+    DROP CONSTRAINT IF EXISTS chk_master_service_name_length,
+    DROP CONSTRAINT IF EXISTS chk_master_service_description_length,
+    DROP CONSTRAINT IF EXISTS chk_master_service_duration_non_negative,
+    DROP CONSTRAINT IF EXISTS chk_master_service_price_non_negative;
+
 ALTER TABLE master_services
     ADD CONSTRAINT chk_master_service_name_length
         CHECK (char_length(name) BETWEEN 1 AND 200),

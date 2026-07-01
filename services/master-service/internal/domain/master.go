@@ -389,13 +389,21 @@ func NormalizePayoutLegalForm(s string) string {
 	return v
 }
 
-// ValidatePayoutProfile checks that all payout fields required for the given
-// legal form are present and have the correct length. It is the single source
-// of truth for payout readiness — used by both the usecase (before creating a
-// booking) and the delivery layer (to compute the payout_ready flag in the
-// profile response).
+// ValidatePayoutProfile checks that the master has declared a valid legal
+// recipient identity for payouts (legal form + name + INN, plus KPP/OGRN/OGRNIP
+// where the form requires them). This is the KYC gate moderators review and the
+// platform needs before accepting money on the master's behalf.
 //
-// Returns nil when the profile is valid and ready to receive payouts.
+// It intentionally does NOT validate bank rails (bank name, BIK, settlement /
+// correspondent account): the operational payout destination — a bank account
+// OR SBP — lives in payment-service as a partner payout method, configured in
+// the master's "Финансы" tab. Money can never leave without an active method
+// there (the payout scheduler holds balance until one exists), so requiring a
+// second copy of the account on the profile is redundant friction.
+//
+// Used by both the usecase (before creating a booking / on submit) and the
+// delivery layer (to compute the payout_ready flag in the profile response).
+// Returns nil when the recipient identity is valid.
 func (m *Master) ValidatePayoutProfile() error {
 	plf := NormalizePayoutLegalForm(m.PayoutLegalForm)
 	switch plf {
@@ -405,18 +413,6 @@ func (m *Master) ValidatePayoutProfile() error {
 	}
 	if strings.TrimSpace(m.PayoutLegalName) == "" {
 		return payoutErr("legal_name", "укажите ФИО или наименование получателя выплат")
-	}
-	if strings.TrimSpace(m.PayoutBankName) == "" {
-		return payoutErr("bank_name", "укажите банк получателя")
-	}
-	if countDigits(m.PayoutBIK) != 9 {
-		return payoutErr("bik", "БИК должен содержать 9 цифр")
-	}
-	if countDigits(m.PayoutSettlementAccount) != 20 {
-		return payoutErr("settlement_account", "расчетный счет должен содержать 20 цифр")
-	}
-	if countDigits(m.PayoutCorrespondentAccount) != 20 {
-		return payoutErr("correspondent_account", "корреспондентский счет должен содержать 20 цифр")
 	}
 	innDigits := countDigits(m.PayoutINN)
 	switch plf {

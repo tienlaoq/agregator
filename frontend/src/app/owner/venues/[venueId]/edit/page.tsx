@@ -896,44 +896,6 @@ export default function EditOwnerVenuePage() {
             <p className="text-sm text-muted-foreground">{statusMeta.description}</p>
           ) : null}
 
-          {venue.status === "draft" ? (
-            <Card className="border-primary/40 bg-primary/5">
-              <CardHeader className="pb-2">
-                <CardTitle className="text-base">Отправка на модерацию</CardTitle>
-                <CardDescription>
-                  Пока статус «Черновик», заявка не попадает в очередь
-                  модераторов. Когда заполните витрину, отправьте карточку на
-                  проверку.
-                </CardDescription>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <p className="text-sm text-muted-foreground">
-                  Заполните все пункты чек-листа — когда они станут зелёными,
-                  кнопка отправки разблокируется.
-                </p>
-                {submitReviewError ? (
-                  <p className="text-sm text-destructive" role="alert">
-                    {submitReviewError}
-                  </p>
-                ) : null}
-                <Button
-                  type="button"
-                  onClick={() => submitReviewMu.mutate()}
-                  disabled={!draftReadyForReview || submitReviewMu.isPending}
-                  title={
-                    !draftReadyForReview && !submitReviewMu.isPending
-                      ? "Выполните все пункты чек-листа."
-                      : undefined
-                  }
-                >
-                  {submitReviewMu.isPending
-                    ? "Отправка…"
-                    : "Отправить на проверку"}
-                </Button>
-              </CardContent>
-            </Card>
-          ) : null}
-
           {venue.moderation_comment ? (
             <Card className={`border-2 ${sc.bgClass}`}>
               <CardContent className="p-5">
@@ -1690,6 +1652,24 @@ export default function EditOwnerVenuePage() {
                       </li>
                     ))}
                   </ul>
+                  {submitReviewError ? (
+                    <p className="mt-4 text-sm text-destructive" role="alert">
+                      {submitReviewError}
+                    </p>
+                  ) : null}
+                  <Button
+                    type="button"
+                    className="mt-4 w-full"
+                    onClick={() => submitReviewMu.mutate()}
+                    disabled={!draftReadyForReview || submitReviewMu.isPending}
+                    title={
+                      !draftReadyForReview && !submitReviewMu.isPending
+                        ? "Выполните все пункты чек-листа."
+                        : undefined
+                    }
+                  >
+                    {submitReviewMu.isPending ? "Отправка…" : "Отправить на проверку"}
+                  </Button>
                 </CardContent>
               </Card>
             </aside>

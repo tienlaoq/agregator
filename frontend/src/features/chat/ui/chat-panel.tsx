@@ -33,8 +33,11 @@ function DeliveryTicks({ state }: { state: OutgoingDeliveryState }) {
   return (
     <span
       className={cn(
+        // Галочки всегда на «своём» (primary) пузыре, поэтому цвета — от
+        // primary-foreground, а не muted (иначе тёмное на тёмном не видно).
+        // Прочитано — яркий голубой, контрастный на коричневом фоне.
         "text-[11px] leading-none tracking-[-0.18em]",
-        isRead ? "text-sky-500" : "text-muted-foreground/55",
+        isRead ? "text-sky-300" : "text-primary-foreground/75",
       )}
       aria-label={label}
     >

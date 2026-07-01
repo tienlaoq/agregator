@@ -55,12 +55,19 @@ func (r *PostgresUserRepository) GetBatch(ctx context.Context, ids []string) (ma
 	out := make(map[string]*domain.User, len(ids))
 	for rows.Next() {
 		var u domain.User
+		// phone/avatar_url/bio are nullable and are set to NULL by SoftDelete;
+		// scan through pointers so a soft-deleted row does not fail with
+		// "cannot scan NULL into *string".
+		var phone, avatarURL, bio *string
 		if err := rows.Scan(
-			&u.ID, &u.Email, &u.Phone, &u.Name, &u.Role,
-			&u.AvatarURL, &u.Bio, &u.CreatedAt, &u.UpdatedAt, &u.DeletedAt,
+			&u.ID, &u.Email, &phone, &u.Name, &u.Role,
+			&avatarURL, &bio, &u.CreatedAt, &u.UpdatedAt, &u.DeletedAt,
 		); err != nil {
 			return nil, err
 		}
+		u.Phone = derefString(phone)
+		u.AvatarURL = derefString(avatarURL)
+		u.Bio = derefString(bio)
 		out[u.ID] = &u
 	}
 	return out, rows.Err()
@@ -126,9 +133,12 @@ func (r *PostgresUserRepository) Update(ctx context.Context, user *domain.User) 
 
 func (r *PostgresUserRepository) scanUser(row pgx.Row) (*domain.User, error) {
 	var u domain.User
+	// phone/avatar_url/bio are nullable columns (and are NULLed by SoftDelete),
+	// so scan through pointers — scanning NULL directly into a string fails.
+	var phone, avatarURL, bio *string
 	err := row.Scan(
-		&u.ID, &u.Email, &u.Phone, &u.Name, &u.Role,
-		&u.AvatarURL, &u.Bio, &u.CreatedAt, &u.UpdatedAt, &u.DeletedAt,
+		&u.ID, &u.Email, &phone, &u.Name, &u.Role,
+		&avatarURL, &bio, &u.CreatedAt, &u.UpdatedAt, &u.DeletedAt,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		// Translate the pgx sentinel into the domain sentinel so the usecase
@@ -138,5 +148,17 @@ func (r *PostgresUserRepository) scanUser(row pgx.Row) (*domain.User, error) {
 	if err != nil {
 		return nil, err
 	}
+	u.Phone = derefString(phone)
+	u.AvatarURL = derefString(avatarURL)
+	u.Bio = derefString(bio)
 	return &u, nil
+}
+
+// derefString returns the pointed-to string, or "" when the pointer is nil
+// (a NULL column value).
+func derefString(p *string) string {
+	if p == nil {
+		return ""
+	}
+	return *p
 }

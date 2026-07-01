@@ -214,15 +214,13 @@ function masterReadinessChecklist(
   } else if (plf === "ip") {
     payoutExtraOk = digits(body.payout_ogrnip).length === 15;
   }
+  // Только данные получателя (юр. форма + ФИО/название + ИНН, и КПП/ОГРН(ИП) где
+  // нужно). Банковский счёт / СБП указываются отдельно в ЛК → Финансы.
   const payoutOk =
     ["ip", "ooo", "individual", "self_employed"].includes(plf) &&
     String(body.payout_legal_name ?? "").trim() !== "" &&
     innOk &&
-    payoutExtraOk &&
-    String(body.payout_bank_name ?? "").trim() !== "" &&
-    digits(body.payout_bik).length === 9 &&
-    digits(body.payout_settlement_account).length === 20 &&
-    digits(body.payout_correspondent_account).length === 20;
+    payoutExtraOk;
   const bio = String(body.bio ?? "").trim();
   const svc = body.services;
   return [
@@ -231,7 +229,7 @@ function masterReadinessChecklist(
     { label: "Телефон", done: normalizeRussianMobileDigits(String(body.phone ?? "")) !== "" },
     { label: "О себе — от 20 символов", done: [...bio].length >= 20 },
     { label: "Хотя бы одна услуга", done: Array.isArray(svc) && svc.length > 0 },
-    { label: "Реквизиты для выплат", done: payoutOk },
+    { label: "Данные получателя выплат", done: payoutOk },
     { label: "Фото профиля", done: photoCount > 0, optional: true },
   ];
 }
@@ -272,14 +270,8 @@ function masterSubmitValidationMessage(body: Record<string, unknown>): string | 
   if (plf === "ip" && String(body.payout_ogrnip ?? "").replace(/\D/g, "").length !== 15) {
     return "Для ИП ОГРНИП должен содержать 15 цифр";
   }
-  if (String(body.payout_bank_name ?? "").trim() === "") return "Укажите банк получателя";
-  if (String(body.payout_bik ?? "").replace(/\D/g, "").length !== 9) return "БИК должен содержать 9 цифр";
-  if (String(body.payout_settlement_account ?? "").replace(/\D/g, "").length !== 20) {
-    return "Расчетный счет должен содержать 20 цифр";
-  }
-  if (String(body.payout_correspondent_account ?? "").replace(/\D/g, "").length !== 20) {
-    return "Корреспондентский счет должен содержать 20 цифр";
-  }
+  // Банковский счёт / СБП больше не требуются в карточке — они настраиваются
+  // в ЛК → Финансы (payment-service payout method) и там же гейтят выплату.
   const wf = String(body.work_format ?? "").toLowerCase();
   if (wf === "mobile" || wf === "both") {
     const travelKm = Number(body.travel_radius_km);
@@ -353,10 +345,6 @@ export default function MasterProfilePage() {
   const [payoutKpp, setPayoutKpp] = useState("");
   const [payoutOgrn, setPayoutOgrn] = useState("");
   const [payoutOgrnip, setPayoutOgrnip] = useState("");
-  const [payoutBankName, setPayoutBankName] = useState("");
-  const [payoutBik, setPayoutBik] = useState("");
-  const [payoutSettlementAccount, setPayoutSettlementAccount] = useState("");
-  const [payoutCorrespondentAccount, setPayoutCorrespondentAccount] = useState("");
   const [workFormat, setWorkFormat] = useState("both");
   const [travelRadius, setTravelRadius] = useState(0);
   /** Координаты метки с Яндекс.Карт (на сервер уходят как travel_base_*). */
@@ -483,10 +471,6 @@ export default function MasterProfilePage() {
     setPayoutKpp(profile.payout_kpp ?? "");
     setPayoutOgrn(profile.payout_ogrn ?? "");
     setPayoutOgrnip(profile.payout_ogrnip ?? "");
-    setPayoutBankName(profile.payout_bank_name ?? "");
-    setPayoutBik(profile.payout_bik ?? "");
-    setPayoutSettlementAccount(profile.payout_settlement_account ?? "");
-    setPayoutCorrespondentAccount(profile.payout_correspondent_account ?? "");
     setWorkFormat(profile.work_format || "both");
     setTravelRadius(profile.travel_radius_km);
     const pLat = profile.travel_base_latitude;
@@ -614,10 +598,6 @@ export default function MasterProfilePage() {
       payout_kpp: payoutKpp.trim(),
       payout_ogrn: payoutOgrn.trim(),
       payout_ogrnip: payoutOgrnip.trim(),
-      payout_bank_name: payoutBankName.trim(),
-      payout_bik: payoutBik.trim(),
-      payout_settlement_account: payoutSettlementAccount.trim(),
-      payout_correspondent_account: payoutCorrespondentAccount.trim(),
       work_format: workFormat,
       travel_radius_km: travelRadius,
       experience_years: experienceYears,
@@ -981,28 +961,16 @@ export default function MasterProfilePage() {
                     <Input value={payoutOgrnip} onChange={(e) => setPayoutOgrnip(e.target.value)} />
                   </div>
                 ) : null}
-                <div className="space-y-2 sm:col-span-2">
-                  <Label>Банк получателя</Label>
-                  <Input value={payoutBankName} onChange={(e) => setPayoutBankName(e.target.value)} />
-                </div>
-                <div className="space-y-2">
-                  <Label>БИК</Label>
-                  <Input value={payoutBik} onChange={(e) => setPayoutBik(e.target.value)} />
-                </div>
-                <div className="space-y-2">
-                  <Label>Расчетный счет</Label>
-                  <Input
-                    value={payoutSettlementAccount}
-                    onChange={(e) => setPayoutSettlementAccount(e.target.value)}
-                  />
-                </div>
-                <div className="space-y-2 sm:col-span-2">
-                  <Label>Корреспондентский счет</Label>
-                  <Input
-                    value={payoutCorrespondentAccount}
-                    onChange={(e) => setPayoutCorrespondentAccount(e.target.value)}
-                  />
-                </div>
+                <p className="text-xs text-muted-foreground sm:col-span-2">
+                  Куда переводить деньги — банковский счёт или СБП — укажите в разделе{" "}
+                  <Link
+                    href="/owner/master/finance"
+                    className="font-medium text-primary underline underline-offset-2"
+                  >
+                    ЛК → Финансы
+                  </Link>
+                  . Там же настраивается автоматическая выплата.
+                </p>
               </div>
               <div className="space-y-2">
                 <Label>Формат работы</Label>

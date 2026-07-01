@@ -1,36 +1,92 @@
+//go:build integration
+
 package repository_test
 
 // Integration tests for the repository layer.  They require a real PostgreSQL
 // instance with all chat-service migrations applied.
 //
-// Run locally:
+// Run with the integration tag (a throwaway Postgres container is started
+// automatically; migrations are applied from ../../migrations):
 //
-//	TEST_POSTGRES_DSN="postgres://banya:banya_dev_postgres_password@localhost:5432/chat_db?sslmode=disable" \
-//	  go test ./internal/repository/... -v -count=1
+//	go test -tags=integration ./internal/repository/... -v -count=1
 //
-// The tests are skipped automatically when TEST_POSTGRES_DSN is not set, so
-// they never block a plain `go test ./...` in CI without a database.
+// To run against an already-migrated database instead of a container, set
+// TEST_POSTGRES_DSN:
+//
+//	TEST_POSTGRES_DSN="postgres://…/chat_db?sslmode=disable" \
+//	  go test -tags=integration ./internal/repository/... -v -count=1
+//
+// The build tag keeps these out of a plain `go test ./...`, so a database (or
+// Docker) is never required for the unit suite.
 
 import (
 	"context"
 	"os"
+	"path/filepath"
+	"runtime"
+	"sort"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/testcontainers/testcontainers-go"
+	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
+	"github.com/testcontainers/testcontainers-go/wait"
+
 	"github.com/tienlao/agregator/services/chat-service/internal/repository"
 )
 
 var testRepo *repository.Repo
 
+// chatMigrations returns the ordered up-migration paths for the chat schema.
+func chatMigrations() []string {
+	_, thisFile, _, _ := runtime.Caller(0)
+	dir := filepath.Join(filepath.Dir(thisFile), "..", "..", "migrations")
+	all, _ := filepath.Glob(filepath.Join(dir, "*.up.sql"))
+	ups := all[:0]
+	for _, p := range all {
+		if strings.HasSuffix(p, ".up.sql") {
+			ups = append(ups, p)
+		}
+	}
+	sort.Strings(ups)
+	return ups
+}
+
 func TestMain(m *testing.M) {
+	ctx := context.Background()
+
+	// Prefer an explicit DSN (fast local loop against an already-migrated DB);
+	// otherwise spin up a throwaway Postgres container with migrations applied so
+	// the suite also runs in CI without external setup.
 	dsn := os.Getenv("TEST_POSTGRES_DSN")
+	var terminate func()
+
 	if dsn == "" {
-		// No database available — skip all integration tests gracefully.
-		os.Exit(m.Run())
+		container, err := tcpostgres.Run(ctx, "postgres:16-alpine",
+			tcpostgres.WithDatabase("chat_test"),
+			tcpostgres.WithUsername("test"),
+			tcpostgres.WithPassword("test"),
+			tcpostgres.WithInitScripts(chatMigrations()...),
+			testcontainers.WithWaitStrategy(
+				wait.ForAll(
+					wait.ForLog("database system is ready to accept connections").
+						WithOccurrence(2).WithStartupTimeout(300*time.Second),
+					wait.ForListeningPort("5432/tcp").WithStartupTimeout(300*time.Second),
+				),
+			),
+		)
+		if err != nil {
+			panic("integration test: start postgres container: " + err.Error())
+		}
+		terminate = func() { _ = container.Terminate(ctx) }
+		if dsn, err = container.ConnectionString(ctx, "sslmode=disable"); err != nil {
+			panic("integration test: connection string: " + err.Error())
+		}
 	}
 
-	ctx := context.Background()
 	pool, err := pgxpool.New(ctx, dsn)
 	if err != nil {
 		panic("integration test: cannot connect to postgres: " + err.Error())
@@ -41,6 +97,9 @@ func TestMain(m *testing.M) {
 	testRepo = repository.New(pool)
 	code := m.Run()
 	pool.Close()
+	if terminate != nil {
+		terminate()
+	}
 	os.Exit(code)
 }
 

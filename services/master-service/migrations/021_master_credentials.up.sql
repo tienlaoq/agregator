@@ -32,4 +32,4 @@ CREATE TABLE IF NOT EXISTS master_credentials (
         CHECK (year = 0 OR year BETWEEN 1900 AND 2100)
 );
 
-CREATE INDEX idx_master_credentials_master ON master_credentials (master_id);
+CREATE INDEX IF NOT EXISTS idx_master_credentials_master ON master_credentials (master_id);
