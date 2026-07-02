@@ -427,3 +427,19 @@ func TestProcessOutbox_EmptyDoesNotMark(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 0, n)
 }
+
+func TestExpireUnpaidBookings_CancelsExpiredPaymentPending(t *testing.T) {
+	ctx := context.Background()
+
+	repo := NewMockBookingRepository(t)
+	// 15-минутный порог передаётся в репозиторий.
+	repo.EXPECT().FindExpiredPaymentPending(mock.Anything, 15, mock.Anything).Return([]string{"b1"}, nil)
+	// Отмена идёт через CancelBookingByPayment: GetByID → payment_pending → отмена с событием.
+	repo.EXPECT().GetByID(mock.Anything, "b1").Return(&domain.Booking{ID: "b1", UserID: "u1", VenueID: "v1", Status: domain.StatusPaymentPending}, nil)
+	repo.EXPECT().CancelWithEvent(mock.Anything, "b1", mock.Anything).Return(nil)
+
+	uc := NewBookingUseCase(repo, &mockVenueClient{}, &mockCRMClient{}, &mockPaymentClient{}, &mockEventPublisher{}, zerolog.Nop(), "Europe/Moscow", 0)
+	n, err := uc.ExpireUnpaidBookings(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, 1, n)
+}

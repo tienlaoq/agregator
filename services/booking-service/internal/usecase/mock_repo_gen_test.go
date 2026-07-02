@@ -399,6 +399,26 @@ func (_c *MockBookingRepository_DeleteOrphanPending_Call) Return(_a0 int64, _a1 
 	return _c
 }
 
+func (_m *MockBookingRepository) FindExpiredPaymentPending(ctx context.Context, olderThanMinutes int, limit int) ([]string, error) {
+	ret := _m.Called(ctx, olderThanMinutes, limit)
+	var r0 []string
+	if ret.Get(0) != nil {
+		r0 = ret.Get(0).([]string)
+	}
+	return r0, ret.Error(1)
+}
+
+type MockBookingRepository_FindExpiredPaymentPending_Call struct{ *mock.Call }
+
+func (_e *MockBookingRepository_Expecter) FindExpiredPaymentPending(ctx, olderThanMinutes, limit interface{}) *MockBookingRepository_FindExpiredPaymentPending_Call {
+	return &MockBookingRepository_FindExpiredPaymentPending_Call{Call: _e.mock.On("FindExpiredPaymentPending", ctx, olderThanMinutes, limit)}
+}
+
+func (_c *MockBookingRepository_FindExpiredPaymentPending_Call) Return(_a0 []string, _a1 error) *MockBookingRepository_FindExpiredPaymentPending_Call {
+	_c.Call.Return(_a0, _a1)
+	return _c
+}
+
 func (_m *MockBookingRepository) ListBookingStaffNotes(ctx context.Context, bookingID string) ([]domain.BookingStaffNote, error) {
 	ret := _m.Called(ctx, bookingID)
 	var r0 []domain.BookingStaffNote

@@ -64,6 +64,11 @@ type BookingRepository interface {
 	// См. TECH_DEBT [BOOKING-ORPHAN].
 	DeleteOrphanPending(ctx context.Context, olderThanMinutes int) (int64, error)
 
+	// FindExpiredPaymentPending returns ids of bookings stuck in payment_pending
+	// (payment link issued but never paid) whose last change is older than
+	// olderThanMinutes. The reaper cancels them so the held slot is released.
+	FindExpiredPaymentPending(ctx context.Context, olderThanMinutes, limit int) ([]string, error)
+
 	ListBookingStaffNotes(ctx context.Context, bookingID string) ([]BookingStaffNote, error)
 	AddBookingStaffNote(ctx context.Context, n *BookingStaffNote) error
 }

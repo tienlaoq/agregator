@@ -613,6 +613,34 @@ func (r *BookingRepo) DeleteOrphanPending(ctx context.Context, olderThanMinutes 
 	return ct.RowsAffected(), nil
 }
 
+// FindExpiredPaymentPending returns ids of payment_pending bookings whose last
+// change is older than olderThanMinutes — the payment link was issued but never
+// paid. The caller cancels each (releasing the held slot) via the same path as
+// a provider payment failure.
+func (r *BookingRepo) FindExpiredPaymentPending(ctx context.Context, olderThanMinutes, limit int) ([]string, error) {
+	const q = `
+		SELECT id::text FROM bookings
+		WHERE status = 'payment_pending'
+		  AND updated_at < now() - ($1 * INTERVAL '1 minute')
+		ORDER BY updated_at
+		LIMIT $2`
+	rows, err := r.pool.Query(ctx, q, olderThanMinutes, limit)
+	if err != nil {
+		return nil, fmt.Errorf("find expired payment_pending: %w", err)
+	}
+	defer rows.Close()
+
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scan expired payment_pending: %w", err)
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
 // nullableUUIDs возвращает nil когда слайс пустой — PG запишет NULL в uuid[].
 // При непустом слайсе pgx кодирует []string как uuid[] через $N::uuid[].
 func nullableUUIDs(ids []string) any {
