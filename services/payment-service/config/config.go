@@ -53,6 +53,22 @@ type Config struct {
 	// PayoutHoldHours is how long after the service date a successful payment
 	// stays in escrow before becoming available for payout.  24h is the default.
 	PayoutHoldHours int
+	// PayoutMinKopecks is the minimum available balance the scheduler will pay
+	// out; smaller balances roll over to the next cycle.  Default 100000 (1000 ₽)
+	// so partners are not spammed with tiny transfers that cost more in fees than
+	// they are worth.
+	PayoutMinKopecks int64
+	// PayoutWeekday pins weekly payouts to one weekday (0=Sunday … 6=Saturday).
+	// Default 3 (Wednesday): a mid-week banking day leaves a full runway to
+	// resolve failed transfers before the weekend, and avoids the holiday
+	// clustering around Mondays.  Set to -1 to disable weekly batching and pay
+	// any ripe balance on every tick.
+	PayoutWeekday int
+	// PayoutTimezone is the IANA location in which PayoutWeekday is interpreted,
+	// so "Wednesday" means the business day, not the server's UTC day. Defaults
+	// to Europe/Moscow to match the platform's booking timezone. An unknown
+	// location falls back to UTC (logged at startup).
+	PayoutTimezone string
 	// InternalServiceToken is the shared secret that booking-service and
 	// master-service must present in the "x-service-token" gRPC metadata header
 	// on every call to payment-service.  Empty token disables the check in local
@@ -148,6 +164,9 @@ func Load() Config {
 		PaymentReturnURL:     config.GetEnv("PAYMENT_RETURN_URL", "http://localhost:3000/bookings"),
 		PlatformFeeBPS:       config.GetEnvInt("PLATFORM_FEE_BPS", 1500),
 		PayoutHoldHours:      config.GetEnvInt("PAYOUT_HOLD_HOURS", 24),
+		PayoutMinKopecks:     int64(config.GetEnvInt("PAYOUT_MIN_KOPECKS", 100000)),
+		PayoutWeekday:        config.GetEnvInt("PAYOUT_WEEKDAY", 3), // 3 = Wednesday
+		PayoutTimezone:       config.GetEnv("PAYOUT_TIMEZONE", "Europe/Moscow"),
 		InternalServiceToken: config.GetEnv("INTERNAL_SERVICE_TOKEN", ""),
 	}
 }

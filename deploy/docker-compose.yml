@@ -255,9 +255,12 @@ services:
       PG_DB: venue_db
       PG_USER: banya
       PG_PASSWORD: ${POSTGRES_PASSWORD}
+      NATS_URL: nats://nats:4222
     depends_on:
       postgres:
         condition: service_healthy
+      nats:
+        condition: service_started
       venue-service:
         condition: service_started
 
