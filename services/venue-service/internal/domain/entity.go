@@ -139,8 +139,34 @@ type ReservedSlot struct {
 type ManualSlotBlock struct {
 	ID       uuid.UUID
 	VenueID  uuid.UUID
-	Date     string // YYYY-MM-DD
-	TimeFrom string // HH:MM
-	TimeTo   string // HH:MM
+	HallID   *uuid.UUID // nil = whole-venue block (mode=whole)
+	Date     string     // YYYY-MM-DD
+	TimeFrom string     // HH:MM
+	TimeTo   string     // HH:MM
 	Note     string
+}
+
+// Booking modes control how a venue's availability is reserved.
+//   - BookingModeWhole: one reservation blocks the whole venue (the default;
+//     hall_id stays NULL).
+//   - BookingModePerHall: each selected hall is reserved independently, so
+//     different halls can be booked for the same interval.
+const (
+	BookingModeWhole   = "whole"
+	BookingModePerHall = "per_hall"
+)
+
+// ScheduleEntry is one occupied interval on a venue's day schedule: either an
+// aggregator booking (BookingID set) or a manual owner block (BookingID nil).
+// Both kinds live in the shared reserved_slots table. HallID is set only for
+// per-hall reservations; nil means the entry occupies the whole venue and
+// belongs on an "all halls" row of the grid.
+type ScheduleEntry struct {
+	ID        uuid.UUID
+	BookingID *uuid.UUID // nil = manual owner block
+	HallID    *uuid.UUID // nil = whole-venue reservation (mode=whole)
+	Date      string     // YYYY-MM-DD
+	TimeFrom  string     // HH:MM
+	TimeTo    string     // HH:MM
+	Note      string     // manual block note; empty for aggregator bookings
 }

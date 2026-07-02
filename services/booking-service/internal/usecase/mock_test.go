@@ -87,6 +87,15 @@ func (m *mockVenueClient) DeleteManualSlotBlock(ctx context.Context, in *venuev1
 func (m *mockVenueClient) ListManualSlotBlocks(ctx context.Context, in *venuev1.ListManualSlotBlocksRequest, opts ...grpc.CallOption) (*venuev1.ListManualSlotBlocksResponse, error) {
 	return nil, nil
 }
+func (m *mockVenueClient) GetVenueSchedule(ctx context.Context, in *venuev1.GetVenueScheduleRequest, opts ...grpc.CallOption) (*venuev1.GetVenueScheduleResponse, error) {
+	return nil, nil
+}
+func (m *mockVenueClient) GetVenueBookingMode(ctx context.Context, in *venuev1.GetVenueBookingModeRequest, opts ...grpc.CallOption) (*venuev1.GetVenueBookingModeResponse, error) {
+	return nil, nil
+}
+func (m *mockVenueClient) SetVenueBookingMode(ctx context.Context, in *venuev1.SetVenueBookingModeRequest, opts ...grpc.CallOption) (*venuev1.SetVenueBookingModeResponse, error) {
+	return nil, nil
+}
 func (m *mockVenueClient) UpdateRating(ctx context.Context, in *venuev1.UpdateRatingRequest, opts ...grpc.CallOption) (*venuev1.UpdateRatingResponse, error) {
 	return nil, nil
 }

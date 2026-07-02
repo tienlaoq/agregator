@@ -478,6 +478,12 @@ export default function OwnerVenueCrmPage() {
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <Button variant="outline" size="sm" className="gap-1" asChild>
+              <Link href={`/owner/venues/${venue.id}/crm/schedule`}>
+                <Clock className="h-4 w-4" />
+                Расписание
+              </Link>
+            </Button>
+            <Button variant="outline" size="sm" className="gap-1" asChild>
               <Link href={`/owner/venues/${venue.id}/crm/guests`}>
                 <Users className="h-4 w-4" />
                 Гости

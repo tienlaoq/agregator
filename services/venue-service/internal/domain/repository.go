@@ -67,16 +67,35 @@ type VenueRepository interface {
 	InsertModerationHistory(ctx context.Context, entry *ModerationHistoryEntry) error
 	GetModerationHistory(ctx context.Context, venueID uuid.UUID) ([]ModerationHistoryEntry, error)
 	UpdateRating(ctx context.Context, venueID uuid.UUID, avgRating float64, reviewCount int32) error
-	CheckSlot(ctx context.Context, venueID uuid.UUID, date, timeFrom, timeTo string) (bool, error)
+	// CheckSlot reports whether the interval is free for the reserved resource:
+	// the given halls in per-hall mode, or the whole venue when hallIDs is empty.
+	CheckSlot(ctx context.Context, venueID uuid.UUID, hallIDs []uuid.UUID, date, timeFrom, timeTo string) (bool, error)
 	// BatchCheckSlots checks multiple (time_from, time_to) intervals for the
-	// same venue and date. Returns one bool per slot in the same order.
+	// same venue, halls and date. Returns one bool per slot in the same order.
 	// Implementations should resolve all intervals in a single DB query.
-	BatchCheckSlots(ctx context.Context, venueID uuid.UUID, date string, slots [][2]string) ([]bool, error)
-	ReserveSlot(ctx context.Context, venueID, bookingID uuid.UUID, date, timeFrom, timeTo string) error
+	BatchCheckSlots(ctx context.Context, venueID uuid.UUID, hallIDs []uuid.UUID, date string, slots [][2]string) ([]bool, error)
+	// ReserveSlot atomically reserves the interval. With no hallIDs it inserts a
+	// single whole-venue row (hall_id NULL); with hallIDs it inserts one row per
+	// hall in a single transaction. Any overlap yields ErrSlotUnavailable and no
+	// rows are written.
+	ReserveSlot(ctx context.Context, venueID, bookingID uuid.UUID, date, timeFrom, timeTo string, hallIDs []uuid.UUID) error
 	ReleaseSlot(ctx context.Context, venueID, bookingID uuid.UUID) error
-	CreateManualSlotBlock(ctx context.Context, venueID uuid.UUID, date, timeFrom, timeTo, note string) (uuid.UUID, error)
+	// BookingMode returns the venue's booking mode ("whole" | "per_hall").
+	BookingMode(ctx context.Context, venueID uuid.UUID) (string, error)
+	// SetBookingMode updates the venue's booking mode.
+	SetBookingMode(ctx context.Context, venueID uuid.UUID, mode string) error
+	// HallIDs returns the ids of all halls defined for the venue.
+	HallIDs(ctx context.Context, venueID uuid.UUID) ([]uuid.UUID, error)
+	// CreateManualSlotBlock inserts a manual block per hall (one whole-venue row
+	// with hall_id NULL when hallIDs is empty), atomically. Any overlap yields
+	// ErrSlotUnavailable and no rows are written.
+	CreateManualSlotBlock(ctx context.Context, venueID uuid.UUID, hallIDs []uuid.UUID, date, timeFrom, timeTo, note string) ([]ManualSlotBlock, error)
 	DeleteManualSlotBlock(ctx context.Context, venueID, blockID uuid.UUID) (deleted bool, err error)
 	ListManualSlotBlocks(ctx context.Context, venueID uuid.UUID, dateFrom, dateTo string) ([]ManualSlotBlock, error)
+	// ListVenueSchedule returns every occupied interval — aggregator bookings and
+	// manual owner blocks — for the venue in the inclusive date range, ordered by
+	// date, time_from. Read-only source for the owner schedule grid.
+	ListVenueSchedule(ctx context.Context, venueID uuid.UUID, dateFrom, dateTo string) ([]ScheduleEntry, error)
 
 	AddVenuePhoto(ctx context.Context, venueID, ownerID uuid.UUID, url string) (*VenuePhoto, error)
 	DeleteVenuePhoto(ctx context.Context, venueID, ownerID, photoID uuid.UUID) (deletedURL string, err error)

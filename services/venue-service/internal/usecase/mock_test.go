@@ -27,12 +27,16 @@ type mockVenueRepo struct {
 	InsertModerationHistoryFn func(ctx context.Context, entry *domain.ModerationHistoryEntry) error
 	GetModerationHistoryFn    func(ctx context.Context, venueID uuid.UUID) ([]domain.ModerationHistoryEntry, error)
 	UpdateRatingFn            func(ctx context.Context, venueID uuid.UUID, avgRating float64, reviewCount int32) error
-	CheckSlotFn               func(ctx context.Context, venueID uuid.UUID, date, timeFrom, timeTo string) (bool, error)
-	ReserveSlotFn             func(ctx context.Context, venueID, bookingID uuid.UUID, date, timeFrom, timeTo string) error
+	CheckSlotFn               func(ctx context.Context, venueID uuid.UUID, hallIDs []uuid.UUID, date, timeFrom, timeTo string) (bool, error)
+	ReserveSlotFn             func(ctx context.Context, venueID, bookingID uuid.UUID, date, timeFrom, timeTo string, hallIDs []uuid.UUID) error
+	BookingModeFn             func(ctx context.Context, venueID uuid.UUID) (string, error)
+	SetBookingModeFn          func(ctx context.Context, venueID uuid.UUID, mode string) error
 	ReleaseSlotFn             func(ctx context.Context, venueID, bookingID uuid.UUID) error
-	CreateManualSlotBlockFn   func(ctx context.Context, venueID uuid.UUID, date, timeFrom, timeTo, note string) (uuid.UUID, error)
+	CreateManualSlotBlockFn   func(ctx context.Context, venueID uuid.UUID, hallIDs []uuid.UUID, date, timeFrom, timeTo, note string) ([]domain.ManualSlotBlock, error)
+	HallIDsFn                 func(ctx context.Context, venueID uuid.UUID) ([]uuid.UUID, error)
 	DeleteManualSlotBlockFn   func(ctx context.Context, venueID, blockID uuid.UUID) (bool, error)
 	ListManualSlotBlocksFn    func(ctx context.Context, venueID uuid.UUID, dateFrom, dateTo string) ([]domain.ManualSlotBlock, error)
+	ListVenueScheduleFn       func(ctx context.Context, venueID uuid.UUID, dateFrom, dateTo string) ([]domain.ScheduleEntry, error)
 	AddVenuePhotoFn           func(ctx context.Context, venueID, ownerID uuid.UUID, url string) (*domain.VenuePhoto, error)
 	DeleteVenuePhotoFn        func(ctx context.Context, venueID, ownerID, photoID uuid.UUID) (string, error)
 	SetVenueCoverPhotoFn      func(ctx context.Context, venueID, ownerID, photoID uuid.UUID) error
@@ -165,20 +169,34 @@ func (m *mockVenueRepo) UpdateRating(ctx context.Context, venueID uuid.UUID, avg
 	return nil
 }
 
-func (m *mockVenueRepo) CheckSlot(ctx context.Context, venueID uuid.UUID, date, timeFrom, timeTo string) (bool, error) {
+func (m *mockVenueRepo) CheckSlot(ctx context.Context, venueID uuid.UUID, hallIDs []uuid.UUID, date, timeFrom, timeTo string) (bool, error) {
 	if m.CheckSlotFn != nil {
-		return m.CheckSlotFn(ctx, venueID, date, timeFrom, timeTo)
+		return m.CheckSlotFn(ctx, venueID, hallIDs, date, timeFrom, timeTo)
 	}
 	return false, nil
 }
 
-func (m *mockVenueRepo) BatchCheckSlots(ctx context.Context, venueID uuid.UUID, date string, slots [][2]string) ([]bool, error) {
+func (m *mockVenueRepo) BatchCheckSlots(ctx context.Context, venueID uuid.UUID, hallIDs []uuid.UUID, date string, slots [][2]string) ([]bool, error) {
 	return make([]bool, len(slots)), nil
 }
 
-func (m *mockVenueRepo) ReserveSlot(ctx context.Context, venueID, bookingID uuid.UUID, date, timeFrom, timeTo string) error {
+func (m *mockVenueRepo) ReserveSlot(ctx context.Context, venueID, bookingID uuid.UUID, date, timeFrom, timeTo string, hallIDs []uuid.UUID) error {
 	if m.ReserveSlotFn != nil {
-		return m.ReserveSlotFn(ctx, venueID, bookingID, date, timeFrom, timeTo)
+		return m.ReserveSlotFn(ctx, venueID, bookingID, date, timeFrom, timeTo, hallIDs)
+	}
+	return nil
+}
+
+func (m *mockVenueRepo) BookingMode(ctx context.Context, venueID uuid.UUID) (string, error) {
+	if m.BookingModeFn != nil {
+		return m.BookingModeFn(ctx, venueID)
+	}
+	return domain.BookingModeWhole, nil
+}
+
+func (m *mockVenueRepo) SetBookingMode(ctx context.Context, venueID uuid.UUID, mode string) error {
+	if m.SetBookingModeFn != nil {
+		return m.SetBookingModeFn(ctx, venueID, mode)
 	}
 	return nil
 }
@@ -190,11 +208,18 @@ func (m *mockVenueRepo) ReleaseSlot(ctx context.Context, venueID, bookingID uuid
 	return nil
 }
 
-func (m *mockVenueRepo) CreateManualSlotBlock(ctx context.Context, venueID uuid.UUID, date, timeFrom, timeTo, note string) (uuid.UUID, error) {
+func (m *mockVenueRepo) CreateManualSlotBlock(ctx context.Context, venueID uuid.UUID, hallIDs []uuid.UUID, date, timeFrom, timeTo, note string) ([]domain.ManualSlotBlock, error) {
 	if m.CreateManualSlotBlockFn != nil {
-		return m.CreateManualSlotBlockFn(ctx, venueID, date, timeFrom, timeTo, note)
+		return m.CreateManualSlotBlockFn(ctx, venueID, hallIDs, date, timeFrom, timeTo, note)
 	}
-	return uuid.Nil, nil
+	return nil, nil
+}
+
+func (m *mockVenueRepo) HallIDs(ctx context.Context, venueID uuid.UUID) ([]uuid.UUID, error) {
+	if m.HallIDsFn != nil {
+		return m.HallIDsFn(ctx, venueID)
+	}
+	return nil, nil
 }
 
 func (m *mockVenueRepo) DeleteManualSlotBlock(ctx context.Context, venueID, blockID uuid.UUID) (bool, error) {
@@ -207,6 +232,13 @@ func (m *mockVenueRepo) DeleteManualSlotBlock(ctx context.Context, venueID, bloc
 func (m *mockVenueRepo) ListManualSlotBlocks(ctx context.Context, venueID uuid.UUID, dateFrom, dateTo string) ([]domain.ManualSlotBlock, error) {
 	if m.ListManualSlotBlocksFn != nil {
 		return m.ListManualSlotBlocksFn(ctx, venueID, dateFrom, dateTo)
+	}
+	return nil, nil
+}
+
+func (m *mockVenueRepo) ListVenueSchedule(ctx context.Context, venueID uuid.UUID, dateFrom, dateTo string) ([]domain.ScheduleEntry, error) {
+	if m.ListVenueScheduleFn != nil {
+		return m.ListVenueScheduleFn(ctx, venueID, dateFrom, dateTo)
 	}
 	return nil, nil
 }

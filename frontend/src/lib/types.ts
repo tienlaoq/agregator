@@ -307,6 +307,23 @@ export interface ManualSlotBlock {
   time_from: string;
   time_to: string;
   note: string;
+  /** зал в режиме позальной сдачи; отсутствует = блок всего заведения */
+  hall_id?: string;
+}
+
+/** Занятый интервал в сетке расписания: бронь агрегатора или ручная блокировка. */
+export interface VenueScheduleEntry {
+  id: string;
+  kind: "booking" | "manual_block";
+  date: string;
+  time_from: string;
+  time_to: string;
+  /** присутствует для kind="booking" */
+  booking_id?: string;
+  /** присутствует для kind="manual_block" */
+  note?: string;
+  /** зал в режиме позальной сдачи; отсутствует = бронь всего заведения */
+  hall_id?: string;
 }
 
 /** Участник CRM по залу (ответ /owner/venues/.../staff). */

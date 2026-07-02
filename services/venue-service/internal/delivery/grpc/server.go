@@ -400,7 +400,12 @@ func (s *Server) CheckSlotAvailability(ctx context.Context, req *venuev1.CheckSl
 		return nil, pkgerrors.InvalidArgument("invalid venue_id")
 	}
 
-	available, err := s.uc.CheckSlot(ctx, venueID, req.GetDate(), req.GetTimeFrom(), req.GetTimeTo())
+	hallIDs, err := parseUUIDs(req.GetHallIds())
+	if err != nil {
+		return nil, pkgerrors.InvalidArgument("invalid hall_id")
+	}
+
+	available, err := s.uc.CheckSlot(ctx, venueID, hallIDs, req.GetDate(), req.GetTimeFrom(), req.GetTimeTo())
 	if err != nil {
 		return nil, s.internalErr(err, "check slot availability failed")
 	}
@@ -426,7 +431,12 @@ func (s *Server) BatchCheckSlotAvailability(ctx context.Context, req *venuev1.Ba
 		slots[i] = [2]string{ps.GetTimeFrom(), ps.GetTimeTo()}
 	}
 
-	available, err := s.uc.BatchCheckSlots(ctx, venueID, req.GetDate(), slots)
+	hallIDs, err := parseUUIDs(req.GetHallIds())
+	if err != nil {
+		return nil, pkgerrors.InvalidArgument("invalid hall_id")
+	}
+
+	available, err := s.uc.BatchCheckSlots(ctx, venueID, hallIDs, req.GetDate(), slots)
 	if err != nil {
 		return nil, s.internalErr(err, "batch check slot availability failed")
 	}
@@ -443,7 +453,12 @@ func (s *Server) ReserveSlot(ctx context.Context, req *venuev1.ReserveSlotReques
 		return nil, pkgerrors.InvalidArgument("invalid booking_id")
 	}
 
-	if err := s.uc.ReserveSlot(ctx, venueID, bookingID, req.GetDate(), req.GetTimeFrom(), req.GetTimeTo()); err != nil {
+	hallIDs, err := parseUUIDs(req.GetHallIds())
+	if err != nil {
+		return nil, pkgerrors.InvalidArgument("invalid hall_id")
+	}
+
+	if err := s.uc.ReserveSlot(ctx, venueID, bookingID, req.GetDate(), req.GetTimeFrom(), req.GetTimeTo(), hallIDs); err != nil {
 		if errors.Is(err, repository.ErrSlotUnavailable) {
 			return nil, pkgerrors.InvalidArgument("time slot not available")
 		}
@@ -478,23 +493,23 @@ func (s *Server) CreateManualSlotBlock(ctx context.Context, req *venuev1.CreateM
 		return nil, pkgerrors.InvalidArgument("invalid venue_id")
 	}
 
-	id, err := s.uc.CreateManualSlotBlock(ctx, ownerID, venueID, req.GetDate(), req.GetTimeFrom(), req.GetTimeTo(), req.GetNote())
+	hallIDs, err := parseUUIDs(req.GetHallIds())
+	if err != nil {
+		return nil, pkgerrors.InvalidArgument("invalid hall_id")
+	}
+
+	blocks, err := s.uc.CreateManualSlotBlock(ctx, ownerID, venueID, hallIDs, req.GetDate(), req.GetTimeFrom(), req.GetTimeTo(), req.GetNote())
 	if err != nil {
 		if _, ok := status.FromError(err); ok {
 			return nil, err
 		}
 		return nil, s.internalErr(err, "create manual slot block failed")
 	}
-	return &venuev1.CreateManualSlotBlockResponse{
-		Block: &venuev1.ManualSlotBlock{
-			Id:       id.String(),
-			VenueId:  venueID.String(),
-			Date:     req.GetDate(),
-			TimeFrom: req.GetTimeFrom(),
-			TimeTo:   req.GetTimeTo(),
-			Note:     req.GetNote(),
-		},
-	}, nil
+	out := make([]*venuev1.ManualSlotBlock, len(blocks))
+	for i := range blocks {
+		out[i] = manualBlockToProto(&blocks[i])
+	}
+	return &venuev1.CreateManualSlotBlockResponse{Blocks: out}, nil
 }
 
 func (s *Server) DeleteManualSlotBlock(ctx context.Context, req *venuev1.DeleteManualSlotBlockRequest) (*venuev1.DeleteManualSlotBlockResponse, error) {
@@ -542,6 +557,69 @@ func (s *Server) ListManualSlotBlocks(ctx context.Context, req *venuev1.ListManu
 		out[i] = manualBlockToProto(&blocks[i])
 	}
 	return &venuev1.ListManualSlotBlocksResponse{Blocks: out}, nil
+}
+
+func (s *Server) GetVenueSchedule(ctx context.Context, req *venuev1.GetVenueScheduleRequest) (*venuev1.GetVenueScheduleResponse, error) {
+	actorID, err := uuid.Parse(req.GetActorId())
+	if err != nil {
+		return nil, pkgerrors.InvalidArgument("invalid actor_id")
+	}
+	venueID, err := uuid.Parse(req.GetVenueId())
+	if err != nil {
+		return nil, pkgerrors.InvalidArgument("invalid venue_id")
+	}
+
+	entries, err := s.uc.GetVenueSchedule(ctx, actorID, venueID, req.GetDateFrom(), req.GetDateTo())
+	if err != nil {
+		if _, ok := status.FromError(err); ok {
+			return nil, err
+		}
+		return nil, s.internalErr(err, "get venue schedule failed")
+	}
+	out := make([]*venuev1.ScheduleEntry, len(entries))
+	for i := range entries {
+		out[i] = scheduleEntryToProto(&entries[i])
+	}
+	return &venuev1.GetVenueScheduleResponse{Entries: out}, nil
+}
+
+func (s *Server) GetVenueBookingMode(ctx context.Context, req *venuev1.GetVenueBookingModeRequest) (*venuev1.GetVenueBookingModeResponse, error) {
+	actorID, err := uuid.Parse(req.GetActorId())
+	if err != nil {
+		return nil, pkgerrors.InvalidArgument("invalid actor_id")
+	}
+	venueID, err := uuid.Parse(req.GetVenueId())
+	if err != nil {
+		return nil, pkgerrors.InvalidArgument("invalid venue_id")
+	}
+
+	mode, err := s.uc.GetBookingMode(ctx, actorID, venueID)
+	if err != nil {
+		if _, ok := status.FromError(err); ok {
+			return nil, err
+		}
+		return nil, s.internalErr(err, "get booking mode failed")
+	}
+	return &venuev1.GetVenueBookingModeResponse{BookingMode: mode}, nil
+}
+
+func (s *Server) SetVenueBookingMode(ctx context.Context, req *venuev1.SetVenueBookingModeRequest) (*venuev1.SetVenueBookingModeResponse, error) {
+	actorID, err := uuid.Parse(req.GetActorId())
+	if err != nil {
+		return nil, pkgerrors.InvalidArgument("invalid actor_id")
+	}
+	venueID, err := uuid.Parse(req.GetVenueId())
+	if err != nil {
+		return nil, pkgerrors.InvalidArgument("invalid venue_id")
+	}
+
+	if err := s.uc.SetBookingMode(ctx, actorID, venueID, req.GetBookingMode()); err != nil {
+		if _, ok := status.FromError(err); ok {
+			return nil, err
+		}
+		return nil, s.internalErr(err, "set booking mode failed")
+	}
+	return &venuev1.SetVenueBookingModeResponse{BookingMode: req.GetBookingMode()}, nil
 }
 
 // CRM RPCs (GetVenueManagementAccess, ListVenueStaff, AddVenueStaff,
@@ -835,8 +913,43 @@ func (s *Server) SetVenueHallCoverPhoto(ctx context.Context, req *venuev1.SetVen
 	return venueToProto(v), nil
 }
 
+// parseUUIDs parses a slice of UUID strings, rejecting any malformed value.
+func parseUUIDs(raw []string) ([]uuid.UUID, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	out := make([]uuid.UUID, len(raw))
+	for i, s := range raw {
+		id, err := uuid.Parse(s)
+		if err != nil {
+			return nil, err
+		}
+		out[i] = id
+	}
+	return out, nil
+}
+
+func scheduleEntryToProto(e *domain.ScheduleEntry) *venuev1.ScheduleEntry {
+	out := &venuev1.ScheduleEntry{
+		Id:       e.ID.String(),
+		Date:     e.Date,
+		TimeFrom: e.TimeFrom,
+		TimeTo:   e.TimeTo,
+		Note:     e.Note,
+	}
+	if e.BookingID != nil {
+		id := e.BookingID.String()
+		out.BookingId = &id
+	}
+	if e.HallID != nil {
+		id := e.HallID.String()
+		out.HallId = &id
+	}
+	return out
+}
+
 func manualBlockToProto(b *domain.ManualSlotBlock) *venuev1.ManualSlotBlock {
-	return &venuev1.ManualSlotBlock{
+	out := &venuev1.ManualSlotBlock{
 		Id:       b.ID.String(),
 		VenueId:  b.VenueID.String(),
 		Date:     b.Date,
@@ -844,6 +957,11 @@ func manualBlockToProto(b *domain.ManualSlotBlock) *venuev1.ManualSlotBlock {
 		TimeTo:   b.TimeTo,
 		Note:     b.Note,
 	}
+	if b.HallID != nil {
+		id := b.HallID.String()
+		out.HallId = &id
+	}
+	return out
 }
 
 func venueToProto(v *domain.Venue) *venuev1.VenueResponse {

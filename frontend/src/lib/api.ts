@@ -7,6 +7,7 @@ import type {
   CreateVenueRequest,
   LoginRequest,
   ManualSlotBlock,
+  VenueScheduleEntry,
   RegisterRequest,
   Review,
   VenueCrmTask,
@@ -515,11 +516,47 @@ export async function listOwnerSlotBlocks(
   );
 }
 
+export async function getVenueSchedule(
+  venueId: string,
+  dateFrom: string,
+  dateTo: string,
+): Promise<{ entries: VenueScheduleEntry[] }> {
+  const q = new URLSearchParams({ date_from: dateFrom, date_to: dateTo });
+  return fetchAPI<{ entries: VenueScheduleEntry[] }>(
+    `/api/v1/owner/venues/${encodeURIComponent(venueId)}/schedule?${q.toString()}`,
+  );
+}
+
+export async function getVenueBookingMode(
+  venueId: string,
+): Promise<{ booking_mode: string }> {
+  return fetchAPI<{ booking_mode: string }>(
+    `/api/v1/owner/venues/${encodeURIComponent(venueId)}/booking-mode`,
+  );
+}
+
+export async function setVenueBookingMode(
+  venueId: string,
+  bookingMode: string,
+): Promise<{ booking_mode: string }> {
+  return fetchAPI<{ booking_mode: string }>(
+    `/api/v1/owner/venues/${encodeURIComponent(venueId)}/booking-mode`,
+    { method: "PUT", body: JSON.stringify({ booking_mode: bookingMode }) },
+  );
+}
+
 export async function createOwnerSlotBlock(
   venueId: string,
-  body: { date: string; time_from: string; time_to: string; note?: string },
-): Promise<{ block: ManualSlotBlock }> {
-  return fetchAPI<{ block: ManualSlotBlock }>(
+  body: {
+    date: string;
+    time_from: string;
+    time_to: string;
+    note?: string;
+    /** per_hall mode: specific halls, or empty = whole venue (every hall) */
+    hall_ids?: string[];
+  },
+): Promise<{ blocks: ManualSlotBlock[] }> {
+  return fetchAPI<{ blocks: ManualSlotBlock[] }>(
     `/api/v1/owner/venues/${encodeURIComponent(venueId)}/slot-blocks`,
     { method: "POST", body: JSON.stringify(body) },
   );

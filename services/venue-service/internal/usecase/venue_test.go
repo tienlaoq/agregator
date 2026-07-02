@@ -573,7 +573,7 @@ func TestCreateManualSlotBlock_NotOwner(t *testing.T) {
 		},
 	}
 	uc := NewVenueUseCase(repo, dummyRedis(t))
-	_, err := uc.CreateManualSlotBlock(ctx, owner, vid, "2026-01-10", "10:00", "12:00", "звонок")
+	_, err := uc.CreateManualSlotBlock(ctx, owner, vid, nil, "2026-01-10", "10:00", "12:00", "звонок")
 	require.Error(t, err)
 	st, ok := status.FromError(err)
 	require.True(t, ok)
@@ -588,13 +588,13 @@ func TestCreateManualSlotBlock_OverlapInvalidArgument(t *testing.T) {
 		GetByIDFn: func(_ context.Context, id uuid.UUID) (*domain.Venue, error) {
 			return &domain.Venue{ID: vid, OwnerID: owner}, nil
 		},
-		CreateManualSlotBlockFn: func(_ context.Context, venueID uuid.UUID, _, _, _, _ string) (uuid.UUID, error) {
+		CreateManualSlotBlockFn: func(_ context.Context, venueID uuid.UUID, _ []uuid.UUID, _, _, _, _ string) ([]domain.ManualSlotBlock, error) {
 			assert.Equal(t, vid, venueID)
-			return uuid.Nil, repository.ErrSlotUnavailable
+			return nil, repository.ErrSlotUnavailable
 		},
 	}
 	uc := NewVenueUseCase(repo, dummyRedis(t))
-	_, err := uc.CreateManualSlotBlock(ctx, owner, vid, "2026-02-01", "10:00", "12:00", "")
+	_, err := uc.CreateManualSlotBlock(ctx, owner, vid, nil, "2026-02-01", "10:00", "12:00", "")
 	require.Error(t, err)
 	st, ok := status.FromError(err)
 	require.True(t, ok)
@@ -622,4 +622,260 @@ func TestDeleteManualSlotBlock_NotFound(t *testing.T) {
 	st, ok := status.FromError(err)
 	require.True(t, ok)
 	assert.Equal(t, codes.NotFound, st.Code())
+}
+
+func TestGetVenueSchedule_NotMember(t *testing.T) {
+	ctx := context.Background()
+	owner := uuid.New()
+	other := uuid.New()
+	vid := uuid.New()
+	repo := &mockVenueRepo{
+		GetByIDFn: func(_ context.Context, id uuid.UUID) (*domain.Venue, error) {
+			return &domain.Venue{ID: vid, OwnerID: owner}, nil
+		},
+	}
+	uc := NewVenueUseCase(repo, dummyRedis(t))
+	_, err := uc.GetVenueSchedule(ctx, other, vid, "2026-01-01", "2026-01-31")
+	require.Error(t, err)
+	st, ok := status.FromError(err)
+	require.True(t, ok)
+	assert.Equal(t, codes.PermissionDenied, st.Code())
+}
+
+func TestGetVenueSchedule_DateValidation(t *testing.T) {
+	ctx := context.Background()
+	owner := uuid.New()
+	vid := uuid.New()
+	repo := &mockVenueRepo{
+		GetByIDFn: func(_ context.Context, id uuid.UUID) (*domain.Venue, error) {
+			return &domain.Venue{ID: vid, OwnerID: owner}, nil
+		},
+	}
+	uc := NewVenueUseCase(repo, dummyRedis(t))
+	cases := []struct {
+		name, dateFrom, dateTo string
+	}{
+		{"bad_from", "nope", "2026-01-31"},
+		{"bad_to", "2026-01-01", "nope"},
+		{"to_before_from", "2026-02-01", "2026-01-01"},
+		{"range_too_wide", "2026-01-01", "2026-12-31"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := uc.GetVenueSchedule(ctx, owner, vid, tc.dateFrom, tc.dateTo)
+			require.Error(t, err)
+			st, ok := status.FromError(err)
+			require.True(t, ok)
+			assert.Equal(t, codes.InvalidArgument, st.Code())
+		})
+	}
+}
+
+func TestGetVenueSchedule_ReturnsEntries(t *testing.T) {
+	ctx := context.Background()
+	owner := uuid.New()
+	vid := uuid.New()
+	bookingID := uuid.New()
+	var gotFrom, gotTo string
+	repo := &mockVenueRepo{
+		GetByIDFn: func(_ context.Context, id uuid.UUID) (*domain.Venue, error) {
+			return &domain.Venue{ID: vid, OwnerID: owner}, nil
+		},
+		ListVenueScheduleFn: func(_ context.Context, venueID uuid.UUID, dateFrom, dateTo string) ([]domain.ScheduleEntry, error) {
+			assert.Equal(t, vid, venueID)
+			gotFrom, gotTo = dateFrom, dateTo
+			return []domain.ScheduleEntry{
+				{ID: uuid.New(), BookingID: &bookingID, Date: "2026-01-10", TimeFrom: "12:00", TimeTo: "14:00"},
+				{ID: uuid.New(), Date: "2026-01-10", TimeFrom: "18:00", TimeTo: "20:00", Note: "звонок"},
+			}, nil
+		},
+	}
+	uc := NewVenueUseCase(repo, dummyRedis(t))
+	entries, err := uc.GetVenueSchedule(ctx, owner, vid, "2026-01-01", "2026-01-31")
+	require.NoError(t, err)
+	require.Len(t, entries, 2)
+	assert.Equal(t, "2026-01-01", gotFrom)
+	assert.Equal(t, "2026-01-31", gotTo)
+	assert.NotNil(t, entries[0].BookingID)
+	assert.Nil(t, entries[1].BookingID)
+	assert.Equal(t, "звонок", entries[1].Note)
+}
+
+func TestReserveSlot_ModeGate(t *testing.T) {
+	ctx := context.Background()
+	vid := uuid.New()
+	bid := uuid.New()
+	hall := uuid.New()
+
+	cases := []struct {
+		name     string
+		mode     string
+		wantHall bool
+	}{
+		{"whole_ignores_halls", domain.BookingModeWhole, false},
+		{"per_hall_passes_halls", domain.BookingModePerHall, true},
+		{"unknown_mode_falls_back_to_whole", "", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var gotHalls []uuid.UUID
+			called := false
+			repo := &mockVenueRepo{
+				BookingModeFn: func(_ context.Context, id uuid.UUID) (string, error) {
+					assert.Equal(t, vid, id)
+					return tc.mode, nil
+				},
+				ReserveSlotFn: func(_ context.Context, _, _ uuid.UUID, _, _, _ string, hallIDs []uuid.UUID) error {
+					called = true
+					gotHalls = hallIDs
+					return nil
+				},
+			}
+			uc := NewVenueUseCase(repo, dummyRedis(t))
+			err := uc.ReserveSlot(ctx, vid, bid, "2026-03-01", "10:00", "12:00", []uuid.UUID{hall})
+			require.NoError(t, err)
+			require.True(t, called)
+			if tc.wantHall {
+				assert.Equal(t, []uuid.UUID{hall}, gotHalls)
+			} else {
+				assert.Nil(t, gotHalls)
+			}
+		})
+	}
+}
+
+func TestCheckSlot_ModeGate(t *testing.T) {
+	ctx := context.Background()
+	vid := uuid.New()
+	hall := uuid.New()
+
+	cases := []struct {
+		name      string
+		mode      string
+		wantHalls []uuid.UUID
+	}{
+		{"whole_ignores_halls", domain.BookingModeWhole, nil},
+		{"per_hall_passes_halls", domain.BookingModePerHall, []uuid.UUID{hall}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var got []uuid.UUID
+			repo := &mockVenueRepo{
+				BookingModeFn: func(_ context.Context, _ uuid.UUID) (string, error) { return tc.mode, nil },
+				CheckSlotFn: func(_ context.Context, _ uuid.UUID, hallIDs []uuid.UUID, _, _, _ string) (bool, error) {
+					got = hallIDs
+					return true, nil
+				},
+			}
+			uc := NewVenueUseCase(repo, dummyRedis(t))
+			ok, err := uc.CheckSlot(ctx, vid, []uuid.UUID{hall}, "2026-03-01", "10:00", "12:00")
+			require.NoError(t, err)
+			assert.True(t, ok)
+			assert.Equal(t, tc.wantHalls, got)
+		})
+	}
+}
+
+func TestSetBookingMode(t *testing.T) {
+	ctx := context.Background()
+	owner := uuid.New()
+	vid := uuid.New()
+	newRepo := func(set func(context.Context, uuid.UUID, string) error) *mockVenueRepo {
+		return &mockVenueRepo{
+			GetByIDFn: func(_ context.Context, _ uuid.UUID) (*domain.Venue, error) {
+				return &domain.Venue{ID: vid, OwnerID: owner}, nil
+			},
+			SetBookingModeFn: set,
+		}
+	}
+
+	t.Run("valid_per_hall", func(t *testing.T) {
+		var gotMode string
+		uc := NewVenueUseCase(newRepo(func(_ context.Context, _ uuid.UUID, mode string) error {
+			gotMode = mode
+			return nil
+		}), dummyRedis(t))
+		require.NoError(t, uc.SetBookingMode(ctx, owner, vid, domain.BookingModePerHall))
+		assert.Equal(t, domain.BookingModePerHall, gotMode)
+	})
+
+	t.Run("invalid_mode_rejected", func(t *testing.T) {
+		called := false
+		uc := NewVenueUseCase(newRepo(func(_ context.Context, _ uuid.UUID, _ string) error {
+			called = true
+			return nil
+		}), dummyRedis(t))
+		err := uc.SetBookingMode(ctx, owner, vid, "nonsense")
+		require.Error(t, err)
+		st, ok := status.FromError(err)
+		require.True(t, ok)
+		assert.Equal(t, codes.InvalidArgument, st.Code())
+		assert.False(t, called)
+	})
+
+	t.Run("not_member", func(t *testing.T) {
+		uc := NewVenueUseCase(newRepo(func(_ context.Context, _ uuid.UUID, _ string) error { return nil }), dummyRedis(t))
+		err := uc.SetBookingMode(ctx, uuid.New(), vid, domain.BookingModePerHall)
+		require.Error(t, err)
+		st, ok := status.FromError(err)
+		require.True(t, ok)
+		assert.Equal(t, codes.PermissionDenied, st.Code())
+	})
+}
+
+func TestCreateManualSlotBlock_HallResolution(t *testing.T) {
+	ctx := context.Background()
+	owner := uuid.New()
+	vid := uuid.New()
+	hallA, hallB := uuid.New(), uuid.New()
+
+	base := func(mode string, capture *[]uuid.UUID) *mockVenueRepo {
+		return &mockVenueRepo{
+			GetByIDFn: func(_ context.Context, _ uuid.UUID) (*domain.Venue, error) {
+				return &domain.Venue{ID: vid, OwnerID: owner}, nil
+			},
+			BookingModeFn: func(_ context.Context, _ uuid.UUID) (string, error) { return mode, nil },
+			HallIDsFn: func(_ context.Context, _ uuid.UUID) ([]uuid.UUID, error) {
+				return []uuid.UUID{hallA, hallB}, nil
+			},
+			CreateManualSlotBlockFn: func(_ context.Context, _ uuid.UUID, hallIDs []uuid.UUID, _, _, _, _ string) ([]domain.ManualSlotBlock, error) {
+				*capture = hallIDs
+				return []domain.ManualSlotBlock{{ID: uuid.New()}}, nil
+			},
+		}
+	}
+
+	t.Run("whole_ignores_halls", func(t *testing.T) {
+		var got []uuid.UUID
+		uc := NewVenueUseCase(base(domain.BookingModeWhole, &got), dummyRedis(t))
+		_, err := uc.CreateManualSlotBlock(ctx, owner, vid, []uuid.UUID{hallA}, "2026-03-01", "10:00", "12:00", "")
+		require.NoError(t, err)
+		assert.Nil(t, got)
+	})
+
+	t.Run("per_hall_empty_expands_to_all", func(t *testing.T) {
+		var got []uuid.UUID
+		uc := NewVenueUseCase(base(domain.BookingModePerHall, &got), dummyRedis(t))
+		_, err := uc.CreateManualSlotBlock(ctx, owner, vid, nil, "2026-03-01", "10:00", "12:00", "")
+		require.NoError(t, err)
+		assert.ElementsMatch(t, []uuid.UUID{hallA, hallB}, got)
+	})
+
+	t.Run("per_hall_specific_hall", func(t *testing.T) {
+		var got []uuid.UUID
+		uc := NewVenueUseCase(base(domain.BookingModePerHall, &got), dummyRedis(t))
+		_, err := uc.CreateManualSlotBlock(ctx, owner, vid, []uuid.UUID{hallB}, "2026-03-01", "10:00", "12:00", "")
+		require.NoError(t, err)
+		assert.Equal(t, []uuid.UUID{hallB}, got)
+	})
+
+	t.Run("per_hall_unknown_hall_rejected", func(t *testing.T) {
+		var got []uuid.UUID
+		uc := NewVenueUseCase(base(domain.BookingModePerHall, &got), dummyRedis(t))
+		_, err := uc.CreateManualSlotBlock(ctx, owner, vid, []uuid.UUID{uuid.New()}, "2026-03-01", "10:00", "12:00", "")
+		require.Error(t, err)
+		st, ok := status.FromError(err)
+		require.True(t, ok)
+		assert.Equal(t, codes.InvalidArgument, st.Code())
+	})
 }

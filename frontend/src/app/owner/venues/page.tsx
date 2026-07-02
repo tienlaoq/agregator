@@ -32,6 +32,14 @@ export default function OwnerVenuesPage() {
     enabled: !!token && canOwnerCabinet,
   });
 
+  // Single venue → straight into its workspace (the approved per-venue shell).
+  // Multiple venues keep this list as a light picker.
+  useEffect(() => {
+    if (venues && venues.length === 1) {
+      router.replace(`/owner/venues/${venues[0].id}`);
+    }
+  }, [venues, router]);
+
   const venueIds = useMemo(() => venues?.map((v) => v.id) ?? [], [venues]);
 
   const bookingQueries = useQueries({

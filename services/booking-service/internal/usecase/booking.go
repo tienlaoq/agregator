@@ -171,6 +171,7 @@ func (uc *BookingUseCase) CreateBooking(ctx context.Context, in CreateBookingInp
 		Date:     in.Date,
 		TimeFrom: in.TimeFrom,
 		TimeTo:   in.TimeTo,
+		HallIds:  hallIDs,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("check slot: %w", err)
@@ -237,12 +238,15 @@ func (uc *BookingUseCase) CreateBooking(ctx context.Context, in CreateBookingInp
 	}
 
 	// Шаг 2: захват слота в venue-service.
+	// hallIDs are honoured only when the venue is in per_hall booking mode;
+	// venue-service ignores them in whole mode.
 	_, err = uc.venueClient.ReserveSlot(ctx, &venuev1.ReserveSlotRequest{
 		VenueId:   in.VenueID,
 		BookingId: b.ID,
 		Date:      in.Date,
 		TimeFrom:  in.TimeFrom,
 		TimeTo:    in.TimeTo,
+		HallIds:   hallIDs,
 	})
 	if err != nil {
 		_ = uc.repo.Delete(ctx, b.ID)

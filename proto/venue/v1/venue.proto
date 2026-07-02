@@ -26,6 +26,9 @@ service VenueService {
   rpc CreateManualSlotBlock(CreateManualSlotBlockRequest) returns (CreateManualSlotBlockResponse);
   rpc DeleteManualSlotBlock(DeleteManualSlotBlockRequest) returns (DeleteManualSlotBlockResponse);
   rpc ListManualSlotBlocks(ListManualSlotBlocksRequest) returns (ListManualSlotBlocksResponse);
+  rpc GetVenueSchedule(GetVenueScheduleRequest) returns (GetVenueScheduleResponse);
+  rpc GetVenueBookingMode(GetVenueBookingModeRequest) returns (GetVenueBookingModeResponse);
+  rpc SetVenueBookingMode(SetVenueBookingModeRequest) returns (SetVenueBookingModeResponse);
   rpc UpdateRating(UpdateRatingRequest) returns (UpdateRatingResponse);
   rpc ModerateVenue(ModerateVenueRequest) returns (VenueResponse);
   rpc ListPendingVenues(ListPendingVenuesRequest) returns (ListVenuesResponse);
@@ -277,6 +280,9 @@ message CheckSlotRequest {
   string date = 2; // YYYY-MM-DD
   string time_from = 3; // HH:MM
   string time_to = 4; // HH:MM
+  // Halls to check; used only in per_hall mode, ignored in whole mode.
+  // Empty = whole-venue availability.
+  repeated string hall_ids = 5;
 }
 
 message CheckSlotResponse {
@@ -295,6 +301,9 @@ message BatchCheckSlotRequest {
   string venue_id          = 1;
   string date              = 2; // YYYY-MM-DD
   repeated SlotInterval slots = 3;
+  // Halls to check; used only in per_hall mode, ignored in whole mode.
+  // Empty = whole-venue availability.
+  repeated string hall_ids = 4;
 }
 
 // BatchCheckSlotResponse returns one availability flag per requested slot,
@@ -310,6 +319,9 @@ message ReserveSlotRequest {
   string date = 3;
   string time_from = 4;
   string time_to = 5;
+  // Selected halls; used only when the venue's booking_mode is "per_hall",
+  // ignored in "whole" mode. Empty = whole-venue reservation.
+  repeated string hall_ids = 6;
 }
 
 message ReserveSlotResponse {
@@ -332,6 +344,7 @@ message ManualSlotBlock {
   string time_from = 4;  // HH:MM
   string time_to = 5;    // HH:MM
   string note = 6;
+  optional string hall_id = 7; // absent = whole-venue block
 }
 
 message CreateManualSlotBlockRequest {
@@ -341,10 +354,14 @@ message CreateManualSlotBlockRequest {
   string time_from = 4;
   string time_to = 5;
   string note = 6; // optional, e.g. "бронь по телефону"
+  // Halls to block in per_hall mode: specific halls, or empty = every hall
+  // (whole venue). Ignored in whole mode.
+  repeated string hall_ids = 7;
 }
 
 message CreateManualSlotBlockResponse {
-  ManualSlotBlock block = 1;
+  // One block per affected hall (a single whole-venue block in whole mode).
+  repeated ManualSlotBlock blocks = 1;
 }
 
 message DeleteManualSlotBlockRequest {
@@ -366,6 +383,48 @@ message ListManualSlotBlocksRequest {
 
 message ListManualSlotBlocksResponse {
   repeated ManualSlotBlock blocks = 1;
+}
+
+// ScheduleEntry is one occupied interval on the owner schedule grid: an
+// aggregator booking (booking_id set) or a manual owner block (booking_id absent).
+message ScheduleEntry {
+  string id = 1;
+  optional string booking_id = 2; // absent = manual owner block
+  string date = 3;                // YYYY-MM-DD
+  string time_from = 4;           // HH:MM
+  string time_to = 5;             // HH:MM
+  string note = 6;                // manual block note; empty for bookings
+  optional string hall_id = 7;    // absent = whole-venue reservation
+}
+
+message GetVenueScheduleRequest {
+  string actor_id = 1;
+  string venue_id = 2;
+  string date_from = 3; // YYYY-MM-DD inclusive
+  string date_to = 4;   // YYYY-MM-DD inclusive
+}
+
+message GetVenueScheduleResponse {
+  repeated ScheduleEntry entries = 1;
+}
+
+message GetVenueBookingModeRequest {
+  string actor_id = 1;
+  string venue_id = 2;
+}
+
+message GetVenueBookingModeResponse {
+  string booking_mode = 1; // whole | per_hall
+}
+
+message SetVenueBookingModeRequest {
+  string actor_id = 1;
+  string venue_id = 2;
+  string booking_mode = 3; // whole | per_hall
+}
+
+message SetVenueBookingModeResponse {
+  string booking_mode = 1;
 }
 
 message UpdateRatingRequest {

@@ -317,10 +317,13 @@ func (h *VenueHandler) AvailabilityBySlug(w http.ResponseWriter, r *http.Request
 		}
 	}
 
+	// Optional ?hall_id (repeatable) narrows availability to specific halls in
+	// per-hall venues; ignored in whole mode.
 	batchResp, err := h.client.BatchCheckSlotAvailability(r.Context(), &venuev1.BatchCheckSlotRequest{
 		VenueId: v.GetId(),
 		Date:    date,
 		Slots:   batchSlots,
+		HallIds: r.URL.Query()["hall_id"],
 	})
 	if err != nil {
 		httpx.GRPCErrorToHTTP(w, err)
@@ -667,6 +670,112 @@ func (h *VenueHandler) ListOwnerSlotBlocks(w http.ResponseWriter, r *http.Reques
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{"blocks": blocks})
 }
 
+// GetVenueSchedule returns occupied intervals (aggregator bookings + manual
+// blocks) for the owner/staff schedule grid. Booking details (guest, status,
+// price) are joined client-side by booking_id from the owner bookings list.
+func (h *VenueHandler) GetVenueSchedule(w http.ResponseWriter, r *http.Request) {
+	actorID := middleware.UserIDFromCtx(r.Context())
+	if actorID == "" {
+		httpx.WriteCatalog(w, apicatalog.GatewayAuthUnauthorized)
+		return
+	}
+	venueID := chi.URLParam(r, "venueId")
+	q := r.URL.Query()
+	dateFrom := q.Get("date_from")
+	dateTo := q.Get("date_to")
+	if dateFrom == "" || dateTo == "" {
+		httpx.WriteCatalog(w, apicatalog.GatewayRequestMissingDateRange)
+		return
+	}
+
+	resp, err := h.client.GetVenueSchedule(r.Context(), &venuev1.GetVenueScheduleRequest{
+		ActorId:  actorID,
+		VenueId:  venueID,
+		DateFrom: dateFrom,
+		DateTo:   dateTo,
+	})
+	if err != nil {
+		httpx.GRPCErrorToHTTP(w, err)
+		return
+	}
+
+	entries := make([]map[string]any, 0, len(resp.GetEntries()))
+	for _, e := range resp.GetEntries() {
+		entries = append(entries, scheduleEntryToJSON(e))
+	}
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"entries": entries})
+}
+
+// GetOwnerBookingMode returns the venue's booking mode (whole | per_hall).
+func (h *VenueHandler) GetOwnerBookingMode(w http.ResponseWriter, r *http.Request) {
+	actorID := middleware.UserIDFromCtx(r.Context())
+	if actorID == "" {
+		httpx.WriteCatalog(w, apicatalog.GatewayAuthUnauthorized)
+		return
+	}
+	venueID := chi.URLParam(r, "venueId")
+	resp, err := h.client.GetVenueBookingMode(r.Context(), &venuev1.GetVenueBookingModeRequest{
+		ActorId: actorID,
+		VenueId: venueID,
+	})
+	if err != nil {
+		httpx.GRPCErrorToHTTP(w, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"booking_mode": resp.GetBookingMode()})
+}
+
+// SetOwnerBookingMode switches the venue between whole-venue and per-hall booking.
+func (h *VenueHandler) SetOwnerBookingMode(w http.ResponseWriter, r *http.Request) {
+	actorID := middleware.UserIDFromCtx(r.Context())
+	if actorID == "" {
+		httpx.WriteCatalog(w, apicatalog.GatewayAuthUnauthorized)
+		return
+	}
+	venueID := chi.URLParam(r, "venueId")
+
+	var req struct {
+		BookingMode string `json:"booking_mode"`
+	}
+	if !httpx.ReadJSONOrRespond(w, r, &req) {
+		return
+	}
+
+	resp, err := h.client.SetVenueBookingMode(r.Context(), &venuev1.SetVenueBookingModeRequest{
+		ActorId:     actorID,
+		VenueId:     venueID,
+		BookingMode: req.BookingMode,
+	})
+	if err != nil {
+		httpx.GRPCErrorToHTTP(w, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"booking_mode": resp.GetBookingMode()})
+}
+
+// scheduleEntryToJSON maps a schedule entry to its wire form. Aggregator
+// bookings carry booking_id (kind="booking"); manual owner blocks carry the
+// note (kind="manual_block").
+func scheduleEntryToJSON(e *venuev1.ScheduleEntry) map[string]any {
+	m := map[string]any{
+		"id":        e.GetId(),
+		"date":      e.GetDate(),
+		"time_from": e.GetTimeFrom(),
+		"time_to":   e.GetTimeTo(),
+	}
+	if e.BookingId != nil {
+		m["kind"] = "booking"
+		m["booking_id"] = e.GetBookingId()
+	} else {
+		m["kind"] = "manual_block"
+		m["note"] = e.GetNote()
+	}
+	if e.HallId != nil {
+		m["hall_id"] = e.GetHallId()
+	}
+	return m
+}
+
 // CreateOwnerSlotBlock adds a manual busy interval (e.g. external booking).
 func (h *VenueHandler) CreateOwnerSlotBlock(w http.ResponseWriter, r *http.Request) {
 	ownerID := middleware.UserIDFromCtx(r.Context())
@@ -677,10 +786,11 @@ func (h *VenueHandler) CreateOwnerSlotBlock(w http.ResponseWriter, r *http.Reque
 	venueID := chi.URLParam(r, "venueId")
 
 	var req struct {
-		Date     string `json:"date"`
-		TimeFrom string `json:"time_from"`
-		TimeTo   string `json:"time_to"`
-		Note     string `json:"note"`
+		Date     string   `json:"date"`
+		TimeFrom string   `json:"time_from"`
+		TimeTo   string   `json:"time_to"`
+		Note     string   `json:"note"`
+		HallIDs  []string `json:"hall_ids"`
 	}
 	if !httpx.ReadJSONOrRespond(w, r, &req) {
 		return
@@ -693,13 +803,18 @@ func (h *VenueHandler) CreateOwnerSlotBlock(w http.ResponseWriter, r *http.Reque
 		TimeFrom: req.TimeFrom,
 		TimeTo:   req.TimeTo,
 		Note:     req.Note,
+		HallIds:  req.HallIDs,
 	})
 	if err != nil {
 		httpx.GRPCErrorToHTTP(w, err)
 		return
 	}
 
-	httpx.WriteJSON(w, http.StatusCreated, map[string]any{"block": manualSlotBlockToJSON(resp.GetBlock())})
+	blocks := make([]map[string]any, 0, len(resp.GetBlocks()))
+	for _, b := range resp.GetBlocks() {
+		blocks = append(blocks, manualSlotBlockToJSON(b))
+	}
+	httpx.WriteJSON(w, http.StatusCreated, map[string]any{"blocks": blocks})
 }
 
 // DeleteOwnerSlotBlock removes a manual busy interval.
@@ -728,7 +843,7 @@ func manualSlotBlockToJSON(b *venuev1.ManualSlotBlock) map[string]any {
 	if b == nil {
 		return nil
 	}
-	return map[string]any{
+	m := map[string]any{
 		"id":        b.GetId(),
 		"venue_id":  b.GetVenueId(),
 		"date":      b.GetDate(),
@@ -736,6 +851,10 @@ func manualSlotBlockToJSON(b *venuev1.ManualSlotBlock) map[string]any {
 		"time_to":   b.GetTimeTo(),
 		"note":      b.GetNote(),
 	}
+	if b.HallId != nil {
+		m["hall_id"] = b.GetHallId()
+	}
+	return m
 }
 
 type venueServiceItemReq struct {

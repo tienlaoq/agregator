@@ -148,6 +148,15 @@ func (noopVenueClient) DeleteManualSlotBlock(context.Context, *venuev1.DeleteMan
 func (noopVenueClient) ListManualSlotBlocks(context.Context, *venuev1.ListManualSlotBlocksRequest, ...grpc.CallOption) (*venuev1.ListManualSlotBlocksResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "not set up")
 }
+func (noopVenueClient) GetVenueSchedule(context.Context, *venuev1.GetVenueScheduleRequest, ...grpc.CallOption) (*venuev1.GetVenueScheduleResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "not set up")
+}
+func (noopVenueClient) GetVenueBookingMode(context.Context, *venuev1.GetVenueBookingModeRequest, ...grpc.CallOption) (*venuev1.GetVenueBookingModeResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "not set up")
+}
+func (noopVenueClient) SetVenueBookingMode(context.Context, *venuev1.SetVenueBookingModeRequest, ...grpc.CallOption) (*venuev1.SetVenueBookingModeResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "not set up")
+}
 func (noopVenueClient) UpdateRating(context.Context, *venuev1.UpdateRatingRequest, ...grpc.CallOption) (*venuev1.UpdateRatingResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "not set up")
 }
