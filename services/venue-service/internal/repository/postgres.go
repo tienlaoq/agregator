@@ -1328,13 +1328,25 @@ func (r *venueRepo) UpdateRating(ctx context.Context, venueID uuid.UUID, avgRati
 	return nil
 }
 
-func (r *venueRepo) CheckSlot(ctx context.Context, venueID uuid.UUID, date, timeFrom, timeTo string) (bool, error) {
+// reservationKeys returns the resource keys a candidate reservation occupies,
+// mirroring the reserved_slots exclusion constraint: the given halls in per-hall
+// mode, or the venue itself (matching hall_id NULL rows via COALESCE) when no
+// halls apply.
+func reservationKeys(venueID uuid.UUID, hallIDs []uuid.UUID) []uuid.UUID {
+	if len(hallIDs) == 0 {
+		return []uuid.UUID{venueID}
+	}
+	return hallIDs
+}
+
+func (r *venueRepo) CheckSlot(ctx context.Context, venueID uuid.UUID, hallIDs []uuid.UUID, date, timeFrom, timeTo string) (bool, error) {
 	var count int
 	err := r.pool.QueryRow(ctx, `
 		SELECT COUNT(*) FROM reserved_slots
 		WHERE venue_id = $1 AND date = $2
-			AND time_from < $4::time AND time_to > $3::time`,
-		venueID, date, timeFrom, timeTo,
+			AND COALESCE(hall_id, venue_id) = ANY($3::uuid[])
+			AND time_from < $5::time AND time_to > $4::time`,
+		venueID, date, reservationKeys(venueID, hallIDs), timeFrom, timeTo,
 	).Scan(&count)
 	if err != nil {
 		return false, fmt.Errorf("check slot: %w", err)
@@ -1362,7 +1374,7 @@ func (r *venueRepo) CheckSlot(ctx context.Context, venueID uuid.UUID, date, time
 //	 AND rs.time_from < s.tt AND rs.time_to > s.tf
 //	GROUP BY s.ord
 //	ORDER BY s.ord;
-func (r *venueRepo) BatchCheckSlots(ctx context.Context, venueID uuid.UUID, date string, slots [][2]string) ([]bool, error) {
+func (r *venueRepo) BatchCheckSlots(ctx context.Context, venueID uuid.UUID, hallIDs []uuid.UUID, date string, slots [][2]string) ([]bool, error) {
 	if len(slots) == 0 {
 		return nil, nil
 	}
@@ -1386,11 +1398,12 @@ func (r *venueRepo) BatchCheckSlots(ctx context.Context, venueID uuid.UUID, date
 		LEFT JOIN reserved_slots rs
 		  ON rs.venue_id = $1
 		 AND rs.date = $2
+		 AND COALESCE(rs.hall_id, rs.venue_id) = ANY($6::uuid[])
 		 AND rs.time_from < s.tt
 		 AND rs.time_to   > s.tf
 		GROUP BY s.ord
 		ORDER BY s.ord`,
-		venueID, date, ords, froms, tos,
+		venueID, date, ords, froms, tos, reservationKeys(venueID, hallIDs),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("batch check slots: %w", err)
@@ -1414,18 +1427,65 @@ func (r *venueRepo) BatchCheckSlots(ctx context.Context, venueID uuid.UUID, date
 	return result, nil
 }
 
-func (r *venueRepo) ReserveSlot(ctx context.Context, venueID, bookingID uuid.UUID, date, timeFrom, timeTo string) error {
-	_, err := r.pool.Exec(ctx, `
-		INSERT INTO reserved_slots (venue_id, booking_id, date, time_from, time_to)
-		VALUES ($1, $2, $3::date, $4::time, $5::time)`,
-		venueID, bookingID, date, timeFrom, timeTo,
-	)
+func (r *venueRepo) ReserveSlot(ctx context.Context, venueID, bookingID uuid.UUID, date, timeFrom, timeTo string, hallIDs []uuid.UUID) error {
+	const perHallInsert = `
+		INSERT INTO reserved_slots (venue_id, booking_id, hall_id, date, time_from, time_to)
+		VALUES ($1, $2, $3, $4::date, $5::time, $6::time)`
+
+	if len(hallIDs) == 0 {
+		_, err := r.pool.Exec(ctx, `
+			INSERT INTO reserved_slots (venue_id, booking_id, hall_id, date, time_from, time_to)
+			VALUES ($1, $2, NULL, $3::date, $4::time, $5::time)`,
+			venueID, bookingID, date, timeFrom, timeTo,
+		)
+		return reserveSlotErr(err)
+	}
+
+	// Per-hall: reserve every selected hall atomically. Any overlap on any hall
+	// aborts the whole reservation, leaving no rows.
+	tx, err := r.pool.Begin(ctx)
 	if err != nil {
-		var pgErr *pgconn.PgError
-		if errors.As(err, &pgErr) && pgErr.Code == "23P01" {
-			return ErrSlotUnavailable
+		return fmt.Errorf("reserve slot begin: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	for _, hallID := range hallIDs {
+		if _, err := tx.Exec(ctx, perHallInsert, venueID, bookingID, hallID, date, timeFrom, timeTo); err != nil {
+			return reserveSlotErr(err)
 		}
-		return fmt.Errorf("reserve slot: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("reserve slot commit: %w", err)
+	}
+	return nil
+}
+
+// reserveSlotErr maps a Postgres exclusion violation (23P01) on reserved_slots
+// to the domain ErrSlotUnavailable; other errors are wrapped.
+func reserveSlotErr(err error) error {
+	if err == nil {
+		return nil
+	}
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == "23P01" {
+		return ErrSlotUnavailable
+	}
+	return fmt.Errorf("reserve slot: %w", err)
+}
+
+// BookingMode returns the venue's booking mode ("whole" | "per_hall").
+func (r *venueRepo) BookingMode(ctx context.Context, venueID uuid.UUID) (string, error) {
+	var mode string
+	err := r.pool.QueryRow(ctx, `SELECT booking_mode FROM venues WHERE id = $1`, venueID).Scan(&mode)
+	if err != nil {
+		return "", fmt.Errorf("booking mode: %w", err)
+	}
+	return mode, nil
+}
+
+// SetBookingMode updates the venue's booking mode.
+func (r *venueRepo) SetBookingMode(ctx context.Context, venueID uuid.UUID, mode string) error {
+	if _, err := r.pool.Exec(ctx, `UPDATE venues SET booking_mode = $2 WHERE id = $1`, venueID, mode); err != nil {
+		return fmt.Errorf("set booking mode: %w", err)
 	}
 	return nil
 }
@@ -1441,22 +1501,71 @@ func (r *venueRepo) ReleaseSlot(ctx context.Context, venueID, bookingID uuid.UUI
 	return nil
 }
 
-func (r *venueRepo) CreateManualSlotBlock(ctx context.Context, venueID uuid.UUID, date, timeFrom, timeTo, note string) (uuid.UUID, error) {
-	var id uuid.UUID
-	err := r.pool.QueryRow(ctx, `
-		INSERT INTO reserved_slots (venue_id, booking_id, date, time_from, time_to, block_note)
-		VALUES ($1, NULL, $2::date, $3::time, $4::time, NULLIF(trim($5), ''))
-		RETURNING id`,
-		venueID, date, timeFrom, timeTo, note,
-	).Scan(&id)
+// HallIDs returns the ids of all halls defined for the venue.
+func (r *venueRepo) HallIDs(ctx context.Context, venueID uuid.UUID) ([]uuid.UUID, error) {
+	rows, err := r.pool.Query(ctx, `SELECT id FROM venue_halls WHERE venue_id = $1`, venueID)
 	if err != nil {
-		var pgErr *pgconn.PgError
-		if errors.As(err, &pgErr) && pgErr.Code == "23P01" {
-			return uuid.Nil, ErrSlotUnavailable
-		}
-		return uuid.Nil, fmt.Errorf("create manual slot block: %w", err)
+		return nil, fmt.Errorf("hall ids: %w", err)
 	}
-	return id, nil
+	defer rows.Close()
+	var out []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scan hall id: %w", err)
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
+}
+
+func (r *venueRepo) CreateManualSlotBlock(ctx context.Context, venueID uuid.UUID, hallIDs []uuid.UUID, date, timeFrom, timeTo, note string) ([]domain.ManualSlotBlock, error) {
+	// Whole-venue block: a single hall_id NULL row (whole mode).
+	if len(hallIDs) == 0 {
+		b := domain.ManualSlotBlock{VenueID: venueID, Date: date, TimeFrom: timeFrom, TimeTo: timeTo}
+		err := r.pool.QueryRow(ctx, `
+			INSERT INTO reserved_slots (venue_id, booking_id, hall_id, date, time_from, time_to, block_note)
+			VALUES ($1, NULL, NULL, $2::date, $3::time, $4::time, NULLIF(trim($5), ''))
+			RETURNING id, COALESCE(block_note, '')`,
+			venueID, date, timeFrom, timeTo, note,
+		).Scan(&b.ID, &b.Note)
+		if err != nil {
+			return nil, manualBlockErr(err)
+		}
+		return []domain.ManualSlotBlock{b}, nil
+	}
+
+	// Per-hall block: one row per hall, atomically.
+	const perHallInsert = `
+		INSERT INTO reserved_slots (venue_id, booking_id, hall_id, date, time_from, time_to, block_note)
+		VALUES ($1, NULL, $2, $3::date, $4::time, $5::time, NULLIF(trim($6), ''))
+		RETURNING id, COALESCE(block_note, '')`
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("create manual block begin: %w", err)
+	}
+	defer tx.Rollback(ctx)
+	out := make([]domain.ManualSlotBlock, 0, len(hallIDs))
+	for _, hallID := range hallIDs {
+		hid := hallID
+		b := domain.ManualSlotBlock{VenueID: venueID, HallID: &hid, Date: date, TimeFrom: timeFrom, TimeTo: timeTo}
+		if err := tx.QueryRow(ctx, perHallInsert, venueID, hallID, date, timeFrom, timeTo, note).Scan(&b.ID, &b.Note); err != nil {
+			return nil, manualBlockErr(err)
+		}
+		out = append(out, b)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("create manual block commit: %w", err)
+	}
+	return out, nil
+}
+
+func manualBlockErr(err error) error {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == "23P01" {
+		return ErrSlotUnavailable
+	}
+	return fmt.Errorf("create manual slot block: %w", err)
 }
 
 func (r *venueRepo) DeleteManualSlotBlock(ctx context.Context, venueID, blockID uuid.UUID) (bool, error) {
@@ -1473,7 +1582,7 @@ func (r *venueRepo) DeleteManualSlotBlock(ctx context.Context, venueID, blockID 
 
 func (r *venueRepo) ListManualSlotBlocks(ctx context.Context, venueID uuid.UUID, dateFrom, dateTo string) ([]domain.ManualSlotBlock, error) {
 	rows, err := r.pool.Query(ctx, `
-		SELECT id, venue_id, date::text,
+		SELECT id, venue_id, hall_id, date::text,
 			to_char(time_from, 'HH24:MI'),
 			to_char(time_to, 'HH24:MI'),
 			COALESCE(block_note, '')
@@ -1490,11 +1599,57 @@ func (r *venueRepo) ListManualSlotBlocks(ctx context.Context, venueID uuid.UUID,
 
 	var out []domain.ManualSlotBlock
 	for rows.Next() {
-		var b domain.ManualSlotBlock
-		if err := rows.Scan(&b.ID, &b.VenueID, &b.Date, &b.TimeFrom, &b.TimeTo, &b.Note); err != nil {
+		var (
+			b    domain.ManualSlotBlock
+			hall uuid.NullUUID
+		)
+		if err := rows.Scan(&b.ID, &b.VenueID, &hall, &b.Date, &b.TimeFrom, &b.TimeTo, &b.Note); err != nil {
 			return nil, fmt.Errorf("scan manual slot block: %w", err)
 		}
+		if hall.Valid {
+			id := hall.UUID
+			b.HallID = &id
+		}
 		out = append(out, b)
+	}
+	return out, rows.Err()
+}
+
+func (r *venueRepo) ListVenueSchedule(ctx context.Context, venueID uuid.UUID, dateFrom, dateTo string) ([]domain.ScheduleEntry, error) {
+	rows, err := r.pool.Query(ctx, `
+		SELECT id, booking_id, hall_id, date::text,
+			to_char(time_from, 'HH24:MI'),
+			to_char(time_to, 'HH24:MI'),
+			COALESCE(block_note, '')
+		FROM reserved_slots
+		WHERE venue_id = $1 AND date >= $2::date AND date <= $3::date
+		ORDER BY date, time_from`,
+		venueID, dateFrom, dateTo,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list venue schedule: %w", err)
+	}
+	defer rows.Close()
+
+	var out []domain.ScheduleEntry
+	for rows.Next() {
+		var (
+			e       domain.ScheduleEntry
+			booking uuid.NullUUID
+			hall    uuid.NullUUID
+		)
+		if err := rows.Scan(&e.ID, &booking, &hall, &e.Date, &e.TimeFrom, &e.TimeTo, &e.Note); err != nil {
+			return nil, fmt.Errorf("scan schedule entry: %w", err)
+		}
+		if booking.Valid {
+			id := booking.UUID
+			e.BookingID = &id
+		}
+		if hall.Valid {
+			id := hall.UUID
+			e.HallID = &id
+		}
+		out = append(out, e)
 	}
 	return out, rows.Err()
 }

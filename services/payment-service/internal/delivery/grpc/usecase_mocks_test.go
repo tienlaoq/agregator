@@ -180,6 +180,9 @@ func (m mockPayoutRepo) List(ctx context.Context, partnerType domain.PartnerType
 	}
 	return nil, nil
 }
+func (mockPayoutRepo) LastPayoutAt(context.Context, domain.PartnerType, string) (time.Time, bool, error) {
+	return time.Time{}, false, nil
+}
 func (mockPayoutRepo) ListPendingOlderThan(context.Context, time.Duration, int) ([]domain.Payout, error) {
 	return nil, nil
 }

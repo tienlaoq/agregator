@@ -112,10 +112,34 @@ func main() {
 		cfg.PaymentReturnURL, cfg.PlatformFeeBPS, holdDuration,
 		log,
 	)
+	// PAYOUT_WEEKDAY in 0..6 enables weekly batched payouts on that weekday;
+	// any other value (e.g. -1) reverts to paying every ripe balance per tick.
+	weeklyPayout := cfg.PayoutWeekday >= 0 && cfg.PayoutWeekday <= 6
+	if !weeklyPayout && cfg.PayoutWeekday != -1 {
+		log.Warn().
+			Int("payout_weekday", cfg.PayoutWeekday).
+			Msg("PAYOUT_WEEKDAY out of range (expected 0..6, or -1 to disable) — weekly payouts disabled, paying per tick")
+	}
+	// PayoutWeekday is evaluated in this location so the payout day tracks the
+	// business calendar, not the container's UTC day. Fall back to UTC on an
+	// unknown zone rather than failing startup.
+	payoutLoc, err := time.LoadLocation(cfg.PayoutTimezone)
+	if err != nil {
+		log.Warn().
+			Str("payout_timezone", cfg.PayoutTimezone).
+			Err(err).
+			Msg("PAYOUT_TIMEZONE not loadable — falling back to UTC for payout weekday")
+		payoutLoc = time.UTC
+	}
 	payoutUC := usecase.NewPayoutUseCase(
 		payoutRepo, payoutMethodRepo, ledgerRepo,
 		paymentProvider, string(cfg.ActiveProvider),
-		usecase.PayoutSchedulerConfig{},
+		usecase.PayoutSchedulerConfig{
+			MinPayoutKopecks: cfg.PayoutMinKopecks,
+			WeeklyPayout:     weeklyPayout,
+			PayoutWeekday:    time.Weekday(cfg.PayoutWeekday),
+			PayoutLocation:   payoutLoc,
+		},
 		log,
 	)
 	stopScheduler := payoutUC.StartSchedulerInBackground(ctx)

@@ -294,6 +294,7 @@ type mockPayoutRepo struct {
 	GetByIDFunc                 func(ctx context.Context, id string) (*domain.Payout, error)
 	GetByProviderPayoutIDFunc   func(ctx context.Context, providerPayoutID string) (*domain.Payout, error)
 	ListFunc                    func(ctx context.Context, partnerType domain.PartnerType, partnerID string, limit, offset int) ([]domain.Payout, error)
+	LastPayoutAtFunc            func(ctx context.Context, partnerType domain.PartnerType, partnerID string) (time.Time, bool, error)
 	ListPendingOlderThanFunc    func(ctx context.Context, olderThan time.Duration, limit int) ([]domain.Payout, error)
 }
 
@@ -344,6 +345,13 @@ func (m *mockPayoutRepo) List(ctx context.Context, partnerType domain.PartnerTyp
 		return m.ListFunc(ctx, partnerType, partnerID, limit, offset)
 	}
 	return nil, nil
+}
+
+func (m *mockPayoutRepo) LastPayoutAt(ctx context.Context, partnerType domain.PartnerType, partnerID string) (time.Time, bool, error) {
+	if m.LastPayoutAtFunc != nil {
+		return m.LastPayoutAtFunc(ctx, partnerType, partnerID)
+	}
+	return time.Time{}, false, nil
 }
 
 func (m *mockPayoutRepo) ListPendingOlderThan(ctx context.Context, olderThan time.Duration, limit int) ([]domain.Payout, error) {

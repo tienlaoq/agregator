@@ -35,6 +35,13 @@ const (
 	reconcileBatchLimit = 100
 )
 
+// payoutCooldown is the minimum age of a partner's previous non-failed payout
+// before a new one is issued in weekly mode. Set just under a week so a payout
+// made last week (on the configured weekday) never blocks this week's run, while
+// a second payout on the same weekday — for funds that ripened during that day —
+// is suppressed. Only consulted when WeeklyPayout is enabled.
+const payoutCooldown = 6 * 24 * time.Hour
+
 // PayoutUseCase orchestrates the partner-payout lifecycle.
 //
 // Responsibilities:
@@ -59,6 +66,9 @@ type PayoutUseCase struct {
 
 	minPayoutKopecks int64
 	tickInterval     time.Duration
+	weeklyPayout     bool
+	payoutWeekday    time.Weekday
+	payoutLocation   *time.Location
 	log              zerolog.Logger
 }
 
@@ -72,6 +82,16 @@ type PayoutSchedulerConfig struct {
 	// at the per-second granularity of available_at, so anything more frequent
 	// than a few minutes is just churn.
 	TickInterval time.Duration
+	// WeeklyPayout confines payouts to a single weekday (PayoutWeekday) and adds
+	// a per-partner cooldown so each partner is paid at most once per week. When
+	// false the scheduler pays any ripe partner on every tick (legacy behaviour).
+	WeeklyPayout bool
+	// PayoutWeekday is the weekday payouts run on when WeeklyPayout is true.
+	PayoutWeekday time.Weekday
+	// PayoutLocation is the timezone in which PayoutWeekday is evaluated, so the
+	// payout day tracks the business day rather than the server's UTC day. Nil
+	// falls back to time.UTC.
+	PayoutLocation *time.Location
 }
 
 func NewPayoutUseCase(
@@ -89,6 +109,9 @@ func NewPayoutUseCase(
 	if cfg.TickInterval <= 0 {
 		cfg.TickInterval = time.Hour
 	}
+	if cfg.PayoutLocation == nil {
+		cfg.PayoutLocation = time.UTC
+	}
 	return &PayoutUseCase{
 		payouts:          payouts,
 		methods:          methods,
@@ -97,6 +120,9 @@ func NewPayoutUseCase(
 		activeProvider:   activeProvider,
 		minPayoutKopecks: cfg.MinPayoutKopecks,
 		tickInterval:     cfg.TickInterval,
+		weeklyPayout:     cfg.WeeklyPayout,
+		payoutWeekday:    cfg.PayoutWeekday,
+		payoutLocation:   cfg.PayoutLocation,
 		log:              lg.With().Str("component", "payout-usecase").Logger(),
 	}
 }
@@ -350,6 +376,14 @@ func (uc *PayoutUseCase) reconcileOne(ctx context.Context, p *domain.Payout) err
 func (uc *PayoutUseCase) tick(ctx context.Context) {
 	const batchLimit = 100
 
+	// In weekly mode payouts only run on the configured weekday, evaluated in the
+	// business timezone so the day tracks local calendar rather than server UTC.
+	// Reconciliation of already-issued payouts is unaffected — it runs on its own
+	// ticker.
+	if uc.weeklyPayout && time.Now().In(uc.payoutLocation).Weekday() != uc.payoutWeekday {
+		return
+	}
+
 	partners, err := uc.ledger.PartnersWithAvailableBalance(ctx, uc.minPayoutKopecks, batchLimit)
 	if err != nil {
 		uc.log.Error().Err(err).Msg("payout scheduler: enumerate partners failed")
@@ -387,6 +421,18 @@ func (uc *PayoutUseCase) payoutPartner(ctx context.Context, ref domain.PartnerRe
 	}
 	if balance.AvailableKopecks < uc.minPayoutKopecks {
 		return nil
+	}
+
+	// Weekly cadence: skip partners already paid within the cooldown window so a
+	// second payout is not issued for funds that ripened later on the payout day.
+	if uc.weeklyPayout {
+		last, ok, err := uc.payouts.LastPayoutAt(ctx, ref.PartnerType, ref.PartnerID)
+		if err != nil {
+			return fmt.Errorf("last payout at: %w", err)
+		}
+		if ok && time.Since(last) < payoutCooldown {
+			return nil
+		}
 	}
 
 	method, err := uc.methods.GetActive(ctx, ref.PartnerType, ref.PartnerID)

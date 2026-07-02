@@ -151,6 +151,18 @@ func (m *mockVenueClient) ListManualSlotBlocks(ctx context.Context, in *venuev1.
 	return nil, status.Error(codes.Unimplemented, "ListManualSlotBlocks")
 }
 
+func (m *mockVenueClient) GetVenueSchedule(ctx context.Context, in *venuev1.GetVenueScheduleRequest, opts ...grpc.CallOption) (*venuev1.GetVenueScheduleResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "GetVenueSchedule")
+}
+
+func (m *mockVenueClient) GetVenueBookingMode(ctx context.Context, in *venuev1.GetVenueBookingModeRequest, opts ...grpc.CallOption) (*venuev1.GetVenueBookingModeResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "GetVenueBookingMode")
+}
+
+func (m *mockVenueClient) SetVenueBookingMode(ctx context.Context, in *venuev1.SetVenueBookingModeRequest, opts ...grpc.CallOption) (*venuev1.SetVenueBookingModeResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "SetVenueBookingMode")
+}
+
 func (m *mockVenueClient) AddVenuePhoto(ctx context.Context, in *venuev1.AddVenuePhotoRequest, opts ...grpc.CallOption) (*venuev1.VenueResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "AddVenuePhoto")
 }

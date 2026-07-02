@@ -91,6 +91,13 @@ type PayoutRepository interface {
 	// List returns payouts for the partner ordered by created_at DESC.
 	List(ctx context.Context, partnerType PartnerType, partnerID string, limit, offset int) ([]Payout, error)
 
+	// LastPayoutAt returns the created_at of the partner's most recent
+	// non-failed payout (pending | processing | succeeded), used by the
+	// scheduler to enforce the weekly payout cadence. A failed payout does not
+	// count — its balance was reversed, so the partner is free to be paid again.
+	// ok is false when the partner has no such payout.
+	LastPayoutAt(ctx context.Context, partnerType PartnerType, partnerID string) (at time.Time, ok bool, err error)
+
 	// ListPendingOlderThan returns pending payouts that have been waiting longer
 	// than olderThan since creation.  Used by the reconciliation worker to detect
 	// payouts whose CreatePayout call returned a transient error (the provider

@@ -531,20 +531,70 @@ func (uc *VenueUseCase) UpdateRating(ctx context.Context, venueID uuid.UUID, avg
 	return nil
 }
 
-func (uc *VenueUseCase) CheckSlot(ctx context.Context, venueID uuid.UUID, date, timeFrom, timeTo string) (bool, error) {
-	return uc.repo.CheckSlot(ctx, venueID, date, timeFrom, timeTo)
+// effectiveHalls resolves which halls a reservation or availability check
+// applies to: the requested halls in per-hall mode, or none (whole-venue) in
+// whole mode. Concentrates the mode gate so reserve and check stay consistent.
+func (uc *VenueUseCase) effectiveHalls(ctx context.Context, venueID uuid.UUID, hallIDs []uuid.UUID) ([]uuid.UUID, error) {
+	mode, err := uc.repo.BookingMode(ctx, venueID)
+	if err != nil {
+		return nil, err
+	}
+	if mode != domain.BookingModePerHall {
+		return nil, nil
+	}
+	return hallIDs, nil
 }
 
-func (uc *VenueUseCase) BatchCheckSlots(ctx context.Context, venueID uuid.UUID, date string, slots [][2]string) ([]bool, error) {
-	return uc.repo.BatchCheckSlots(ctx, venueID, date, slots)
+func (uc *VenueUseCase) CheckSlot(ctx context.Context, venueID uuid.UUID, hallIDs []uuid.UUID, date, timeFrom, timeTo string) (bool, error) {
+	halls, err := uc.effectiveHalls(ctx, venueID, hallIDs)
+	if err != nil {
+		return false, err
+	}
+	return uc.repo.CheckSlot(ctx, venueID, halls, date, timeFrom, timeTo)
 }
 
-func (uc *VenueUseCase) ReserveSlot(ctx context.Context, venueID, bookingID uuid.UUID, date, timeFrom, timeTo string) error {
-	return uc.repo.ReserveSlot(ctx, venueID, bookingID, date, timeFrom, timeTo)
+func (uc *VenueUseCase) BatchCheckSlots(ctx context.Context, venueID uuid.UUID, hallIDs []uuid.UUID, date string, slots [][2]string) ([]bool, error) {
+	halls, err := uc.effectiveHalls(ctx, venueID, hallIDs)
+	if err != nil {
+		return nil, err
+	}
+	return uc.repo.BatchCheckSlots(ctx, venueID, halls, date, slots)
+}
+
+// ReserveSlot reserves the interval for a booking. In per-hall mode the booking's
+// selected halls are each reserved independently; in whole mode (the default) a
+// single whole-venue reservation is taken and hallIDs are ignored. Falling back
+// to a whole-venue reservation whenever no halls apply is deliberately
+// conservative — it never under-reserves.
+func (uc *VenueUseCase) ReserveSlot(ctx context.Context, venueID, bookingID uuid.UUID, date, timeFrom, timeTo string, hallIDs []uuid.UUID) error {
+	halls, err := uc.effectiveHalls(ctx, venueID, hallIDs)
+	if err != nil {
+		return err
+	}
+	return uc.repo.ReserveSlot(ctx, venueID, bookingID, date, timeFrom, timeTo, halls)
 }
 
 func (uc *VenueUseCase) ReleaseSlot(ctx context.Context, venueID, bookingID uuid.UUID) error {
 	return uc.repo.ReleaseSlot(ctx, venueID, bookingID)
+}
+
+// GetBookingMode returns the venue's booking mode for a venue member.
+func (uc *VenueUseCase) GetBookingMode(ctx context.Context, actorID, venueID uuid.UUID) (string, error) {
+	if err := uc.ensureVenueMember(ctx, venueID, actorID); err != nil {
+		return "", err
+	}
+	return uc.repo.BookingMode(ctx, venueID)
+}
+
+// SetBookingMode changes the venue's booking mode. Owner/staff only.
+func (uc *VenueUseCase) SetBookingMode(ctx context.Context, actorID, venueID uuid.UUID, mode string) error {
+	if err := uc.ensureVenueMember(ctx, venueID, actorID); err != nil {
+		return err
+	}
+	if mode != domain.BookingModeWhole && mode != domain.BookingModePerHall {
+		return pkgerrors.InvalidArgument("неизвестный режим бронирования")
+	}
+	return uc.repo.SetBookingMode(ctx, venueID, mode)
 }
 
 const (
@@ -586,25 +636,67 @@ func validateSlotDateAndTimes(date, timeFrom, timeTo string) error {
 	return nil
 }
 
-// CreateManualSlotBlock reserves a time interval without an aggregator booking (external booking).
-func (uc *VenueUseCase) CreateManualSlotBlock(ctx context.Context, ownerID, venueID uuid.UUID, date, timeFrom, timeTo, note string) (uuid.UUID, error) {
+// CreateManualSlotBlock reserves a time interval without an aggregator booking
+// (external booking). In per-hall mode the block targets specific halls — the
+// requested ones, or every hall when none are given ("block the whole venue");
+// in whole mode it blocks the venue as a single interval.
+func (uc *VenueUseCase) CreateManualSlotBlock(ctx context.Context, ownerID, venueID uuid.UUID, hallIDs []uuid.UUID, date, timeFrom, timeTo, note string) ([]domain.ManualSlotBlock, error) {
 	if err := uc.ensureVenueMember(ctx, venueID, ownerID); err != nil {
-		return uuid.Nil, err
+		return nil, err
 	}
 	if err := validateSlotDateAndTimes(date, timeFrom, timeTo); err != nil {
-		return uuid.Nil, err
+		return nil, err
 	}
 	if utf8.RuneCountInString(note) > maxManualBlockNoteRunes {
-		return uuid.Nil, pkgerrors.InvalidArgument("комментарий слишком длинный")
+		return nil, pkgerrors.InvalidArgument("комментарий слишком длинный")
 	}
-	id, err := uc.repo.CreateManualSlotBlock(ctx, venueID, date, timeFrom, timeTo, note)
+
+	halls, err := uc.resolveBlockHalls(ctx, venueID, hallIDs)
+	if err != nil {
+		return nil, err
+	}
+
+	blocks, err := uc.repo.CreateManualSlotBlock(ctx, venueID, halls, date, timeFrom, timeTo, note)
 	if err != nil {
 		if errors.Is(err, repository.ErrSlotUnavailable) {
-			return uuid.Nil, pkgerrors.InvalidArgument("время пересекается с уже занятым слотом или другой блокировкой")
+			return nil, pkgerrors.InvalidArgument("время пересекается с уже занятым слотом или другой блокировкой")
 		}
-		return uuid.Nil, err
+		return nil, err
 	}
-	return id, nil
+	return blocks, nil
+}
+
+// resolveBlockHalls picks the halls a manual block targets: none (whole-venue)
+// in whole mode; the requested halls (validated to belong to the venue), or
+// every hall when none are given, in per-hall mode.
+func (uc *VenueUseCase) resolveBlockHalls(ctx context.Context, venueID uuid.UUID, hallIDs []uuid.UUID) ([]uuid.UUID, error) {
+	mode, err := uc.repo.BookingMode(ctx, venueID)
+	if err != nil {
+		return nil, err
+	}
+	if mode != domain.BookingModePerHall {
+		return nil, nil
+	}
+	venueHalls, err := uc.repo.HallIDs(ctx, venueID)
+	if err != nil {
+		return nil, err
+	}
+	if len(venueHalls) == 0 {
+		return nil, pkgerrors.InvalidArgument("у заведения нет залов")
+	}
+	if len(hallIDs) == 0 {
+		return venueHalls, nil
+	}
+	known := make(map[uuid.UUID]struct{}, len(venueHalls))
+	for _, h := range venueHalls {
+		known[h] = struct{}{}
+	}
+	for _, h := range hallIDs {
+		if _, ok := known[h]; !ok {
+			return nil, pkgerrors.InvalidArgument("зал не принадлежит заведению")
+		}
+	}
+	return hallIDs, nil
 }
 
 // DeleteManualSlotBlock removes a manual block created by the owner.
@@ -642,6 +734,31 @@ func (uc *VenueUseCase) ListManualSlotBlocks(ctx context.Context, ownerID, venue
 		return nil, pkgerrors.InvalidArgument("слишком большой диапазон дат")
 	}
 	return uc.repo.ListManualSlotBlocks(ctx, venueID, dateFrom, dateTo)
+}
+
+// GetVenueSchedule returns the venue's occupied intervals (aggregator bookings
+// and manual owner blocks) for the schedule grid, in the inclusive date range.
+// Any venue member (owner or staff) may view it; enrichment of booking details
+// happens at the gateway.
+func (uc *VenueUseCase) GetVenueSchedule(ctx context.Context, actorID, venueID uuid.UUID, dateFrom, dateTo string) ([]domain.ScheduleEntry, error) {
+	if err := uc.ensureVenueMember(ctx, venueID, actorID); err != nil {
+		return nil, err
+	}
+	d0, err := time.Parse("2006-01-02", dateFrom)
+	if err != nil {
+		return nil, pkgerrors.InvalidArgument("неверная дата «с», ожидается YYYY-MM-DD")
+	}
+	d1, err := time.Parse("2006-01-02", dateTo)
+	if err != nil {
+		return nil, pkgerrors.InvalidArgument("неверная дата «по», ожидается YYYY-MM-DD")
+	}
+	if d1.Before(d0) {
+		return nil, pkgerrors.InvalidArgument("дата «по» не может быть раньше даты «с»")
+	}
+	if d1.Sub(d0) > maxManualBlockRangeDays*24*time.Hour {
+		return nil, pkgerrors.InvalidArgument("слишком большой диапазон дат")
+	}
+	return uc.repo.ListVenueSchedule(ctx, venueID, dateFrom, dateTo)
 }
 
 func (uc *VenueUseCase) AddVenuePhoto(ctx context.Context, venueID, ownerID uuid.UUID, url string) (*domain.Venue, error) {

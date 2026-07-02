@@ -345,6 +345,27 @@ func (r *PayoutRepo) List(ctx context.Context, partnerType domain.PartnerType, p
 	return out, nil
 }
 
+// LastPayoutAt returns the created_at of the partner's most recent non-failed
+// payout. Failed payouts are excluded because their ledger debit was reversed —
+// they should not push the partner's next payout a week out.
+func (r *PayoutRepo) LastPayoutAt(ctx context.Context, partnerType domain.PartnerType, partnerID string) (time.Time, bool, error) {
+	const q = `SELECT created_at
+		FROM payouts
+		WHERE partner_type = $1 AND partner_id = $2 AND status <> 'failed'
+		ORDER BY created_at DESC
+		LIMIT 1`
+
+	var at time.Time
+	err := r.pool.QueryRow(ctx, q, string(partnerType), partnerID).Scan(&at)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return time.Time{}, false, nil
+	}
+	if err != nil {
+		return time.Time{}, false, fmt.Errorf("payout last-at query: %w", err)
+	}
+	return at, true, nil
+}
+
 func (r *PayoutRepo) scanOne(ctx context.Context, q string, args ...any) (*domain.Payout, error) {
 	rows, err := r.pool.Query(ctx, q, args...)
 	if err != nil {

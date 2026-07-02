@@ -49,6 +49,7 @@ func TestMain(m *testing.M) {
 			filepath.Join(migrationsDir, "011_venue_payout_profile.up.sql"),
 			filepath.Join(migrationsDir, "012_venue_staff.up.sql"),
 			filepath.Join(migrationsDir, "013_venue_crm_tasks.up.sql"),
+			filepath.Join(migrationsDir, "017_reserved_slots_hall.up.sql"),
 		),
 		testcontainers.WithWaitStrategy(
 			wait.ForAll(
@@ -228,22 +229,22 @@ func TestIntegration_SlotReservation(t *testing.T) {
 	require.NoError(t, repo.Create(ctx, venue))
 
 	testDate := "2025-06-15"
-	available, err := repo.CheckSlot(ctx, venue.ID, testDate, "10:00", "12:00")
+	available, err := repo.CheckSlot(ctx, venue.ID, nil, testDate, "10:00", "12:00")
 	require.NoError(t, err)
 	assert.True(t, available)
 
 	bookingID := uuid.New()
-	err = repo.ReserveSlot(ctx, venue.ID, bookingID, testDate, "10:00", "12:00")
+	err = repo.ReserveSlot(ctx, venue.ID, bookingID, testDate, "10:00", "12:00", nil)
 	require.NoError(t, err)
 
-	available, err = repo.CheckSlot(ctx, venue.ID, testDate, "10:00", "12:00")
+	available, err = repo.CheckSlot(ctx, venue.ID, nil, testDate, "10:00", "12:00")
 	require.NoError(t, err)
 	assert.False(t, available)
 
 	err = repo.ReleaseSlot(ctx, venue.ID, bookingID)
 	require.NoError(t, err)
 
-	available, err = repo.CheckSlot(ctx, venue.ID, testDate, "10:00", "12:00")
+	available, err = repo.CheckSlot(ctx, venue.ID, nil, testDate, "10:00", "12:00")
 	require.NoError(t, err)
 	assert.True(t, available)
 }
@@ -262,9 +263,9 @@ func TestIntegration_SlotOverlapRejected(t *testing.T) {
 	require.NoError(t, repo.Create(ctx, venue))
 
 	testDate := "2025-07-20"
-	require.NoError(t, repo.ReserveSlot(ctx, venue.ID, uuid.New(), testDate, "10:00", "12:00"))
+	require.NoError(t, repo.ReserveSlot(ctx, venue.ID, uuid.New(), testDate, "10:00", "12:00", nil))
 
-	err := repo.ReserveSlot(ctx, venue.ID, uuid.New(), testDate, "11:00", "13:00")
+	err := repo.ReserveSlot(ctx, venue.ID, uuid.New(), testDate, "11:00", "13:00", nil)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrSlotUnavailable)
 }
@@ -283,23 +284,24 @@ func TestIntegration_ManualSlotBlockOccupiesSlot(t *testing.T) {
 	require.NoError(t, repo.Create(ctx, venue))
 
 	testDate := "2025-08-10"
-	blockID, err := repo.CreateManualSlotBlock(ctx, venue.ID, testDate, "14:00", "16:00", "по телефону")
+	blocks, err := repo.CreateManualSlotBlock(ctx, venue.ID, nil, testDate, "14:00", "16:00", "по телефону")
 	require.NoError(t, err)
-	assert.NotEqual(t, uuid.Nil, blockID)
+	require.Len(t, blocks, 1)
+	assert.NotEqual(t, uuid.Nil, blocks[0].ID)
 
-	available, err := repo.CheckSlot(ctx, venue.ID, testDate, "15:00", "17:00")
+	available, err := repo.CheckSlot(ctx, venue.ID, nil, testDate, "15:00", "17:00")
 	require.NoError(t, err)
 	assert.False(t, available)
 
-	err = repo.ReserveSlot(ctx, venue.ID, uuid.New(), testDate, "15:00", "17:00")
+	err = repo.ReserveSlot(ctx, venue.ID, uuid.New(), testDate, "15:00", "17:00", nil)
 	require.Error(t, err)
 	assert.ErrorIs(t, err, ErrSlotUnavailable)
 
-	deleted, err := repo.DeleteManualSlotBlock(ctx, venue.ID, blockID)
+	deleted, err := repo.DeleteManualSlotBlock(ctx, venue.ID, blocks[0].ID)
 	require.NoError(t, err)
 	assert.True(t, deleted)
 
-	available, err = repo.CheckSlot(ctx, venue.ID, testDate, "15:00", "17:00")
+	available, err = repo.CheckSlot(ctx, venue.ID, nil, testDate, "15:00", "17:00")
 	require.NoError(t, err)
 	assert.True(t, available)
 }
@@ -369,4 +371,53 @@ func TestIntegration_ListOnlyActive(t *testing.T) {
 		assert.True(t, v.IsActive, "List should return only active venues")
 		assert.Equal(t, domain.StatusActive, v.Status)
 	}
+}
+
+func TestIntegration_PerHallReservations(t *testing.T) {
+	repo := NewVenueRepo(testPool)
+	ctx := context.Background()
+
+	venue := &domain.Venue{
+		OwnerID: uuid.New(),
+		Name:    "Баня Позальная " + uuid.New().String()[:8],
+		Type:    "banya",
+		Address: "ул. Залов, 4",
+		City:    "Москва",
+	}
+	require.NoError(t, repo.Create(ctx, venue))
+
+	date := "2025-09-15"
+	hallA, hallB := uuid.New(), uuid.New()
+
+	// Same interval in different halls: both succeed (independent resources).
+	require.NoError(t, repo.ReserveSlot(ctx, venue.ID, uuid.New(), date, "10:00", "12:00", []uuid.UUID{hallA}))
+	require.NoError(t, repo.ReserveSlot(ctx, venue.ID, uuid.New(), date, "10:00", "12:00", []uuid.UUID{hallB}))
+
+	// Availability is per hall: a reserved hall reads busy, an untouched hall free.
+	busyA, err := repo.CheckSlot(ctx, venue.ID, []uuid.UUID{hallA}, date, "10:00", "12:00")
+	require.NoError(t, err)
+	assert.False(t, busyA)
+	freeC, err := repo.CheckSlot(ctx, venue.ID, []uuid.UUID{uuid.New()}, date, "10:00", "12:00")
+	require.NoError(t, err)
+	assert.True(t, freeC)
+
+	// Overlapping interval in the same hall: rejected.
+	err = repo.ReserveSlot(ctx, venue.ID, uuid.New(), date, "11:00", "13:00", []uuid.UUID{hallA})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrSlotUnavailable)
+
+	// A multi-hall booking is atomic: a conflict on any hall aborts all inserts.
+	err = repo.ReserveSlot(ctx, venue.ID, uuid.New(), date, "11:30", "12:30", []uuid.UUID{uuid.New(), hallB})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrSlotUnavailable)
+
+	// A per-hall manual block blocks bookings on that hall, and only that hall.
+	blockHall := uuid.New()
+	blocks, err := repo.CreateManualSlotBlock(ctx, venue.ID, []uuid.UUID{blockHall}, date, "14:00", "16:00", "ремонт")
+	require.NoError(t, err)
+	require.Len(t, blocks, 1)
+	err = repo.ReserveSlot(ctx, venue.ID, uuid.New(), date, "15:00", "17:00", []uuid.UUID{blockHall})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrSlotUnavailable)
+	require.NoError(t, repo.ReserveSlot(ctx, venue.ID, uuid.New(), date, "15:00", "17:00", []uuid.UUID{uuid.New()}))
 }
