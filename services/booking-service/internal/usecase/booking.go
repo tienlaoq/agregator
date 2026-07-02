@@ -733,6 +733,32 @@ func (uc *BookingUseCase) AutoCompletePastVisits(ctx context.Context) (int, erro
 	return published, nil
 }
 
+// unpaidBookingMaxAgeMinutes — сколько бронь может «висеть» в payment_pending
+// (ссылка на оплату выдана, но гость не оплатил) до автоматической отмены.
+const unpaidBookingMaxAgeMinutes = 15
+
+// ExpireUnpaidBookings отменяет брони, застрявшие в payment_pending дольше
+// unpaidBookingMaxAgeMinutes: 15-минутный таймер на оплату. Отмена идёт тем же
+// путём, что и провайдерский сбой оплаты (CancelBookingByPayment) — освобождает
+// слот и публикует booking.cancelled, поэтому профиль гостя в CRM (Customer 360)
+// корректно учитывает отменённую бронь. Рефанд безопасен: неоплаченный платёж
+// не в статусе succeeded, RefundByBooking для него — no-op.
+func (uc *BookingUseCase) ExpireUnpaidBookings(ctx context.Context) (int, error) {
+	ids, err := uc.repo.FindExpiredPaymentPending(ctx, unpaidBookingMaxAgeMinutes, 100)
+	if err != nil {
+		return 0, err
+	}
+	expired := 0
+	for _, id := range ids {
+		if err := uc.CancelBookingByPayment(ctx, id); err != nil {
+			uc.log.Error().Err(err).Str("booking_id", id).Msg("booking: expire unpaid failed")
+			continue
+		}
+		expired++
+	}
+	return expired, nil
+}
+
 // bookingIdempotencyKey derives a stable, user-bound idempotency key for the
 // CreatePayment call.
 //

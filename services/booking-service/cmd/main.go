@@ -137,6 +137,11 @@ func main() {
 				if n > 0 {
 					log.Info().Int("count", n).Msg("bookings auto-completed after visit end")
 				}
+				if e, err := uc.ExpireUnpaidBookings(autoCompleteCtx); err != nil {
+					log.Error().Err(err).Msg("expire unpaid bookings")
+				} else if e > 0 {
+					log.Info().Int("count", e).Msg("bookings expired: unpaid over 15 minutes")
+				}
 			}
 		}
 	}()
