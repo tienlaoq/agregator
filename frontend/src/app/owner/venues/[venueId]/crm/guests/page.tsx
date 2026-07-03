@@ -29,7 +29,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
-import { ArrowLeft, ChevronRight, Loader2 } from "lucide-react";
+import { ChevronRight, Loader2 } from "lucide-react";
 import { redirectToLogin } from "@/lib/auth-redirect";
 import { getOwnerVenues, listVenueGuests } from "@/lib/api";
 import { useAuthStore } from "@/store/auth";
@@ -132,15 +132,9 @@ export default function OwnerVenueGuestsPage() {
   }
 
   return (
-    <section className="min-h-screen bg-muted/30 py-8 md:py-10">
+    <section className="py-4 md:py-6">
       <div className="container mx-auto max-w-5xl px-4">
-        <div className="mb-6 flex flex-wrap items-center gap-3">
-          <Button variant="ghost" size="sm" className="gap-1 px-0" asChild>
-            <Link href={`/owner/venues/${venue.id}/crm`}>
-              <ArrowLeft className="h-4 w-4" />
-              CRM
-            </Link>
-          </Button>
+        <div className="mb-6">
           <h1 className="text-2xl font-bold text-foreground md:text-3xl">
             Гости: {venue.name}
           </h1>

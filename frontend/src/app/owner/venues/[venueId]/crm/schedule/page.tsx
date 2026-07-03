@@ -23,7 +23,6 @@ import {
 } from "@/components/ui/select";
 import { Label } from "@/components/ui/label";
 import {
-  ArrowLeft,
   ChevronLeft,
   ChevronRight,
   Loader2,
@@ -48,14 +47,23 @@ import { BOOKING_STATUS_LABELS } from "@/lib/types";
 const uuidRe =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
+// Local YYYY-MM-DD — avoids the UTC shift of toISOString() (which moves the day
+// back in GMT+ timezones, breaking the date arrows).
+function toLocalISO(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
 function todayISO(): string {
-  return new Date().toISOString().slice(0, 10);
+  return toLocalISO(new Date());
 }
 
 function shiftISO(iso: string, days: number): string {
   const d = new Date(`${iso}T00:00:00`);
   d.setDate(d.getDate() + days);
-  return d.toISOString().slice(0, 10);
+  return toLocalISO(d);
 }
 
 function hmToMin(hm: string): number {
@@ -284,15 +292,9 @@ export default function OwnerVenueSchedulePage() {
   }
 
   return (
-    <section className="min-h-screen bg-muted/30 py-8 md:py-10">
+    <section className="py-4 md:py-6">
       <div className="container mx-auto max-w-5xl px-4">
-        <div className="mb-6 flex flex-wrap items-center gap-3">
-          <Button variant="ghost" size="sm" className="gap-1 px-0" asChild>
-            <Link href={`/owner/venues/${venue.id}/crm`}>
-              <ArrowLeft className="h-4 w-4" />
-              CRM
-            </Link>
-          </Button>
+        <div className="mb-6">
           <h1 className="text-2xl font-bold text-foreground md:text-3xl">
             Расписание: {venue.name}
           </h1>

@@ -61,7 +61,6 @@ import { useAuthStore } from "@/store/auth";
 import type { Booking, Venue, VenueCrmTask, VenueStaffRow } from "@/lib/types";
 import { BOOKING_STATUS_LABELS, VENUE_TYPE_LABELS } from "@/lib/types";
 import {
-  ArrowLeft,
   Ban,
   CheckCircle2,
   ChevronDown,
@@ -71,7 +70,6 @@ import {
   RotateCcw,
   Trash2,
   UserPlus,
-  Users,
 } from "lucide-react";
 import { BookingChatPanel } from "@/components/banya/booking-chat-panel";
 
@@ -220,8 +218,6 @@ export default function OwnerVenueCrmPage() {
     user?.role === "venue_owner" ||
     user?.role === "master" ||
     user?.role === "user";
-  const canEditVenueCard =
-    user?.role === "venue_owner" || user?.role === "master";
 
   useEffect(() => {
     if (hydrated && (!token || !canOwnerCabinet)) {
@@ -456,48 +452,18 @@ export default function OwnerVenueCrmPage() {
   const canManageTasks = canManageVenueTasks(venue, user?.id);
 
   return (
-    <section className="min-h-screen bg-muted/30 py-8 md:py-10">
+    <section className="py-4 md:py-6">
       <div className="container mx-auto max-w-5xl px-4">
-        <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div className="flex flex-wrap items-center gap-3">
-            <Button variant="ghost" size="sm" className="gap-1 px-0" asChild>
-              <Link href="/owner/venues">
-                <ArrowLeft className="h-4 w-4" />
-                Панель
-              </Link>
-            </Button>
-            <h1 className="text-2xl font-bold text-foreground md:text-3xl">
-              CRM: {venue.name}
-            </h1>
-            <Badge variant="secondary">
-              {VENUE_TYPE_LABELS[venue.type] ?? venue.type}
-            </Badge>
-            {venue.management_access ? (
-              <Badge variant="outline">{venue.management_access}</Badge>
-            ) : null}
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <Button variant="outline" size="sm" className="gap-1" asChild>
-              <Link href={`/owner/venues/${venue.id}/crm/schedule`}>
-                <Clock className="h-4 w-4" />
-                Расписание
-              </Link>
-            </Button>
-            <Button variant="outline" size="sm" className="gap-1" asChild>
-              <Link href={`/owner/venues/${venue.id}/crm/guests`}>
-                <Users className="h-4 w-4" />
-                Гости
-              </Link>
-            </Button>
-            {canEditVenueCard ? (
-              <Button variant="outline" size="sm" className="gap-1" asChild>
-                <Link href={`/owner/venues/${venue.id}/edit`}>
-                  <Pencil className="h-4 w-4" />
-                  Карточка заведения
-                </Link>
-              </Button>
-            ) : null}
-          </div>
+        <div className="mb-6 flex flex-wrap items-center gap-3">
+          <h1 className="text-2xl font-bold text-foreground md:text-3xl">
+            Задачи и команда
+          </h1>
+          <Badge variant="secondary">
+            {VENUE_TYPE_LABELS[venue.type] ?? venue.type}
+          </Badge>
+          {venue.management_access ? (
+            <Badge variant="outline">{venue.management_access}</Badge>
+          ) : null}
         </div>
 
         {pageError ? (
