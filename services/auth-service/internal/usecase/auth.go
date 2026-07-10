@@ -73,11 +73,11 @@ func init() {
 type AuthUseCase struct {
 	creds         domain.CredentialRepository
 	tokens        domain.RefreshTokenRepository
-	resetTokens   domain.PasswordResetRepository
+	resetTokens   domain.TokenRepository
 	resetMail     PasswordResetMailer
 	resetTTL      time.Duration
-	verifyTokens  domain.EmailVerificationRepository // nil-safe: checked before use
-	verifyMail    EmailVerificationMailer            // nil-safe: checked before use
+	verifyTokens  domain.TokenRepository  // nil-safe: checked before use
+	verifyMail    EmailVerificationMailer // nil-safe: checked before use
 	verifyTTL     time.Duration
 	userClient    domain.UserClient
 	jwtPrivKey    *ecdsa.PrivateKey // ES256 signing key; never shared with other services
@@ -90,10 +90,10 @@ type AuthUseCase struct {
 func NewAuthUseCase(
 	creds domain.CredentialRepository,
 	tokens domain.RefreshTokenRepository,
-	resetTokens domain.PasswordResetRepository,
+	resetTokens domain.TokenRepository,
 	resetMail PasswordResetMailer,
 	resetTTL time.Duration,
-	verifyTokens domain.EmailVerificationRepository,
+	verifyTokens domain.TokenRepository,
 	verifyMail EmailVerificationMailer,
 	verifyTTL time.Duration,
 	userClient domain.UserClient,

@@ -27,11 +27,10 @@ import (
 	"github.com/tienlao/agregator/services/auth-service/internal/adapter"
 	delivery "github.com/tienlao/agregator/services/auth-service/internal/delivery/grpc"
 	"github.com/tienlao/agregator/services/auth-service/internal/kpi"
+	"github.com/tienlao/agregator/services/auth-service/internal/linkmail"
 	"github.com/tienlao/agregator/services/auth-service/internal/notify"
-	"github.com/tienlao/agregator/services/auth-service/internal/passwordmail"
 	"github.com/tienlao/agregator/services/auth-service/internal/repository"
 	"github.com/tienlao/agregator/services/auth-service/internal/usecase"
-	"github.com/tienlao/agregator/services/auth-service/internal/verifymail"
 )
 
 func main() {
@@ -107,8 +106,8 @@ func main() {
 	verifyRepo := repository.NewEmailVerificationRepo(pgPool)
 
 	smtpSender := pkgmail.NewSenderFromEnv()
-	resetMail := passwordmail.New(smtpSender, cfg.FrontendURL)
-	verifyMail := verifymail.New(smtpSender, cfg.FrontendURL)
+	// One Sender serves both link emails; it holds no per-request state.
+	mailSender := linkmail.New(smtpSender, cfg.FrontendURL)
 	if !smtpSender.Enabled() {
 		log.Warn().Msg("SMTP not configured: password reset and email verification emails will not be sent (set SMTP_HOST, SMTP_FROM, SMTP_USER, SMTP_PASSWORD)")
 	}
@@ -128,8 +127,8 @@ func main() {
 
 	uc := usecase.NewAuthUseCase(
 		credRepo, tokenRepo,
-		resetRepo, resetMail, cfg.PasswordResetTTL,
-		verifyRepo, verifyMail, cfg.EmailVerifyTTL,
+		resetRepo, mailSender, cfg.PasswordResetTTL,
+		verifyRepo, mailSender, cfg.EmailVerifyTTL,
 		userClient,
 		jwtPrivKey, cfg.JWTAccessTTL, cfg.JWTRefreshTTL,
 		notifyWorker, log,

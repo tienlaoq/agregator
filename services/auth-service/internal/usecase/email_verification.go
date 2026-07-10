@@ -93,18 +93,12 @@ func (uc *AuthUseCase) ResendVerification(ctx context.Context, email string) err
 		return nil
 	}
 
-	fp := emailFingerprint(email)
-	verbose := passwordResetVerboseLogs()
+	logProcessed := uc.auditOnce(email, "email verification resend: processed")
 
 	audit := false
 	defer func() {
-		if !audit {
-			return
-		}
-		if verbose {
-			uc.appLog.Info().Str("email_fp", fp).Msg("email verification resend: processed")
-		} else {
-			uc.appLog.Debug().Str("email_fp", fp).Msg("email verification resend: processed")
+		if audit {
+			logProcessed()
 		}
 	}()
 

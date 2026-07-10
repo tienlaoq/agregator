@@ -69,20 +69,13 @@ type RefreshTokenRepository interface {
 	DeleteExpired(ctx context.Context) (deleted int64, err error)
 }
 
-type PasswordResetRepository interface {
-	InvalidateUnusedByUserID(ctx context.Context, userID string) error
-	Create(ctx context.Context, userID, tokenHash string, expiresAt time.Time) error
-	ConsumeByTokenHash(ctx context.Context, tokenHash string) (userID string, err error)
-	// DeleteExpired removes rows that have expired or been used.
-	// Called periodically by the cleanup goroutine in cmd/main.go.
-	DeleteExpired(ctx context.Context) (deleted int64, err error)
-}
-
-// EmailVerificationRepository manages single-use email-verification tokens.
-// It mirrors PasswordResetRepository: tokens are stored hashed, expire via a
-// TTL, and are consumed exactly once. Anti-enumeration is handled in the
-// usecase layer, not here.
-type EmailVerificationRepository interface {
+// TokenRepository manages single-use, hashed, TTL-bound tokens stored one row
+// per token. Password-reset and email-verification share this contract: their
+// only differences (backing table, not-found message) live in the concrete
+// implementation, not the interface. Anti-enumeration is handled in the usecase
+// layer, not here. The usecase holds a separate value per token kind, so each
+// still points at its own table.
+type TokenRepository interface {
 	// InvalidateUnusedByUserID removes any outstanding (unused) tokens for the
 	// user before a fresh one is issued, so only the latest link is ever valid.
 	InvalidateUnusedByUserID(ctx context.Context, userID string) error
