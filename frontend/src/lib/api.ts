@@ -350,6 +350,27 @@ export async function getVenues(
   return fetchAPI<PaginatedVenues>(`/api/v1/venues${qs ? `?${qs}` : ""}`, init);
 }
 
+export interface PopularCity {
+  city: string;
+  count: number;
+}
+
+/**
+ * «Популярные» города для героя. Сейчас источник — число активных заведений
+ * по городам (venue-service); эндпоинт публичный, безопасен для SSR.
+ * Возвращает пустой массив при ошибке — вызывающий сам подставит фолбэк.
+ */
+export async function getPopularCities(
+  limit = 6,
+  init?: RequestInit,
+): Promise<PopularCity[]> {
+  const data = await fetchAPI<{ cities?: PopularCity[] }>(
+    `/api/v1/analytics/popular-cities?limit=${limit}`,
+    init,
+  );
+  return data.cities ?? [];
+}
+
 function normalizeCityParamsSafe(city?: string | string[]): string[] {
   const raw = Array.isArray(city) ? city : city != null && String(city).trim() ? [String(city).trim()] : [];
   const seen = new Set<string>();

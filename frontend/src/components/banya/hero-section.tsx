@@ -7,8 +7,13 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Search, MapPin } from "lucide-react"
 import { RUSSIAN_CITIES } from "@/components/banya/city-combobox"
+import { getPopularCities } from "@/lib/api"
+import { track } from "@/lib/analytics"
 
 const VENUES_CATALOG = "/venues#catalog"
+
+// Фолбэк рендерится в SSR и пока не пришли реальные данные / если их нет.
+const FALLBACK_CITIES = ["Москва", "Санкт-Петербург", "Казань", "Новосибирск"]
 
 function venuesSearchHref(params: URLSearchParams): string {
   const qs = params.toString()
@@ -20,7 +25,22 @@ export function HeroSection() {
   const [city, setCity] = useState("")
   const [name, setName] = useState("")
   const [showSuggestions, setShowSuggestions] = useState(false)
+  const [popularCities, setPopularCities] = useState<string[]>(FALLBACK_CITIES)
   const wrapperRef = useRef<HTMLDivElement>(null)
+
+  // Реальные «Популярные» города подтягиваем после маунта; SSR отдаёт фолбэк,
+  // поэтому гидрация без рассинхрона, а нужные ссылки видны сразу.
+  useEffect(() => {
+    let alive = true
+    getPopularCities(4)
+      .then((cities) => {
+        if (alive && cities.length > 0) setPopularCities(cities.map((c) => c.city))
+      })
+      .catch(() => {})
+    return () => {
+      alive = false
+    }
+  }, [])
 
   // Derive during render: список подсказок — чистая функция от city, не нужно
   // хранить как state и пересчитывать в useEffect (set-state-in-effect).
@@ -50,7 +70,10 @@ export function HeroSection() {
     const qName = name.trim()
     const qCity = city.trim()
     if (qName) params.set("q", qName)
-    if (qCity) params.set("city", qCity)
+    if (qCity) {
+      params.set("city", qCity)
+      track("venue_search", { city: qCity })
+    }
     router.push(venuesSearchHref(params))
   }
 
@@ -129,7 +152,7 @@ export function HeroSection() {
         {/* Popular cities */}
         <div className="mt-6 flex flex-wrap items-center justify-center gap-2">
           <span className="text-sm text-white/70">Популярные:</span>
-          {["Москва", "Санкт-Петербург", "Казань", "Новосибирск"].map((c) => {
+          {popularCities.map((c) => {
             const params = new URLSearchParams()
             params.set("city", c)
             return (
@@ -140,7 +163,9 @@ export function HeroSection() {
                 size="sm"
                 className="h-7 border border-white/30 text-sm text-white hover:bg-white/20 hover:text-white"
               >
-                <Link href={venuesSearchHref(params)}>{c}</Link>
+                <Link href={venuesSearchHref(params)} onClick={() => track("venue_search", { city: c })}>
+                  {c}
+                </Link>
               </Button>
             )
           })}

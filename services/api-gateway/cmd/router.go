@@ -283,6 +283,7 @@ func buildRouter(ctx context.Context, log zerolog.Logger, cfg Config, d *deps) (
 
 			// Analytics (public)
 			r.With(analyticsRL).Post("/analytics/events", analyticsHandler.CollectEvent)
+			r.Get("/analytics/popular-cities", venueHandler.PopularCities)
 
 			// ── Protected ─────────────────────────────────────────────────
 			r.Group(func(r chi.Router) {

@@ -827,3 +827,70 @@ WHERE NOT EXISTS (...)` не выразить напрямую (подзапро
 - Появление венью с десятками тысяч отзывов.
 - Рост p95-латентности на `/owner/venues/{id}/reviews/summary`.
 - Профайлинг, показывающий анти-скан `reviews` в топе по времени.
+
+---
+
+## [ANALYTICS-POPULAR-CITIES-DEMAND] — «Популярные» города считаются по числу заведений, а не по реальному спросу
+
+**Files**:  
+- `services/api-gateway/internal/handler/venue.go` — `PopularCities()` (эндпоинт `GET /api/v1/analytics/popular-cities`)  
+- `services/venue-service/internal/repository/postgres.go` — `PopularCities()`  
+- `services/analytics-service/` — потребитель `analytics.web`, пишет в таблицу `events`  
+- `frontend/src/components/banya/hero-section.tsx` — блок «Популярные»
+
+**Current behaviour**  
+Гибрид реализован наполовину (сознательно, как фаза 1). Эндпоинт
+`popular-cities` отдаёт топ городов по **числу активных заведений**
+(`venue-service.GetPopularCities` → `SELECT city, COUNT(*) FROM venues
+WHERE status='active' GROUP BY city ORDER BY cnt DESC`). Это фолбэк, а не
+реальный поисковый спрос — «где больше бань», а не «где больше ищут».
+
+Сбор спроса уже включён и копится: фронт шлёт `track('venue_search', {city})`
+при поиске по городу и клике по чипу «Популярные»; ключ `city` добавлен в
+whitelist props аналитики (`analyticsAllowedKeys` в `handler/analytics.go`),
+события уходят в NATS `analytics.web` → таблицу `events(event, props jsonb)`
+analytics-service. Но **read-сторона отсутствует**: эти события никто не
+агрегирует и не читает, эндпоинт их игнорирует.
+
+**Accepted residual risk**  
+«Популярные» показывают города по предложению (число заведений), а не по
+спросу. Для раннего каталога эти множества сильно коррелируют, поэтому
+пользовательской разницы почти нет. По мере роста трафика расхождение будет
+расти (город с большим спросом, но малым числом заведений не попадёт в топ).
+Событий `venue_search` накапливается, но они лежат мёртвым грузом до фазы 2.
+
+**Upgrade path — фаза 2 (переключение на реальный спрос)**  
+1. analytics-service: read-агрегат по `events`:
+   ```sql
+   SELECT props->>'city' AS city, COUNT(*) AS cnt
+   FROM events
+   WHERE event = 'venue_search'
+     AND COALESCE(props->>'city','') <> ''
+     AND created_at > now() - interval '30 days'
+   GROUP BY city ORDER BY cnt DESC LIMIT $1;
+   ```
+   (индекс: `CREATE INDEX ON events ((props->>'city')) WHERE event='venue_search'`
+   или GIN по `props` — уточнить по объёму.)
+2. Поднять в analytics-service **gRPC-сервер** — его сейчас нет вовсе, сервис
+   только consumer + writer. Потребуется новый proto `proto/analytics/v1`
+   (`rpc GetPopularSearchCities(...)`), bootstrap gRPC-сервера в `cmd/main.go`,
+   `make proto-gen`.
+3. api-gateway: добавить analytics gRPC-клиент; в `PopularCities()` сначала
+   спрашивать спрос у analytics, при недостатке данных (`len < limit`)
+   дополнять/фолбэчить на `venue.GetPopularCities`. Порог «достаточности»
+   вынести в конфиг.
+4. Собрать analytics-service + gateway, передеплоить, проверить.
+
+**Дешёвая альтернатива фазе 2 (без gRPC-сервера в analytics)**  
+Если поднимать gRPC в analytics-service не хочется — вынести агрегацию спроса
+в отдельную вьюху/материализованную вьюху и читать её напрямую из gateway
+нельзя (разные БД). Вариант: analytics-service периодически публикует топ
+городов событием/пишет в общий Redis, gateway читает Redis. Проще gRPC не
+станет, но убирает синхронный хоп на горячем пути.
+
+**Triggers for prioritisation**  
+- Накоплен значимый объём `venue_search`-событий (можно проверить:
+  `SELECT count(*) FROM events WHERE event='venue_search'`).
+- Продуктовое требование, чтобы «Популярные» отражали спрос, а не каталог.
+- Расхождение спроса и предложения по городам стало заметным (маркетинг просит
+  показывать «горячие» города, где заведений ещё мало).

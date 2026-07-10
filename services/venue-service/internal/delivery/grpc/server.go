@@ -340,6 +340,19 @@ func (s *Server) ListVenues(ctx context.Context, req *venuev1.ListVenuesRequest)
 	return listResultToProto(result), nil
 }
 
+// GetPopularCities returns active-venue counts per city (most first) for the hero.
+func (s *Server) GetPopularCities(ctx context.Context, req *venuev1.GetPopularCitiesRequest) (*venuev1.GetPopularCitiesResponse, error) {
+	cities, err := s.uc.PopularCities(ctx, req.GetLimit())
+	if err != nil {
+		return nil, s.internalErr(err, "get popular cities failed")
+	}
+	out := make([]*venuev1.PopularCity, 0, len(cities))
+	for _, c := range cities {
+		out = append(out, &venuev1.PopularCity{City: c.City, Count: c.Count})
+	}
+	return &venuev1.GetPopularCitiesResponse{Cities: out}, nil
+}
+
 // SearchVenues handles venue search.
 //
 // Multi-city filter contract (gateway → venue-service):
