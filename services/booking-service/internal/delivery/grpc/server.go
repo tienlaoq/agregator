@@ -104,7 +104,7 @@ func (s *Server) ListVenueBookings(ctx context.Context, req *bookingv1.ListVenue
 	if callerID == "" {
 		return nil, status.Error(codes.Unauthenticated, "missing caller identity")
 	}
-	bookings, total, nextCursor, err := s.uc.ListVenueBookings(ctx, req.VenueId, callerID, req.Status, req.Date, req.GetCursor(), req.PageSize)
+	bookings, total, nextCursor, err := s.uc.ListVenueBookings(ctx, req.VenueId, callerID, req.Status, req.Date, req.GetDateFrom(), req.GetDateTo(), req.GetCursor(), req.PageSize)
 	if err != nil {
 		return nil, err
 	}
@@ -237,5 +237,6 @@ func toProto(b *domain.Booking) *bookingv1.BookingResponse {
 		CreatedAt:         timestamppb.New(b.CreatedAt),
 		PackageServiceIds: pkgOut,
 		HallIds:           append([]string(nil), b.HallIDs...),
+		StaffNotesCount:   b.StaffNotesCount,
 	}
 }

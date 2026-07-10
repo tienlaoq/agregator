@@ -63,6 +63,10 @@ errors:
     message: "Некорректный идентификатор фото"
 
   - http_status: 400
+    code: GATEWAY.REQUEST.INVALID_REVIEW_ID
+    message: "Некорректный идентификатор отзыва"
+
+  - http_status: 400
     code: GATEWAY.REQUEST.INVALID_MULTIPART
     message: "Некорректная multipart-форма или файл слишком большой"
 
@@ -121,6 +125,10 @@ errors:
   - http_status: 409
     code: GATEWAY.REVIEW.BOOKING_NOT_VERIFIED
     message: "Ваша бронь не подтверждена платформой"
+
+  - http_status: 403
+    code: GATEWAY.REVIEW.FORBIDDEN
+    message: "Управление отзывами доступно владельцу и персоналу заведения"
 
   - http_status: 400
     code: GATEWAY.REQUEST.BODY_READ_FAILED

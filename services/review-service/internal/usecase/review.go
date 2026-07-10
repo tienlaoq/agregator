@@ -3,6 +3,8 @@ package usecase
 import (
 	"context"
 	"encoding/json"
+	"strings"
+	"unicode/utf8"
 
 	"github.com/rs/zerolog/log"
 	bookingv1 "github.com/tienlao/agregator/gen/go/booking/v1"
@@ -196,11 +198,47 @@ func validatePagination(page, pageSize int32) error {
 	return nil
 }
 
-func (uc *ReviewUseCase) ListVenueReviews(ctx context.Context, venueID string, page, pageSize int32) ([]*domain.Review, int32, error) {
+func (uc *ReviewUseCase) ListVenueReviews(ctx context.Context, venueID string, onlyUnanswered bool, page, pageSize int32) ([]*domain.Review, int32, error) {
 	if err := validatePagination(page, pageSize); err != nil {
 		return nil, 0, err
 	}
-	return uc.repo.ListByVenue(ctx, venueID, page, pageSize)
+	return uc.repo.ListByVenue(ctx, venueID, onlyUnanswered, page, pageSize)
+}
+
+// maxReplyLen bounds an owner reply so a single response can't bloat the row or
+// the public venue card.
+const maxReplyLen = 2000
+
+// ReplyToReview creates or replaces the venue owner's reply to a review. Venue
+// ownership is verified upstream (api-gateway); venue_id scopes the write so the
+// reply can only attach to a review that belongs to that venue.
+func (uc *ReviewUseCase) ReplyToReview(ctx context.Context, reviewID, venueID, authorUserID, body string) (*domain.ReviewReply, error) {
+	if reviewID == "" || venueID == "" {
+		return nil, pkgerr.InvalidArgument("review_id and venue_id are required")
+	}
+	body = strings.TrimSpace(body)
+	if body == "" {
+		return nil, pkgerr.InvalidArgument("reply text is required")
+	}
+	if utf8.RuneCountInString(body) > maxReplyLen {
+		return nil, pkgerr.InvalidArgument("reply text is too long")
+	}
+	return uc.repo.UpsertReply(ctx, reviewID, venueID, authorUserID, body)
+}
+
+// DeleteReviewReply removes the owner reply, scoped to venueID.
+func (uc *ReviewUseCase) DeleteReviewReply(ctx context.Context, reviewID, venueID string) error {
+	if reviewID == "" || venueID == "" {
+		return pkgerr.InvalidArgument("review_id and venue_id are required")
+	}
+	return uc.repo.DeleteReply(ctx, reviewID, venueID)
+}
+
+func (uc *ReviewUseCase) GetVenueReviewSummary(ctx context.Context, venueID string) (*domain.VenueReviewSummary, error) {
+	if venueID == "" {
+		return nil, pkgerr.InvalidArgument("venue_id is required")
+	}
+	return uc.repo.GetVenueReviewSummary(ctx, venueID)
 }
 
 func (uc *ReviewUseCase) ListMasterReviews(ctx context.Context, masterID string, page, pageSize int32) ([]*domain.Review, int32, error) {

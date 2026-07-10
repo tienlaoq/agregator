@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect } from "react";
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useForm, Controller } from "react-hook-form";
@@ -43,7 +42,6 @@ import { SbpBankSelect } from "@/components/banya/sbp-bank-select";
 import type { SetPayoutMethodInput } from "@/lib/types";
 import { LEDGER_ENTRY_LABELS, PAYOUT_STATUS_LABELS } from "@/lib/types";
 import {
-  ArrowLeft,
   Banknote,
   Clock,
   Landmark,
@@ -212,12 +210,6 @@ export default function MasterFinancePage() {
   return (
     <div className="container mx-auto max-w-5xl px-4 py-8">
       <div className="mb-6">
-        <Button variant="ghost" size="sm" className="mb-2 gap-1" asChild>
-          <Link href="/owner/master">
-            <ArrowLeft className="h-4 w-4" />
-            Кабинет мастера
-          </Link>
-        </Button>
         <h1 className="text-3xl font-bold">Финансы</h1>
         {profile ? (
           <p className="text-muted-foreground">{profile.display_name}</p>

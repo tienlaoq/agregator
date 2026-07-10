@@ -353,14 +353,14 @@ func (uc *BookingUseCase) requireVenueCRMAccess(ctx context.Context, venueID, us
 	return nil
 }
 
-func (uc *BookingUseCase) ListVenueBookings(ctx context.Context, venueID, requesterUserID, statusFilter, date, cursor string, pageSize int32) ([]*domain.Booking, int, string, error) {
+func (uc *BookingUseCase) ListVenueBookings(ctx context.Context, venueID, requesterUserID, statusFilter, date, dateFrom, dateTo, cursor string, pageSize int32) ([]*domain.Booking, int, string, error) {
 	if err := uc.requireVenueCRMAccess(ctx, venueID, requesterUserID); err != nil {
 		return nil, 0, "", err
 	}
 	if pageSize <= 0 {
 		pageSize = 20
 	}
-	return uc.repo.ListByVenue(ctx, venueID, statusFilter, date, cursor, int(pageSize))
+	return uc.repo.ListByVenue(ctx, venueID, statusFilter, date, dateFrom, dateTo, cursor, int(pageSize))
 }
 
 const maxBookingStaffNoteRunes = 4000

@@ -227,6 +227,20 @@ func scanBookingWithTotal(rows pgx.Rows, total *int) (*domain.Booking, error) {
 	return b, nil
 }
 
+// scanBookingWithTotalAndNotes добавляет к total ещё и staff_notes_count —
+// используется CRM-реестром (ListByVenue), который подтягивает счётчик заметок.
+// Порядок extra-колонок: total, затем staff_notes_count (см. SELECT в ListByVenue).
+func scanBookingWithTotalAndNotes(rows pgx.Rows, total *int) (*domain.Booking, error) {
+	b := &domain.Booking{}
+	var pkg, halls []string
+	if err := rows.Scan(scanDest(b, &pkg, &halls, total, &b.StaffNotesCount)...); err != nil {
+		return nil, err
+	}
+	b.PackageServiceIDs = nonEmpty(pkg)
+	b.HallIDs = nonEmpty(halls)
+	return b, nil
+}
+
 func (r *BookingRepo) GetByID(ctx context.Context, id string) (*domain.Booking, error) {
 	q := `SELECT` + selectCols + ` FROM bookings WHERE id = $1`
 	b, err := scanBooking(r.pool.QueryRow(ctx, q, id))
@@ -307,11 +321,13 @@ func (r *BookingRepo) ListByUser(ctx context.Context, userID, status string, off
 // A two-query variant (no-date path vs date-pinned path with a (time_from,id) cursor) would
 // be marginally cleaner but adds branching for negligible real-world gain at typical venue
 // scale (≤10k bookings/venue). Revisit if profiling shows planner regressions on large venues.
-func (r *BookingRepo) ListByVenue(ctx context.Context, venueID, status, date, cursor string, limit int) ([]*domain.Booking, int, string, error) {
+func (r *BookingRepo) ListByVenue(ctx context.Context, venueID, status, date, dateFrom, dateTo, cursor string, limit int) ([]*domain.Booking, int, string, error) {
 	args := []any{venueID}
 	n := 1
 
-	q := `SELECT` + selectCols + `, COUNT(*) OVER() AS total FROM bookings WHERE venue_id = $1`
+	q := `SELECT` + selectCols + `, COUNT(*) OVER() AS total,
+		(SELECT COUNT(*) FROM booking_staff_notes n WHERE n.booking_id = bookings.id) AS staff_notes_count
+		FROM bookings WHERE venue_id = $1`
 
 	if status != "" {
 		n++
@@ -319,9 +335,21 @@ func (r *BookingRepo) ListByVenue(ctx context.Context, venueID, status, date, cu
 		args = append(args, status)
 	}
 	if date != "" {
+		// Exact day takes precedence over the range bounds (Сегодня/Расписание).
 		n++
 		q += ` AND date = $` + strconv.Itoa(n)
 		args = append(args, date)
+	} else {
+		if dateFrom != "" {
+			n++
+			q += ` AND date >= $` + strconv.Itoa(n)
+			args = append(args, dateFrom)
+		}
+		if dateTo != "" {
+			n++
+			q += ` AND date <= $` + strconv.Itoa(n)
+			args = append(args, dateTo)
+		}
 	}
 
 	// Keyset seek: skip rows already delivered on previous pages.
@@ -352,7 +380,7 @@ func (r *BookingRepo) ListByVenue(ctx context.Context, venueID, status, date, cu
 		total    int
 	)
 	for rows.Next() {
-		b, err := scanBookingWithTotal(rows, &total)
+		b, err := scanBookingWithTotalAndNotes(rows, &total)
 		if err != nil {
 			return nil, 0, "", err
 		}

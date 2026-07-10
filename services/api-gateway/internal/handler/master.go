@@ -622,6 +622,143 @@ func (h *MasterHandler) ListMyBookings(w http.ResponseWriter, r *http.Request) {
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{"bookings": out})
 }
 
+// ListMyClients GET /api/v1/owner/master/clients
+// Returns the authenticated master's client base, aggregated from their
+// bookings. Client display names are enriched from user-service (the projection
+// itself carries only UUIDs — see docs/CRM_DESIGN.md §4.2 on the PII boundary).
+func (h *MasterHandler) ListMyClients(w http.ResponseWriter, r *http.Request) {
+	uid := middleware.UserIDFromCtx(r.Context())
+	if uid == "" {
+		httpx.WriteCatalog(w, apicatalog.GatewayAuthUnauthorized)
+		return
+	}
+	q := r.URL.Query()
+	limit, ok := httpx.QueryInt(w, r, "limit", 50, 1, 100)
+	if !ok {
+		return
+	}
+	offset, ok := httpx.QueryInt(w, r, "offset", 0, 0, 0)
+	if !ok {
+		return
+	}
+	resp, err := h.client.ListMyMasterClients(r.Context(), &masterv1.ListMyMasterClientsRequest{
+		UserId:  uid,
+		Segment: q.Get("segment"),
+		Sort:    q.Get("sort"),
+		Limit:   int32(limit),
+		Offset:  int32(offset),
+	})
+	if err != nil {
+		httpx.GRPCErrorToHTTP(w, err)
+		return
+	}
+	nameCache := make(map[string]string, len(resp.GetClients()))
+	out := make([]map[string]any, 0, len(resp.GetClients()))
+	for _, c := range resp.GetClients() {
+		m := map[string]any{
+			"user_id":        c.GetUserId(),
+			"user_name":      h.resolveClientName(r, c.GetUserId(), nameCache),
+			"bookings_count": c.GetBookingsCount(),
+			"visits_count":   c.GetVisitsCount(),
+			"total_spent":    c.GetTotalSpent(),
+			"segments":       c.GetSegments(),
+		}
+		if c.GetFirstVisitAt() != nil {
+			m["first_visit_at"] = c.GetFirstVisitAt().AsTime()
+		}
+		if c.GetLastVisitAt() != nil {
+			m["last_visit_at"] = c.GetLastVisitAt().AsTime()
+		}
+		if c.GetLastBookingAt() != nil {
+			m["last_booking_at"] = c.GetLastBookingAt().AsTime()
+		}
+		out = append(out, m)
+	}
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"clients": out, "total": resp.GetTotal()})
+}
+
+func slotBlockToJSON(b *masterv1.MasterSlotBlock) map[string]any {
+	if b == nil {
+		return nil
+	}
+	return map[string]any{
+		"id":         b.GetId(),
+		"master_id":  b.GetMasterId(),
+		"date":       b.GetDate(),
+		"time_from":  b.GetTimeFrom(),
+		"time_to":    b.GetTimeTo(),
+		"note":       b.GetNote(),
+		"created_at": b.GetCreatedAt().AsTime().Format("2006-01-02T15:04:05Z07:00"),
+	}
+}
+
+// ListSlotBlocks GET /api/v1/owner/master/schedule/blocks
+func (h *MasterHandler) ListSlotBlocks(w http.ResponseWriter, r *http.Request) {
+	uid := middleware.UserIDFromCtx(r.Context())
+	if uid == "" {
+		httpx.WriteCatalog(w, apicatalog.GatewayAuthUnauthorized)
+		return
+	}
+	resp, err := h.client.ListMasterSlotBlocks(r.Context(), &masterv1.ListMasterSlotBlocksRequest{UserId: uid})
+	if err != nil {
+		httpx.GRPCErrorToHTTP(w, err)
+		return
+	}
+	out := make([]map[string]any, 0, len(resp.GetBlocks()))
+	for _, b := range resp.GetBlocks() {
+		out = append(out, slotBlockToJSON(b))
+	}
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"blocks": out})
+}
+
+// CreateSlotBlock POST /api/v1/owner/master/schedule/blocks
+func (h *MasterHandler) CreateSlotBlock(w http.ResponseWriter, r *http.Request) {
+	uid := middleware.UserIDFromCtx(r.Context())
+	if uid == "" {
+		httpx.WriteCatalog(w, apicatalog.GatewayAuthUnauthorized)
+		return
+	}
+	var body struct {
+		Date     string `json:"date"`
+		TimeFrom string `json:"time_from"`
+		TimeTo   string `json:"time_to"`
+		Note     string `json:"note"`
+	}
+	if !httpx.ReadJSONOrRespond(w, r, &body) {
+		return
+	}
+	resp, err := h.client.CreateMasterSlotBlock(r.Context(), &masterv1.CreateMasterSlotBlockRequest{
+		UserId:   uid,
+		Date:     body.Date,
+		TimeFrom: body.TimeFrom,
+		TimeTo:   body.TimeTo,
+		Note:     body.Note,
+	})
+	if err != nil {
+		httpx.GRPCErrorToHTTP(w, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusCreated, slotBlockToJSON(resp.GetBlock()))
+}
+
+// DeleteSlotBlock DELETE /api/v1/owner/master/schedule/blocks/{blockId}
+func (h *MasterHandler) DeleteSlotBlock(w http.ResponseWriter, r *http.Request) {
+	uid := middleware.UserIDFromCtx(r.Context())
+	if uid == "" {
+		httpx.WriteCatalog(w, apicatalog.GatewayAuthUnauthorized)
+		return
+	}
+	blockID := chi.URLParam(r, "blockId")
+	if _, err := h.client.DeleteMasterSlotBlock(r.Context(), &masterv1.DeleteMasterSlotBlockRequest{
+		UserId:  uid,
+		BlockId: blockID,
+	}); err != nil {
+		httpx.GRPCErrorToHTTP(w, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"deleted": true})
+}
+
 // ListMyClientBookings GET /api/v1/my/master-bookings
 func (h *MasterHandler) ListMyClientBookings(w http.ResponseWriter, r *http.Request) {
 	uid := middleware.UserIDFromCtx(r.Context())

@@ -32,6 +32,10 @@ import {
   ChevronRight,
   ExternalLink,
   Check,
+  Clock,
+  DoorOpen,
+  Maximize2,
+  X,
 } from "lucide-react"
 import Link from "next/link"
 import { FramedImg } from "@/components/banya/framed-image"
@@ -45,6 +49,7 @@ import {
   VENUE_SOCIAL_PUBLIC_LABELS,
   VENUE_TYPE_LABELS,
   venueServiceDurationMinutes,
+  formatWorkingHours,
   type VenueSocialLinkKey,
 } from "@/lib/types"
 import { useAuthStore } from "@/store/auth"
@@ -297,6 +302,10 @@ export function VenuePublicPageClient({
   })
   const totalReviews = reviews.length
 
+  const verified = venue.status === "active"
+  const venueHours = formatWorkingHours(venue.working_hours)
+  const hallsCount = venue.halls?.length ?? 0
+
   return (
     <section className="bg-background py-10 md:py-16">
       <div className="container mx-auto px-4">
@@ -323,12 +332,21 @@ export function VenuePublicPageClient({
                       else if (e.key === "ArrowRight") { e.preventDefault(); gallery.next() }
                     }}
                   >
-                    <div className="relative aspect-[16/9] overflow-hidden rounded-xl bg-muted">
+                    <button
+                      type="button"
+                      onClick={() => gallery.openAt(gallery.index)}
+                      aria-label="Открыть фото на весь экран"
+                      className="group relative block aspect-[16/9] w-full cursor-zoom-in overflow-hidden rounded-xl bg-muted"
+                    >
                       <FramedImg
                         src={gallery.current.src}
                         alt={`${venue.name} — фото ${gallery.index + 1} из ${gallery.count}`}
                       />
-                    </div>
+                      <span className="pointer-events-none absolute right-2 top-2 z-10 inline-flex items-center gap-1 rounded-md bg-black/55 px-2 py-1 text-xs text-white opacity-0 transition-opacity group-hover:opacity-100">
+                        <Maximize2 className="h-3.5 w-3.5" />
+                        Развернуть
+                      </span>
+                    </button>
                     {gallery.count > 1 ? (
                       <>
                         <Button
@@ -355,7 +373,7 @@ export function VenuePublicPageClient({
                     ) : null}
                   </div>
                   <div
-                    className="flex gap-2 overflow-x-auto pb-1 pt-0.5 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+                    className="flex gap-2 overflow-x-auto p-1.5 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
                     role="tablist"
                     aria-label="Миниатюры фотографий"
                   >
@@ -366,7 +384,7 @@ export function VenuePublicPageClient({
                         role="tab"
                         aria-selected={i === gallery.index}
                         aria-label={`Фото ${i + 1}`}
-                        onClick={() => gallery.openAt(i)}
+                        onClick={() => gallery.goTo(i)}
                         className={cn(
                           "relative h-16 w-16 shrink-0 overflow-hidden rounded-md bg-muted transition-[opacity,box-shadow]",
                           i === gallery.index
@@ -399,6 +417,12 @@ export function VenuePublicPageClient({
                 <Badge className="bg-primary/10 text-primary border-primary/20">
                   {VENUE_TYPE_LABELS[venue.type] ?? venue.type}
                 </Badge>
+                {verified && (
+                  <Badge className="gap-1.5 border-emerald-200 bg-emerald-50 text-emerald-700">
+                    <ShieldCheck className="h-3.5 w-3.5" />
+                    Проверено
+                  </Badge>
+                )}
                 {venue.rating > 0 && (
                   <div className="flex items-center gap-1">
                     <Star className="h-5 w-5 fill-amber-400 text-amber-400" />
@@ -450,16 +474,39 @@ export function VenuePublicPageClient({
                     </div>
                   )}
               </div>
-            </div>
 
-            {/* Price */}
-            {venue.price_from > 0 && (
-              <div className="mb-8">
-                <span className="text-2xl font-bold text-primary">
-                  от {venue.price_from.toLocaleString("ru-RU")} ₽/час
-                </span>
-              </div>
-            )}
+              {(venueHours || (venue.capacity ?? 0) > 0 || hallsCount > 0) && (
+                <div className="mt-6 flex flex-wrap gap-3">
+                  {venueHours && (
+                    <div className="flex min-w-[8.5rem] items-center gap-2.5 rounded-xl border border-border bg-card px-3.5 py-2.5">
+                      <Clock className="h-5 w-5 shrink-0 text-primary" />
+                      <div className="leading-tight">
+                        <div className="text-xs text-muted-foreground">Часы работы</div>
+                        <div className="text-sm font-medium text-foreground">{venueHours}</div>
+                      </div>
+                    </div>
+                  )}
+                  {(venue.capacity ?? 0) > 0 && (
+                    <div className="flex min-w-[8.5rem] items-center gap-2.5 rounded-xl border border-border bg-card px-3.5 py-2.5">
+                      <Users className="h-5 w-5 shrink-0 text-primary" />
+                      <div className="leading-tight">
+                        <div className="text-xs text-muted-foreground">Вместимость</div>
+                        <div className="text-sm font-medium text-foreground">до {venue.capacity} чел.</div>
+                      </div>
+                    </div>
+                  )}
+                  {hallsCount > 0 && (
+                    <div className="flex min-w-[8.5rem] items-center gap-2.5 rounded-xl border border-border bg-card px-3.5 py-2.5">
+                      <DoorOpen className="h-5 w-5 shrink-0 text-primary" />
+                      <div className="leading-tight">
+                        <div className="text-xs text-muted-foreground">Залов</div>
+                        <div className="text-sm font-medium text-foreground">{hallsCount}</div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
 
             {/* Description */}
             {venue.description && (
@@ -651,7 +698,18 @@ export function VenuePublicPageClient({
           <div className="lg:col-span-1">
             <Card className="sticky top-24 border-border">
               <CardHeader>
-                <CardTitle className="text-xl text-card-foreground">Забронировать</CardTitle>
+                <div className="flex items-baseline justify-between gap-2">
+                  <CardTitle className="text-xl text-card-foreground">Забронировать</CardTitle>
+                  {venue.price_from > 0 && (
+                    <span className="shrink-0 text-sm text-muted-foreground">
+                      от{" "}
+                      <span className="font-semibold text-primary">
+                        {venue.price_from.toLocaleString("ru-RU")} ₽
+                      </span>
+                      /час
+                    </span>
+                  )}
+                </div>
               </CardHeader>
               <CardContent className="space-y-4">
                 {!user && (
@@ -882,6 +940,61 @@ export function VenuePublicPageClient({
           </div>
         </div>
       </div>
+
+      {gallery.lightboxOpen && gallery.current && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/90 p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-label={`Фото: ${venue.name}`}
+          onClick={gallery.closeLightbox}
+        >
+          <button
+            type="button"
+            aria-label="Закрыть"
+            onClick={gallery.closeLightbox}
+            className="absolute right-3 top-3 z-10 inline-flex size-10 items-center justify-center rounded-full bg-white/10 text-white transition-colors hover:bg-white/20"
+          >
+            <X className="size-5" />
+          </button>
+
+          {gallery.count > 1 && (
+            <button
+              type="button"
+              aria-label="Предыдущее фото"
+              onClick={(e) => { e.stopPropagation(); gallery.prev() }}
+              className="absolute left-3 top-1/2 z-10 inline-flex size-10 -translate-y-1/2 items-center justify-center rounded-full bg-white/10 text-white transition-colors hover:bg-white/20"
+            >
+              <ChevronLeft className="size-6" />
+            </button>
+          )}
+
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={gallery.current.src}
+            alt={`${venue.name} — фото ${gallery.index + 1} из ${gallery.count}`}
+            onClick={(e) => e.stopPropagation()}
+            className="max-h-[90vh] max-w-[92vw] object-contain"
+          />
+
+          {gallery.count > 1 && (
+            <button
+              type="button"
+              aria-label="Следующее фото"
+              onClick={(e) => { e.stopPropagation(); gallery.next() }}
+              className="absolute right-3 top-1/2 z-10 inline-flex size-10 -translate-y-1/2 items-center justify-center rounded-full bg-white/10 text-white transition-colors hover:bg-white/20"
+            >
+              <ChevronRight className="size-6" />
+            </button>
+          )}
+
+          {gallery.count > 1 && (
+            <div className="absolute bottom-4 left-1/2 -translate-x-1/2 rounded-full bg-black/50 px-3 py-1 text-sm text-white">
+              {gallery.index + 1} / {gallery.count}
+            </div>
+          )}
+        </div>
+      )}
     </section>
   )
 }

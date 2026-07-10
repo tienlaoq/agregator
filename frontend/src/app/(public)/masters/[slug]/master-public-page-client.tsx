@@ -57,6 +57,8 @@ import {
   Plus,
   Users,
   Award,
+  ShieldCheck,
+  Navigation,
 } from "lucide-react";
 
 function sortMasterPhotosPublic(photos?: MasterPhoto[]): MasterPhoto[] {
@@ -438,17 +440,20 @@ export function MasterPublicPageClient({
             </div>
 
             <div className="mb-8">
-              <div className="mb-4 flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
-                {master.experience_years > 0 && (
-                  <Badge variant="outline">Опыт {master.experience_years} лет</Badge>
-                )}
-                <Badge variant="secondary">
+              <div className="mb-4 flex flex-wrap items-center gap-3">
+                <Badge className="border-primary/20 bg-primary/10 text-primary">
                   {master.work_format === "mobile"
                     ? "Выезд к клиенту"
                     : master.work_format === "venue"
                       ? "В бане / у заведения"
                       : "И то и другое"}
                 </Badge>
+                {master.status === "active" && (
+                  <Badge className="gap-1.5 border-emerald-200 bg-emerald-50 text-emerald-700">
+                    <ShieldCheck className="h-3.5 w-3.5" />
+                    Проверено
+                  </Badge>
+                )}
               </div>
               <h1 className="mb-4 text-3xl font-bold text-foreground md:text-4xl">{master.display_name}</h1>
               <div className="flex flex-col gap-2 text-muted-foreground">
@@ -465,13 +470,33 @@ export function MasterPublicPageClient({
                   </div>
                 )}
               </div>
-            </div>
 
-            {priceLine ? (
-              <div className="mb-8">
-                <span className="text-2xl font-bold text-primary">{priceLine}</span>
-              </div>
-            ) : null}
+              {(master.experience_years > 0 ||
+                ((master.work_format === "mobile" || master.work_format === "both") &&
+                  master.travel_radius_km > 0)) && (
+                <div className="mt-6 flex flex-wrap gap-3">
+                  {master.experience_years > 0 && (
+                    <div className="flex min-w-[8.5rem] items-center gap-2.5 rounded-xl border border-border bg-card px-3.5 py-2.5">
+                      <Award className="h-5 w-5 shrink-0 text-primary" />
+                      <div className="leading-tight">
+                        <div className="text-xs text-muted-foreground">Опыт</div>
+                        <div className="text-sm font-medium text-foreground">{master.experience_years} лет</div>
+                      </div>
+                    </div>
+                  )}
+                  {(master.work_format === "mobile" || master.work_format === "both") &&
+                    master.travel_radius_km > 0 && (
+                      <div className="flex min-w-[8.5rem] items-center gap-2.5 rounded-xl border border-border bg-card px-3.5 py-2.5">
+                        <Navigation className="h-5 w-5 shrink-0 text-primary" />
+                        <div className="leading-tight">
+                          <div className="text-xs text-muted-foreground">Выезд</div>
+                          <div className="text-sm font-medium text-foreground">до {master.travel_radius_km} км</div>
+                        </div>
+                      </div>
+                    )}
+                </div>
+              )}
+            </div>
 
             {master.bio?.trim() ? (
               <div className="mb-8">
@@ -616,7 +641,12 @@ export function MasterPublicPageClient({
           <div className="lg:col-span-1">
             <Card className="sticky top-24 border-border">
               <CardHeader>
-                <CardTitle className="text-xl text-card-foreground">Забронировать</CardTitle>
+                <div className="flex items-baseline justify-between gap-2">
+                  <CardTitle className="text-xl text-card-foreground">Забронировать</CardTitle>
+                  {priceLine ? (
+                    <span className="shrink-0 text-sm font-semibold text-primary">{priceLine}</span>
+                  ) : null}
+                </div>
               </CardHeader>
               <CardContent className="space-y-4">
                 {!user && (

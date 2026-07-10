@@ -64,6 +64,8 @@ var (
 	GatewayRequestInvalidHallId = Entry{HTTP: 400, Code: "GATEWAY.REQUEST.INVALID_HALL_ID", Message: "Некорректный идентификатор зала"}
 	// GatewayRequestInvalidPhotoId — GATEWAY.REQUEST.INVALID_PHOTO_ID
 	GatewayRequestInvalidPhotoId = Entry{HTTP: 400, Code: "GATEWAY.REQUEST.INVALID_PHOTO_ID", Message: "Некорректный идентификатор фото"}
+	// GatewayRequestInvalidReviewId — GATEWAY.REQUEST.INVALID_REVIEW_ID
+	GatewayRequestInvalidReviewId = Entry{HTTP: 400, Code: "GATEWAY.REQUEST.INVALID_REVIEW_ID", Message: "Некорректный идентификатор отзыва"}
 	// GatewayRequestInvalidMultipart — GATEWAY.REQUEST.INVALID_MULTIPART
 	GatewayRequestInvalidMultipart = Entry{HTTP: 400, Code: "GATEWAY.REQUEST.INVALID_MULTIPART", Message: "Некорректная multipart-форма или файл слишком большой"}
 	// GatewayRequestPhotoFieldRequired — GATEWAY.REQUEST.PHOTO_FIELD_REQUIRED
@@ -94,6 +96,8 @@ var (
 	GatewayReviewVenueIdRequired = Entry{HTTP: 400, Code: "GATEWAY.REVIEW.VENUE_ID_REQUIRED", Message: "Параметр venue_id обязателен"}
 	// GatewayReviewBookingNotVerified — GATEWAY.REVIEW.BOOKING_NOT_VERIFIED
 	GatewayReviewBookingNotVerified = Entry{HTTP: 409, Code: "GATEWAY.REVIEW.BOOKING_NOT_VERIFIED", Message: "Ваша бронь не подтверждена платформой"}
+	// GatewayReviewForbidden — GATEWAY.REVIEW.FORBIDDEN
+	GatewayReviewForbidden = Entry{HTTP: 403, Code: "GATEWAY.REVIEW.FORBIDDEN", Message: "Управление отзывами доступно владельцу и персоналу заведения"}
 	// GatewayRequestBodyReadFailed — GATEWAY.REQUEST.BODY_READ_FAILED
 	GatewayRequestBodyReadFailed = Entry{HTTP: 400, Code: "GATEWAY.REQUEST.BODY_READ_FAILED", Message: "Не удалось прочитать тело запроса"}
 	// GatewayRequestMethodNotAllowed — GATEWAY.REQUEST.METHOD_NOT_ALLOWED
@@ -169,6 +173,8 @@ func ByCode(code string) (Entry, bool) {
 		return GatewayRequestInvalidHallId, true
 	case "GATEWAY.REQUEST.INVALID_PHOTO_ID":
 		return GatewayRequestInvalidPhotoId, true
+	case "GATEWAY.REQUEST.INVALID_REVIEW_ID":
+		return GatewayRequestInvalidReviewId, true
 	case "GATEWAY.REQUEST.INVALID_MULTIPART":
 		return GatewayRequestInvalidMultipart, true
 	case "GATEWAY.REQUEST.PHOTO_FIELD_REQUIRED":
@@ -199,6 +205,8 @@ func ByCode(code string) (Entry, bool) {
 		return GatewayReviewVenueIdRequired, true
 	case "GATEWAY.REVIEW.BOOKING_NOT_VERIFIED":
 		return GatewayReviewBookingNotVerified, true
+	case "GATEWAY.REVIEW.FORBIDDEN":
+		return GatewayReviewForbidden, true
 	case "GATEWAY.REQUEST.BODY_READ_FAILED":
 		return GatewayRequestBodyReadFailed, true
 	case "GATEWAY.REQUEST.METHOD_NOT_ALLOWED":

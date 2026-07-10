@@ -303,6 +303,11 @@ func (uc *VenueUseCase) List(ctx context.Context, page, pageSize int32, venueTyp
 	return res, nil
 }
 
+// PopularCities returns active-venue counts per city (most first), capped at limit.
+func (uc *VenueUseCase) PopularCities(ctx context.Context, limit int32) ([]domain.CityCount, error) {
+	return uc.repo.PopularCities(ctx, limit)
+}
+
 func searchParamsCacheString(ver int64, p domain.SearchParams) string {
 	am := append([]string(nil), p.Amenities...)
 	sort.Strings(am)

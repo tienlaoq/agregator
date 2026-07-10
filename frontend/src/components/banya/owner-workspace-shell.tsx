@@ -5,12 +5,13 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { getOwnerVenues } from "@/lib/api";
 import { useAuthStore } from "@/store/auth";
 import {
@@ -26,7 +27,9 @@ import {
   BarChart3,
   Star,
   Building2,
-  Lock,
+  Plus,
+  Check,
+  ChevronsUpDown,
   type LucideIcon,
 } from "lucide-react";
 
@@ -105,34 +108,44 @@ export function OwnerWorkspaceShell({
   return (
     <div className="flex min-h-[calc(100vh-4rem)]">
       <aside className="hidden w-56 shrink-0 flex-col gap-1 border-r border-border bg-muted/20 p-3 md:flex">
-        {venues && venues.length > 1 ? (
-          <div className="mb-2">
-            <Select
-              value={venueId}
-              onValueChange={(id) => {
-                window.location.href = `/owner/venues/${id}`;
-              }}
-            >
-              <SelectTrigger className="h-9 w-full text-sm">
-                <SelectValue placeholder="Заведение" />
-              </SelectTrigger>
-              <SelectContent>
-                {venues.map((v) => (
-                  <SelectItem key={v.id} value={v.id}>
-                    {v.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-        ) : (
-          <div className="mb-2 flex items-center gap-2 px-2 py-1">
-            <Building2 className="h-4 w-4 text-muted-foreground" />
-            <span className="truncate text-sm font-medium">
-              {venue?.name ?? "Заведение"}
-            </span>
-          </div>
-        )}
+        <div className="mb-2">
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button
+                type="button"
+                className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-sm hover:bg-muted"
+              >
+                <Building2 className="h-4 w-4 shrink-0 text-muted-foreground" />
+                <span className="flex-1 truncate text-left font-medium">
+                  {venue?.name ?? "Заведение"}
+                </span>
+                <ChevronsUpDown className="h-4 w-4 shrink-0 text-muted-foreground" />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="w-56">
+              <DropdownMenuLabel>Мои заведения</DropdownMenuLabel>
+              {(venues ?? []).map((v) => (
+                <DropdownMenuItem key={v.id} asChild>
+                  <Link href={`/owner/venues/${v.id}`} className="cursor-pointer">
+                    <Check
+                      className={`mr-2 h-4 w-4 ${
+                        v.id === venueId ? "opacity-100" : "opacity-0"
+                      }`}
+                    />
+                    <span className="truncate">{v.name}</span>
+                  </Link>
+                </DropdownMenuItem>
+              ))}
+              <DropdownMenuSeparator />
+              <DropdownMenuItem asChild>
+                <Link href="/owner/venues/new" className="cursor-pointer">
+                  <Plus className="mr-2 h-4 w-4" />
+                  Создать заведение
+                </Link>
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
 
         {NAV.map((group) => (
           <div key={group.title || "root"} className="flex flex-col gap-0.5">
@@ -155,7 +168,9 @@ export function OwnerWorkspaceShell({
                   <item.icon className="h-4 w-4 shrink-0" />
                   <span className="flex-1 truncate">{item.label}</span>
                   {item.locked ? (
-                    <Lock className="h-3.5 w-3.5 text-muted-foreground/60" />
+                    <span className="rounded-full bg-muted px-1.5 text-[11px] text-muted-foreground">
+                      Скоро
+                    </span>
                   ) : item.badge ? (
                     <span className="rounded-full bg-destructive/10 px-1.5 text-[11px] text-destructive">
                       {item.badge}

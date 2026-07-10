@@ -39,6 +39,7 @@ var analyticsAllowedKeys = map[string]bool{
 	"locale":         true,
 	"screen":         true,
 	"duration_ms":    true,
+	"city":           true, // город из поиска (не PII); питает «Популярные» города
 }
 
 // filterProps returns a copy of props containing only whitelisted keys.

@@ -19,6 +19,7 @@ import { EmailVerificationNotice } from "@/components/banya/email-verification-n
 import { useAuthStore } from "@/store/auth"
 import { PhoneInput, getRawPhone } from "@/components/banya/phone-input"
 import { PasswordStrength } from "@/components/banya/password-strength"
+import { ConsentCheckbox } from "@/components/banya/consent-checkbox"
 import { isPasswordValid, PASSWORD_MIN_LENGTH } from "@/lib/password"
 import { PartnerVenueRegistrationCard } from "@/components/banya/partner-venue-registration-card"
 import {
@@ -73,6 +74,7 @@ export default function PartnerPage() {
   const [contactEmail, setContactEmail] = useState("")
   const [contactPhone, setContactPhone] = useState("")
   const [contactPassword, setContactPassword] = useState("")
+  const [consent, setConsent] = useState(false)
   const passwordValid = isPasswordValid(contactPassword)
 
   const [createdVenueId, setCreatedVenueId] = useState("")
@@ -411,6 +413,8 @@ export default function PartnerPage() {
                   <PasswordStrength value={contactPassword} />
                 </div>
 
+                <ConsentCheckbox checked={consent} onCheckedChange={setConsent} />
+
                 {error && <p className="text-sm text-destructive">{error}</p>}
 
                 <div className="flex gap-3 pt-2">
@@ -431,7 +435,8 @@ export default function PartnerPage() {
                         !contactName ||
                         !contactEmail ||
                         !passwordValid ||
-                        !getRawPhone(contactPhone).trim()
+                        !getRawPhone(contactPhone).trim() ||
+                        !consent
                       }
                     >
                       {loading ? "Регистрация..." : "Зарегистрироваться"}
@@ -445,7 +450,8 @@ export default function PartnerPage() {
                         !contactName ||
                         !contactEmail ||
                         !passwordValid ||
-                        !getRawPhone(contactPhone).trim()
+                        !getRawPhone(contactPhone).trim() ||
+                        !consent
                       }
                     >
                       Далее

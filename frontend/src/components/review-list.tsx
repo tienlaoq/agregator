@@ -16,7 +16,7 @@ import {
 import { ApiError, createMasterReview, createReview, formatApiErrorMessage } from "@/lib/api";
 import { useAuthStore } from "@/store/auth";
 import type { Review } from "@/lib/types";
-import { CheckCircle, MessageSquare } from "lucide-react";
+import { CheckCircle, CornerDownRight, MessageSquare } from "lucide-react";
 
 interface ReviewListProps {
   targetId: string;
@@ -235,6 +235,17 @@ export function ReviewList({ targetId, targetType = "venue", reviews, onReviewAd
                 </div>
               </div>
               <p className="text-sm text-foreground/80">{review.text}</p>
+              {review.owner_reply ? (
+                <div className="ml-10 rounded-r-lg border-l-2 border-primary bg-muted/40 px-3.5 py-2.5">
+                  <div className="flex items-center gap-1.5 text-xs font-medium text-primary">
+                    <CornerDownRight className="h-3.5 w-3.5" />
+                    Ответ заведения
+                  </div>
+                  <p className="mt-1 whitespace-pre-wrap text-sm leading-relaxed text-muted-foreground">
+                    {review.owner_reply.body}
+                  </p>
+                </div>
+              ) : null}
               <Separator />
               </div>
             );

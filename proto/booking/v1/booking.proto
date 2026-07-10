@@ -53,6 +53,9 @@ message BookingResponse {
   string venue_name = 14;
   repeated string package_service_ids = 15;
   repeated string hall_ids = 16;
+  // Count of internal staff notes on this booking. Populated only by the CRM
+  // venue-bookings listing (ListVenueBookings); 0 elsewhere.
+  int32 staff_notes_count = 17;
 }
 
 message GetBookingRequest {
@@ -88,6 +91,10 @@ message ListVenueBookingsRequest {
   // Keyset cursor for CRM pagination: opaque token returned as next_cursor.
   // When set, page/page_size are ignored and keyset seek is used instead.
   string cursor = 7;
+  // Inclusive date range (YYYY-MM-DD) for the CRM bookings registry. Ignored
+  // when `date` (exact day) is set; used by the owner "Брони" archive view.
+  string date_from = 8;
+  string date_to = 9;
 }
 
 message ListBookingsResponse {

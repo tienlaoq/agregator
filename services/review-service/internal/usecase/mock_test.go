@@ -47,15 +47,18 @@ func (m *mockTx) Conn() *pgx.Conn                                               
 // ---------------------------------------------------------------------------
 
 type mockReviewRepo struct {
-	tx                       *mockTx
-	CreateTxFunc             func(ctx context.Context, tx pgx.Tx, review *domain.Review) error
-	GetByIDFunc              func(ctx context.Context, id string) (*domain.Review, error)
-	ListByVenueFunc          func(ctx context.Context, venueID string, page, pageSize int32) ([]*domain.Review, int32, error)
-	ListByMasterFunc         func(ctx context.Context, masterID string, page, pageSize int32) ([]*domain.Review, int32, error)
-	GetVenueRatingFunc       func(ctx context.Context, venueID string) (*domain.VenueRating, error)
-	UpdateVenueRatingTxFunc  func(ctx context.Context, tx pgx.Tx, venueID string, rating int32) error
-	GetMasterRatingFunc      func(ctx context.Context, masterID string) (*domain.MasterRating, error)
-	UpdateMasterRatingTxFunc func(ctx context.Context, tx pgx.Tx, masterID string, rating int32) error
+	tx                        *mockTx
+	CreateTxFunc              func(ctx context.Context, tx pgx.Tx, review *domain.Review) error
+	GetByIDFunc               func(ctx context.Context, id string) (*domain.Review, error)
+	ListByVenueFunc           func(ctx context.Context, venueID string, onlyUnanswered bool, page, pageSize int32) ([]*domain.Review, int32, error)
+	ListByMasterFunc          func(ctx context.Context, masterID string, page, pageSize int32) ([]*domain.Review, int32, error)
+	GetVenueRatingFunc        func(ctx context.Context, venueID string) (*domain.VenueRating, error)
+	GetVenueReviewSummaryFunc func(ctx context.Context, venueID string) (*domain.VenueReviewSummary, error)
+	UpdateVenueRatingTxFunc   func(ctx context.Context, tx pgx.Tx, venueID string, rating int32) error
+	GetMasterRatingFunc       func(ctx context.Context, masterID string) (*domain.MasterRating, error)
+	UpdateMasterRatingTxFunc  func(ctx context.Context, tx pgx.Tx, masterID string, rating int32) error
+	UpsertReplyFunc           func(ctx context.Context, reviewID, venueID, authorUserID, body string) (*domain.ReviewReply, error)
+	DeleteReplyFunc           func(ctx context.Context, reviewID, venueID string) error
 }
 
 func (m *mockReviewRepo) BeginTx(ctx context.Context) (pgx.Tx, error) {
@@ -79,11 +82,32 @@ func (m *mockReviewRepo) GetByID(ctx context.Context, id string) (*domain.Review
 	return nil, nil
 }
 
-func (m *mockReviewRepo) ListByVenue(ctx context.Context, venueID string, page, pageSize int32) ([]*domain.Review, int32, error) {
+func (m *mockReviewRepo) ListByVenue(ctx context.Context, venueID string, onlyUnanswered bool, page, pageSize int32) ([]*domain.Review, int32, error) {
 	if m.ListByVenueFunc != nil {
-		return m.ListByVenueFunc(ctx, venueID, page, pageSize)
+		return m.ListByVenueFunc(ctx, venueID, onlyUnanswered, page, pageSize)
 	}
 	return nil, 0, nil
+}
+
+func (m *mockReviewRepo) GetVenueReviewSummary(ctx context.Context, venueID string) (*domain.VenueReviewSummary, error) {
+	if m.GetVenueReviewSummaryFunc != nil {
+		return m.GetVenueReviewSummaryFunc(ctx, venueID)
+	}
+	return &domain.VenueReviewSummary{VenueID: venueID}, nil
+}
+
+func (m *mockReviewRepo) UpsertReply(ctx context.Context, reviewID, venueID, authorUserID, body string) (*domain.ReviewReply, error) {
+	if m.UpsertReplyFunc != nil {
+		return m.UpsertReplyFunc(ctx, reviewID, venueID, authorUserID, body)
+	}
+	return &domain.ReviewReply{Body: body, AuthorUserID: authorUserID}, nil
+}
+
+func (m *mockReviewRepo) DeleteReply(ctx context.Context, reviewID, venueID string) error {
+	if m.DeleteReplyFunc != nil {
+		return m.DeleteReplyFunc(ctx, reviewID, venueID)
+	}
+	return nil
 }
 
 func (m *mockReviewRepo) ListByMaster(ctx context.Context, masterID string, page, pageSize int32) ([]*domain.Review, int32, error) {
@@ -290,6 +314,9 @@ func (m *mockMasterClient) ListMyMasterBookings(ctx context.Context, in *masterv
 func (m *mockMasterClient) ListClientMasterBookings(ctx context.Context, in *masterv1.ListClientMasterBookingsRequest, opts ...grpc.CallOption) (*masterv1.ListMasterBookingsResponse, error) {
 	return nil, nil
 }
+func (m *mockMasterClient) ListMyMasterClients(ctx context.Context, in *masterv1.ListMyMasterClientsRequest, opts ...grpc.CallOption) (*masterv1.ListMyMasterClientsResponse, error) {
+	return nil, nil
+}
 func (m *mockMasterClient) GetMasterBooking(ctx context.Context, in *masterv1.GetMasterBookingRequest, opts ...grpc.CallOption) (*masterv1.MasterBookingResponse, error) {
 	return nil, nil
 }
@@ -306,5 +333,14 @@ func (m *mockMasterClient) SetMasterCoverPhoto(ctx context.Context, in *masterv1
 	return nil, nil
 }
 func (m *mockMasterClient) SuspendMasterByUser(ctx context.Context, in *masterv1.SuspendMasterByUserRequest, opts ...grpc.CallOption) (*masterv1.SuspendMasterByUserResponse, error) {
+	return nil, nil
+}
+func (m *mockMasterClient) CreateMasterSlotBlock(ctx context.Context, in *masterv1.CreateMasterSlotBlockRequest, opts ...grpc.CallOption) (*masterv1.MasterSlotBlockResponse, error) {
+	return nil, nil
+}
+func (m *mockMasterClient) ListMasterSlotBlocks(ctx context.Context, in *masterv1.ListMasterSlotBlocksRequest, opts ...grpc.CallOption) (*masterv1.ListMasterSlotBlocksResponse, error) {
+	return nil, nil
+}
+func (m *mockMasterClient) DeleteMasterSlotBlock(ctx context.Context, in *masterv1.DeleteMasterSlotBlockRequest, opts ...grpc.CallOption) (*masterv1.DeleteMasterSlotBlockResponse, error) {
 	return nil, nil
 }

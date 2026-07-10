@@ -13,6 +13,13 @@ service ReviewService {
   rpc ListMasterReviews(ListMasterReviewsRequest) returns (ListReviewsResponse);
   rpc GetVenueRating(GetVenueRatingRequest) returns (VenueRatingResponse);
   rpc GetMasterRating(GetMasterRatingRequest) returns (MasterRatingResponse);
+
+  // Owner-side review management. Venue ownership is verified by the caller
+  // (api-gateway) before these are invoked; venue_id is passed so the service
+  // can scope the reply to a review that actually belongs to that venue.
+  rpc ReplyToReview(ReplyToReviewRequest) returns (ReviewReply);
+  rpc DeleteReviewReply(DeleteReviewReplyRequest) returns (DeleteReviewReplyResponse);
+  rpc GetVenueReviewSummary(GetVenueReviewSummaryRequest) returns (VenueReviewSummaryResponse);
 }
 
 message CreateReviewRequest {
@@ -40,12 +47,46 @@ message ReviewResponse {
   google.protobuf.Timestamp created_at = 8;
   bool is_anonymous = 9;
   string master_id = 10;
+  ReviewReply owner_reply = 11; // set when the venue owner has replied; nil otherwise
+}
+
+// ReviewReply is the venue owner's public response to a review.
+message ReviewReply {
+  string body = 1;
+  google.protobuf.Timestamp created_at = 2;
+  google.protobuf.Timestamp updated_at = 3;
 }
 
 message ListVenueReviewsRequest {
   string venue_id = 1;
   int32 page = 2;
   int32 page_size = 3;
+  bool only_unanswered = 4; // owner triage: return only reviews without an owner reply
+}
+
+message ReplyToReviewRequest {
+  string review_id = 1;
+  string venue_id = 2;       // ownership scope: reply is rejected if the review is not for this venue
+  string author_user_id = 3; // owner who authored the reply
+  string body = 4;
+}
+
+message DeleteReviewReplyRequest {
+  string review_id = 1;
+  string venue_id = 2; // ownership scope
+}
+
+message DeleteReviewReplyResponse {}
+
+message GetVenueReviewSummaryRequest {
+  string venue_id = 1;
+}
+
+message VenueReviewSummaryResponse {
+  string venue_id = 1;
+  double avg_rating = 2;
+  int32 review_count = 3;
+  int32 unanswered_count = 4;
 }
 
 message ListReviewsResponse {

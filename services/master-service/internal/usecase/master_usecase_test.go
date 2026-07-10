@@ -34,13 +34,35 @@ import (
 // Only the methods exercised by the tests below are non-nil; every other method
 // panics with a descriptive message so accidental calls are immediately visible.
 type stubRepo struct {
-	masters  map[uuid.UUID]*domain.Master // keyed by master.ID
-	bookings map[uuid.UUID]*domain.MasterBooking
+	masters    map[uuid.UUID]*domain.Master // keyed by master.ID
+	bookings   map[uuid.UUID]*domain.MasterBooking
+	slotBlocks map[uuid.UUID]*domain.MasterSlotBlock
 
 	// injectable errors / overrides
 	confirmErr error
 	cancelErr  error
 	insertErr  error // returned by InsertBooking
+
+	// additional injectable errors exercised by the read/write wrapper tests.
+	getByIDErr          error
+	getByUserErr        error
+	updateProfileErr    error
+	listByStatusErr     error
+	listPublicErr       error
+	replaceServicesErr  error
+	replaceCredsErr     error
+	listBookingsErr     error
+	addPhotoErr         error
+	deletePhotoErr      error
+	setCoverErr         error
+	suspendByUserErr    error
+	hasCompletedVal     bool
+	hasCompletedErr     error
+	listModHistoryErr   error
+	getMasterUserIDsErr error
+
+	// moderation history recorded by UpdateStatusWithHistory / returned by ListModerationHistory.
+	history []domain.ModerationHistoryEntry
 
 	// masterInsertErrs is a sequence of errors returned by successive Insert
 	// (master) calls. Each call pops the first element; once the slice is
@@ -63,6 +85,9 @@ func (r *stubRepo) addMaster(m *domain.Master)         { r.masters[m.ID] = m }
 func (r *stubRepo) addBooking(b *domain.MasterBooking) { r.bookings[b.ID] = b }
 
 func (r *stubRepo) GetByID(_ context.Context, id uuid.UUID) (*domain.Master, error) {
+	if r.getByIDErr != nil {
+		return nil, r.getByIDErr
+	}
 	if m, ok := r.masters[id]; ok {
 		cp := *m
 		return &cp, nil
@@ -71,6 +96,9 @@ func (r *stubRepo) GetByID(_ context.Context, id uuid.UUID) (*domain.Master, err
 }
 
 func (r *stubRepo) GetByUserID(_ context.Context, userID uuid.UUID) (*domain.Master, error) {
+	if r.getByUserErr != nil {
+		return nil, r.getByUserErr
+	}
 	for _, m := range r.masters {
 		if m.UserID == userID {
 			cp := *m
@@ -102,6 +130,9 @@ func (r *stubRepo) UpdateStatus(_ context.Context, masterID uuid.UUID, status, c
 }
 
 func (r *stubRepo) SuspendByUser(_ context.Context, userID uuid.UUID) (bool, error) {
+	if r.suspendByUserErr != nil {
+		return false, r.suspendByUserErr
+	}
 	for _, m := range r.masters {
 		if m.UserID == userID && m.Status != domain.StatusSuspended {
 			m.Status = domain.StatusSuspended
@@ -111,8 +142,10 @@ func (r *stubRepo) SuspendByUser(_ context.Context, userID uuid.UUID) (bool, err
 	return false, nil
 }
 
-func (r *stubRepo) UpdateStatusWithHistory(_ context.Context, masterID uuid.UUID, status, comment string, moderatedBy *uuid.UUID, _ *domain.ModerationHistoryEntry) error {
-	// Delegate to UpdateStatus — history recording is a no-op in tests.
+func (r *stubRepo) UpdateStatusWithHistory(_ context.Context, masterID uuid.UUID, status, comment string, moderatedBy *uuid.UUID, h *domain.ModerationHistoryEntry) error {
+	if h != nil {
+		r.history = append(r.history, *h)
+	}
 	return r.UpdateStatus(context.Background(), masterID, status, comment, moderatedBy)
 }
 
@@ -168,6 +201,9 @@ func (r *stubRepo) GetBookingsByIDs(_ context.Context, ids []uuid.UUID) ([]domai
 }
 
 func (r *stubRepo) GetMasterUserIDsByIDs(_ context.Context, masterIDs []uuid.UUID) (map[uuid.UUID]uuid.UUID, error) {
+	if r.getMasterUserIDsErr != nil {
+		return nil, r.getMasterUserIDsErr
+	}
 	out := make(map[uuid.UUID]uuid.UUID, len(masterIDs))
 	for _, mid := range masterIDs {
 		if m, ok := r.masters[mid]; ok {
@@ -228,20 +264,71 @@ func (r *stubRepo) Insert(_ context.Context, m *domain.Master) error {
 	return nil
 }
 
-// Unimplemented stubs — panic so accidental calls surface immediately.
-func (r *stubRepo) UpdateProfile(_ context.Context, _ *domain.Master) error {
-	panic("stubRepo.UpdateProfile not implemented")
+func (r *stubRepo) UpdateProfile(_ context.Context, m *domain.Master) error {
+	if r.updateProfileErr != nil {
+		return r.updateProfileErr
+	}
+	cp := *m
+	r.masters[m.ID] = &cp
+	return nil
 }
-func (r *stubRepo) ListByStatus(_ context.Context, _ string, _, _ int32) ([]domain.Master, int32, error) {
-	panic("stubRepo.ListByStatus not implemented")
+func (r *stubRepo) ListByStatus(_ context.Context, status string, limit, offset int32) ([]domain.Master, int32, error) {
+	if r.listByStatusErr != nil {
+		return nil, 0, r.listByStatusErr
+	}
+	var all []domain.Master
+	for _, m := range r.masters {
+		if status == "" || m.Status == status {
+			all = append(all, *m)
+		}
+	}
+	total := int32(len(all))
+	if offset >= total {
+		return nil, total, nil
+	}
+	all = all[offset:]
+	if limit > 0 && int32(len(all)) > limit {
+		all = all[:limit]
+	}
+	return all, total, nil
 }
 func (r *stubRepo) ListPublic(_ context.Context, _ domain.ListPublicMastersParams) ([]domain.Master, int32, error) {
-	panic("stubRepo.ListPublic not implemented")
+	if r.listPublicErr != nil {
+		return nil, 0, r.listPublicErr
+	}
+	var out []domain.Master
+	for _, m := range r.masters {
+		if m.Status == domain.StatusActive {
+			out = append(out, *m)
+		}
+	}
+	return out, int32(len(out)), nil
 }
-func (r *stubRepo) ReplaceServices(_ context.Context, _ uuid.UUID, _ []domain.MasterServiceUpsert) ([]domain.MasterService, error) {
-	panic("stubRepo.ReplaceServices not implemented")
+func (r *stubRepo) ReplaceServices(_ context.Context, masterID uuid.UUID, items []domain.MasterServiceUpsert) ([]domain.MasterService, error) {
+	if r.replaceServicesErr != nil {
+		return nil, r.replaceServicesErr
+	}
+	out := make([]domain.MasterService, 0, len(items))
+	for i, it := range items {
+		out = append(out, domain.MasterService{
+			ID:          uuid.New(),
+			MasterID:    masterID,
+			Name:        it.Name,
+			Description: it.Description,
+			DurationMin: it.DurationMin,
+			Price:       it.Price,
+			SortOrder:   int32(i),
+		})
+	}
+	if m, ok := r.masters[masterID]; ok {
+		m.Services = out
+	}
+	return out, nil
 }
 func (r *stubRepo) ReplaceCredentials(_ context.Context, masterID uuid.UUID, items []domain.MasterCredentialUpsert) ([]domain.MasterCredential, error) {
+	if r.replaceCredsErr != nil {
+		return nil, r.replaceCredsErr
+	}
 	out := make([]domain.MasterCredential, 0, len(items))
 	for i, it := range items {
 		out = append(out, domain.MasterCredential{
@@ -259,32 +346,188 @@ func (r *stubRepo) ReplaceCredentials(_ context.Context, masterID uuid.UUID, ite
 	}
 	return out, nil
 }
-func (r *stubRepo) ListModerationHistory(_ context.Context, _ uuid.UUID, _ int32) ([]domain.ModerationHistoryEntry, error) {
-	panic("stubRepo.ListModerationHistory not implemented")
+func (r *stubRepo) ListModerationHistory(_ context.Context, masterID uuid.UUID, limit int32) ([]domain.ModerationHistoryEntry, error) {
+	if r.listModHistoryErr != nil {
+		return nil, r.listModHistoryErr
+	}
+	var out []domain.ModerationHistoryEntry
+	for _, h := range r.history {
+		if h.MasterID == masterID {
+			out = append(out, h)
+		}
+	}
+	if limit > 0 && int32(len(out)) > limit {
+		out = out[:limit]
+	}
+	return out, nil
 }
-func (r *stubRepo) ListBookingsByMaster(_ context.Context, _ uuid.UUID, _ string) ([]domain.MasterBooking, error) {
-	panic("stubRepo.ListBookingsByMaster not implemented")
+func (r *stubRepo) ListBookingsByMaster(_ context.Context, masterID uuid.UUID, statusFilter string) ([]domain.MasterBooking, error) {
+	if r.listBookingsErr != nil {
+		return nil, r.listBookingsErr
+	}
+	var out []domain.MasterBooking
+	for _, b := range r.bookings {
+		if b.MasterID == masterID && (statusFilter == "" || b.Status == statusFilter) {
+			out = append(out, *b)
+		}
+	}
+	return out, nil
 }
-func (r *stubRepo) ListBookingsByClient(_ context.Context, _ uuid.UUID, _ string) ([]domain.MasterBooking, error) {
-	panic("stubRepo.ListBookingsByClient not implemented")
+func (r *stubRepo) ListBookingsByClient(_ context.Context, clientUserID uuid.UUID, statusFilter string) ([]domain.MasterBooking, error) {
+	if r.listBookingsErr != nil {
+		return nil, r.listBookingsErr
+	}
+	var out []domain.MasterBooking
+	for _, b := range r.bookings {
+		if b.ClientUserID == clientUserID && (statusFilter == "" || b.Status == statusFilter) {
+			out = append(out, *b)
+		}
+	}
+	return out, nil
+}
+
+func (r *stubRepo) InsertSlotBlock(_ context.Context, b *domain.MasterSlotBlock) error {
+	if r.slotBlocks == nil {
+		r.slotBlocks = make(map[uuid.UUID]*domain.MasterSlotBlock)
+	}
+	cp := *b
+	cp.CreatedAt = time.Now()
+	b.CreatedAt = cp.CreatedAt
+	r.slotBlocks[b.ID] = &cp
+	return nil
+}
+
+func (r *stubRepo) ListSlotBlocksByMaster(_ context.Context, masterID uuid.UUID) ([]domain.MasterSlotBlock, error) {
+	var out []domain.MasterSlotBlock
+	for _, b := range r.slotBlocks {
+		if b.MasterID == masterID {
+			out = append(out, *b)
+		}
+	}
+	return out, nil
+}
+
+func (r *stubRepo) DeleteSlotBlock(_ context.Context, masterID, blockID uuid.UUID) error {
+	b, ok := r.slotBlocks[blockID]
+	if !ok || b.MasterID != masterID {
+		return domain.ErrNotFound
+	}
+	delete(r.slotBlocks, blockID)
+	return nil
+}
+
+// ListClientsByMaster aggregates in-memory bookings the same way the Postgres
+// repo does, so ListMyClients can be unit-tested without a database.
+func (r *stubRepo) ListClientsByMaster(_ context.Context, masterID uuid.UUID) ([]domain.MasterClient, error) {
+	today := time.Now().Format("2006-01-02")
+	agg := make(map[uuid.UUID]*domain.MasterClient)
+	for _, b := range r.bookings {
+		if b.MasterID != masterID {
+			continue
+		}
+		c := agg[b.ClientUserID]
+		if c == nil {
+			c = &domain.MasterClient{UserID: b.ClientUserID}
+			agg[b.ClientUserID] = c
+		}
+		c.BookingsCount++
+		if bt, err := time.Parse(time.RFC3339, b.CreatedAt.Format(time.RFC3339)); err == nil {
+			if c.LastBookingAt == nil || bt.After(*c.LastBookingAt) {
+				t := bt
+				c.LastBookingAt = &t
+			}
+		}
+		visited := b.Status == domain.BookingStatusCompleted ||
+			(b.Status == domain.BookingStatusConfirmed && b.Date < today)
+		if !visited {
+			continue
+		}
+		c.VisitsCount++
+		c.TotalSpent += b.TotalPrice
+		if d, err := time.Parse("2006-01-02", b.Date); err == nil {
+			if c.FirstVisitAt == nil || d.Before(*c.FirstVisitAt) {
+				t := d
+				c.FirstVisitAt = &t
+			}
+			if c.LastVisitAt == nil || d.After(*c.LastVisitAt) {
+				t := d
+				c.LastVisitAt = &t
+			}
+		}
+	}
+	out := make([]domain.MasterClient, 0, len(agg))
+	for _, c := range agg {
+		out = append(out, *c)
+	}
+	return out, nil
 }
 func (r *stubRepo) UpdateBookingStatus(_ context.Context, _ uuid.UUID, _ string) error {
 	panic("stubRepo.UpdateBookingStatus not implemented")
 }
 func (r *stubRepo) HasCompletedBookingByClientMaster(_ context.Context, _, _ uuid.UUID) (bool, error) {
-	panic("stubRepo.HasCompletedBookingByClientMaster not implemented")
+	return r.hasCompletedVal, r.hasCompletedErr
 }
-func (r *stubRepo) CountPhotosByMaster(_ context.Context, _ uuid.UUID) (int32, error) {
-	panic("stubRepo.CountPhotosByMaster not implemented")
+func (r *stubRepo) CountPhotosByMaster(_ context.Context, masterID uuid.UUID) (int32, error) {
+	if m, ok := r.masters[masterID]; ok {
+		return int32(len(m.Photos)), nil
+	}
+	return 0, nil
 }
-func (r *stubRepo) AddMasterPhoto(_ context.Context, _ uuid.UUID, _ string) (*domain.MasterPhoto, error) {
-	panic("stubRepo.AddMasterPhoto not implemented")
+func (r *stubRepo) AddMasterPhoto(_ context.Context, masterID uuid.UUID, url string) (*domain.MasterPhoto, error) {
+	if r.addPhotoErr != nil {
+		return nil, r.addPhotoErr
+	}
+	m, ok := r.masters[masterID]
+	if !ok {
+		return nil, domain.ErrNotFound
+	}
+	p := domain.MasterPhoto{
+		ID:        uuid.New(),
+		MasterID:  masterID,
+		URL:       url,
+		SortOrder: int32(len(m.Photos)),
+		IsCover:   len(m.Photos) == 0,
+	}
+	m.Photos = append(m.Photos, p)
+	return &p, nil
 }
-func (r *stubRepo) DeleteMasterPhoto(_ context.Context, _, _ uuid.UUID) (string, error) {
-	panic("stubRepo.DeleteMasterPhoto not implemented")
+func (r *stubRepo) DeleteMasterPhoto(_ context.Context, masterID, photoID uuid.UUID) (string, error) {
+	if r.deletePhotoErr != nil {
+		return "", r.deletePhotoErr
+	}
+	m, ok := r.masters[masterID]
+	if !ok {
+		return "", domain.ErrNotFound
+	}
+	for i, p := range m.Photos {
+		if p.ID == photoID {
+			m.Photos = append(m.Photos[:i], m.Photos[i+1:]...)
+			return p.URL, nil
+		}
+	}
+	return "", domain.ErrNotFound
 }
-func (r *stubRepo) SetMasterCoverPhoto(_ context.Context, _, _ uuid.UUID) error {
-	panic("stubRepo.SetMasterCoverPhoto not implemented")
+func (r *stubRepo) SetMasterCoverPhoto(_ context.Context, masterID, photoID uuid.UUID) error {
+	if r.setCoverErr != nil {
+		return r.setCoverErr
+	}
+	m, ok := r.masters[masterID]
+	if !ok {
+		return domain.ErrNotFound
+	}
+	found := false
+	for i := range m.Photos {
+		if m.Photos[i].ID == photoID {
+			found = true
+		}
+	}
+	if !found {
+		return domain.ErrNotFound
+	}
+	for i := range m.Photos {
+		m.Photos[i].IsCover = m.Photos[i].ID == photoID
+	}
+	return nil
 }
 
 // stubPayment implements paymentGatewayClient.

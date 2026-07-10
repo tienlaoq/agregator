@@ -55,6 +55,15 @@ export function useGallery(slides: GallerySlide[], resetKey?: string | null) {
     [count],
   )
 
+  // Переключить текущий слайд без открытия лайтбокса (клик по миниатюре).
+  const goTo = useCallback(
+    (idx: number) => {
+      if (count === 0) return
+      setIndex(((idx % count) + count) % count)
+    },
+    [count],
+  )
+
   const closeLightbox = useCallback(() => setLightboxOpen(false), [])
 
   // Клавиатурная навигация в лайтбоксе
@@ -69,11 +78,22 @@ export function useGallery(slides: GallerySlide[], resetKey?: string | null) {
     return () => window.removeEventListener("keydown", onKey)
   }, [lightboxOpen, count, prev, next, closeLightbox])
 
+  // Блокируем прокрутку фона, пока открыт лайтбокс.
+  useEffect(() => {
+    if (!lightboxOpen) return
+    const prevOverflow = document.body.style.overflow
+    document.body.style.overflow = "hidden"
+    return () => {
+      document.body.style.overflow = prevOverflow
+    }
+  }, [lightboxOpen])
+
   return {
     index: safeIndex,
     current,
     lightboxOpen,
     openAt,
+    goTo,
     closeLightbox,
     prev,
     next,

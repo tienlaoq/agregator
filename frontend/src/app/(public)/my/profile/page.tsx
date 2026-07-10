@@ -6,8 +6,10 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Separator } from "@/components/ui/separator";
 import {
   Dialog,
@@ -20,6 +22,7 @@ import {
 import { getProfile, updateProfile, deleteAccount, ApiError } from "@/lib/api";
 import { useAuthStore } from "@/store/auth";
 import { PhoneInput } from "@/components/banya/phone-input";
+import { ConsentSettings } from "@/components/banya/consent-settings";
 
 export default function ProfilePage() {
   const router = useRouter();
@@ -40,13 +43,17 @@ export default function ProfilePage() {
 
   const initialName = profile?.name ?? "";
   const initialPhone = profile?.phone ?? "";
+  const initialBio = profile?.bio ?? "";
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
+  const [bio, setBio] = useState<string | null>(null);
   const nameValue = name || initialName;
   const phoneValue = phone || initialPhone;
+  const bioValue = bio ?? initialBio;
 
   const mutation = useMutation({
-    mutationFn: (data: { name: string; phone: string }) => updateProfile(data),
+    mutationFn: (data: { name: string; phone: string; bio: string }) =>
+      updateProfile(data),
     onSuccess: (user) => {
       setUser(user);
       setSaved(true);
@@ -56,7 +63,7 @@ export default function ProfilePage() {
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    mutation.mutate({ name: nameValue, phone: phoneValue });
+    mutation.mutate({ name: nameValue, phone: phoneValue, bio: bioValue });
   };
 
   const deleteMutation = useMutation({
@@ -96,7 +103,7 @@ export default function ProfilePage() {
 
   return (
     <div className="mx-auto max-w-lg px-4 py-8">
-      <h1 className="mb-6 text-2xl font-bold">Мой профиль</h1>
+      <h1 className="mb-6 text-2xl font-bold">Настройки</h1>
 
       {isLoading ? (
         <div className="space-y-4">
@@ -122,6 +129,21 @@ export default function ProfilePage() {
             </div>
           </CardHeader>
           <CardContent>
+            <div className="mb-6 flex items-center gap-4">
+              <Avatar className="h-16 w-16">
+                <AvatarImage src={profile?.avatar_url} alt={nameValue} />
+                <AvatarFallback className="bg-primary text-lg text-primary-foreground">
+                  {(nameValue || "Г").charAt(0).toUpperCase()}
+                </AvatarFallback>
+              </Avatar>
+              <div className="min-w-0">
+                <p className="truncate font-medium">{nameValue || "Гость"}</p>
+                <p className="truncate text-sm text-muted-foreground">
+                  {profile?.email}
+                </p>
+              </div>
+            </div>
+
             <form onSubmit={handleSubmit} className="space-y-4">
               <div className="space-y-2">
                 <Label htmlFor="email">Email</Label>
@@ -148,6 +170,17 @@ export default function ProfilePage() {
                   value={phoneValue}
                   onChange={setPhone}
                   required
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="bio">О себе</Label>
+                <Textarea
+                  id="bio"
+                  value={bioValue}
+                  onChange={(e) => setBio(e.target.value)}
+                  rows={3}
+                  maxLength={500}
+                  placeholder="Пара слов о себе — необязательно"
                 />
               </div>
 
@@ -180,6 +213,9 @@ export default function ProfilePage() {
             >
               Выйти из аккаунта
             </Button>
+
+            <Separator className="my-6" />
+            <ConsentSettings />
 
             {!isAdmin && (
               <>

@@ -6,6 +6,8 @@ import (
 	"strings"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
+	crmv1 "github.com/tienlao/agregator/gen/go/crm/v1"
 	masterv1 "github.com/tienlao/agregator/gen/go/master/v1"
 	reviewv1 "github.com/tienlao/agregator/gen/go/review/v1"
 	userv1 "github.com/tienlao/agregator/gen/go/user/v1"
@@ -20,6 +22,7 @@ import (
 type ReviewHandler struct {
 	client         reviewv1.ReviewServiceClient
 	userClient     userv1.UserServiceClient
+	crmClient      crmv1.CRMServiceClient       // владельческий кабинет: проверка управляющего доступа к заведению
 	venueClient    venuev1.VenueServiceClient   // optional; владелец заведения для уведомления об отзыве
 	masterClient   masterv1.MasterServiceClient // optional; владелец профиля мастера для уведомления об отзыве
 	ownerNotifier  reviewOwnerNotifier          // optional; «колокольчик» владельцу заведения о новом отзыве
@@ -62,12 +65,27 @@ func WithReviewMasterNotifier(masterClient masterv1.MasterServiceClient, n revie
 	}
 }
 
-func NewReviewHandler(client reviewv1.ReviewServiceClient, userClient userv1.UserServiceClient, opts ...ReviewHandlerOption) *ReviewHandler {
-	h := &ReviewHandler{client: client, userClient: userClient}
+func NewReviewHandler(client reviewv1.ReviewServiceClient, userClient userv1.UserServiceClient, crmClient crmv1.CRMServiceClient, opts ...ReviewHandlerOption) *ReviewHandler {
+	h := &ReviewHandler{client: client, userClient: userClient, crmClient: crmClient}
 	for _, o := range opts {
 		o(h)
 	}
 	return h
+}
+
+// fetchVenueOwner resolves the venue's owner id (trimmed) and display name via
+// venue-service, for the best-effort owner notification below. Callers guard
+// that venueClient is set and venueID is non-empty. (Cabinet authorization no
+// longer uses this — it goes through crm-service; see ensureVenueManageAccess.)
+func (h *ReviewHandler) fetchVenueOwner(ctx context.Context, venueID string) (ownerID, venueName string, err error) {
+	v, err := h.venueClient.GetVenue(ctx, &venuev1.GetVenueRequest{Id: venueID})
+	if err != nil {
+		return "", "", err
+	}
+	if v == nil {
+		return "", "", nil
+	}
+	return strings.TrimSpace(v.GetOwnerId()), v.GetName(), nil
 }
 
 // notifyVenueOwnerOfReview resolves the venue's owner and fires the bell.
@@ -78,15 +96,11 @@ func (h *ReviewHandler) notifyVenueOwnerOfReview(r *http.Request, authorID, venu
 	if h.ownerNotifier == nil || h.venueClient == nil || venueID == "" {
 		return
 	}
-	v, err := h.venueClient.GetVenue(r.Context(), &venuev1.GetVenueRequest{Id: venueID})
-	if err != nil || v == nil {
+	ownerID, venueName, err := h.fetchVenueOwner(r.Context(), venueID)
+	if err != nil || ownerID == "" || ownerID == authorID {
 		return
 	}
-	ownerID := strings.TrimSpace(v.GetOwnerId())
-	if ownerID == "" || ownerID == authorID {
-		return
-	}
-	h.ownerNotifier.NotifyVenueReviewCreated(r.Context(), ownerID, venueID, v.GetName(), rating)
+	h.ownerNotifier.NotifyVenueReviewCreated(r.Context(), ownerID, venueID, venueName, rating)
 }
 
 // notifyMasterOfReview resolves the master's owner user_id + display_name and
@@ -338,7 +352,7 @@ func reviewToJSON(rv *reviewv1.ReviewResponse, userName string) map[string]any {
 	if userName == "" {
 		userName = rv.GetUserName()
 	}
-	return map[string]any{
+	m := map[string]any{
 		"id":           rv.GetId(),
 		"user_id":      rv.GetUserId(),
 		"user_name":    userName,
@@ -350,6 +364,185 @@ func reviewToJSON(rv *reviewv1.ReviewResponse, userName string) map[string]any {
 		"is_anonymous": rv.GetIsAnonymous(),
 		"created_at":   rv.GetCreatedAt().AsTime(),
 	}
+	if reply := replyToJSON(rv.GetOwnerReply()); reply != nil {
+		m["owner_reply"] = reply
+	}
+	return m
+}
+
+func replyToJSON(rp *reviewv1.ReviewReply) map[string]any {
+	if rp == nil {
+		return nil
+	}
+	return map[string]any{
+		"body":       rp.GetBody(),
+		"created_at": rp.GetCreatedAt().AsTime(),
+		"updated_at": rp.GetUpdatedAt().AsTime(),
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Owner-facing review management (cabinet).
+// Access is enforced here at the gateway: review-service has no notion of who
+// manages a venue. We delegate to crm-service GetManagementAccess (the same
+// check booking-service uses for its CRM registry), which grants the legal
+// owner and any staff member with a management role — so the whole venue team
+// can reply, not just the owner.
+// ---------------------------------------------------------------------------
+
+// ensureVenueManageAccess returns the caller's user id when they may manage the
+// venue's reviews — the legal owner or any staff member with CRM management
+// access — writing the appropriate error response and returning ok=false
+// otherwise. GetManagementAccess returns "owner" for the owner and the staff
+// role for members; an empty string means no access.
+func (h *ReviewHandler) ensureVenueManageAccess(w http.ResponseWriter, r *http.Request, venueID string) (string, bool) {
+	userID := middleware.UserIDFromCtx(r.Context())
+	if userID == "" {
+		httpx.WriteCatalog(w, apicatalog.GatewayAuthUnauthorized)
+		return "", false
+	}
+	if venueID == "" {
+		httpx.WriteCatalog(w, apicatalog.GatewayReviewVenueIdRequired)
+		return "", false
+	}
+	if h.crmClient == nil {
+		httpx.WriteCatalog(w, apicatalog.GatewayReviewForbidden)
+		return "", false
+	}
+	acc, err := h.crmClient.GetManagementAccess(r.Context(), &crmv1.GetManagementAccessRequest{
+		VenueId: venueID,
+		UserId:  userID,
+	})
+	if err != nil {
+		httpx.GRPCErrorToHTTP(w, err)
+		return "", false
+	}
+	if strings.TrimSpace(acc.GetAccess()) == "" {
+		httpx.WriteCatalog(w, apicatalog.GatewayReviewForbidden)
+		return "", false
+	}
+	return userID, true
+}
+
+// ListForOwner GET /owner/venues/{venueId}/reviews — the cabinet feed, with the
+// owner reply attached to each review and an optional only_unanswered filter.
+func (h *ReviewHandler) ListForOwner(w http.ResponseWriter, r *http.Request) {
+	venueID := chi.URLParam(r, "venueId")
+	if _, ok := h.ensureVenueManageAccess(w, r, venueID); !ok {
+		return
+	}
+
+	page, ok := httpx.QueryInt(w, r, "page", 1, 1, 1000)
+	if !ok {
+		return
+	}
+	pageSize, ok := httpx.QueryInt(w, r, "page_size", 20, 1, 50)
+	if !ok {
+		return
+	}
+	onlyUnanswered := r.URL.Query().Get("only_unanswered") == "true"
+
+	resp, err := h.client.ListVenueReviews(r.Context(), &reviewv1.ListVenueReviewsRequest{
+		VenueId:        venueID,
+		Page:           int32(page),
+		PageSize:       int32(pageSize),
+		OnlyUnanswered: onlyUnanswered,
+	})
+	if err != nil {
+		httpx.GRPCErrorToHTTP(w, err)
+		return
+	}
+
+	nameCache := make(map[string]string, len(resp.GetReviews()))
+	reviews := make([]map[string]any, len(resp.GetReviews()))
+	for i, rv := range resp.GetReviews() {
+		name := rv.GetUserName()
+		if !rv.GetIsAnonymous() && strings.TrimSpace(name) == "" {
+			name = h.resolveUserNameCached(r, rv.GetUserId(), nameCache)
+		}
+		reviews[i] = reviewToJSON(rv, name)
+	}
+
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{
+		"reviews": reviews,
+		"total":   resp.GetTotal(),
+	})
+}
+
+// SummaryForOwner GET /owner/venues/{venueId}/reviews/summary — header aggregate.
+func (h *ReviewHandler) SummaryForOwner(w http.ResponseWriter, r *http.Request) {
+	venueID := chi.URLParam(r, "venueId")
+	if _, ok := h.ensureVenueManageAccess(w, r, venueID); !ok {
+		return
+	}
+	resp, err := h.client.GetVenueReviewSummary(r.Context(), &reviewv1.GetVenueReviewSummaryRequest{
+		VenueId: venueID,
+	})
+	if err != nil {
+		httpx.GRPCErrorToHTTP(w, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{
+		"avg_rating":       resp.GetAvgRating(),
+		"review_count":     resp.GetReviewCount(),
+		"unanswered_count": resp.GetUnansweredCount(),
+	})
+}
+
+// Reply PUT /owner/venues/{venueId}/reviews/{reviewId}/reply — create or replace
+// the owner reply (idempotent upsert).
+func (h *ReviewHandler) Reply(w http.ResponseWriter, r *http.Request) {
+	venueID := chi.URLParam(r, "venueId")
+	ownerID, ok := h.ensureVenueManageAccess(w, r, venueID)
+	if !ok {
+		return
+	}
+	reviewID := chi.URLParam(r, "reviewId")
+	if _, err := uuid.Parse(reviewID); err != nil {
+		httpx.WriteCatalog(w, apicatalog.GatewayRequestInvalidReviewId)
+		return
+	}
+
+	var req struct {
+		Text string `json:"text"`
+	}
+	if !httpx.ReadJSONOrRespond(w, r, &req) {
+		return
+	}
+
+	resp, err := h.client.ReplyToReview(r.Context(), &reviewv1.ReplyToReviewRequest{
+		ReviewId:     reviewID,
+		VenueId:      venueID,
+		AuthorUserId: ownerID,
+		Body:         req.Text,
+	})
+	if err != nil {
+		httpx.GRPCErrorToHTTP(w, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, replyToJSON(resp))
+}
+
+// DeleteReply DELETE /owner/venues/{venueId}/reviews/{reviewId}/reply.
+func (h *ReviewHandler) DeleteReply(w http.ResponseWriter, r *http.Request) {
+	venueID := chi.URLParam(r, "venueId")
+	if _, ok := h.ensureVenueManageAccess(w, r, venueID); !ok {
+		return
+	}
+	reviewID := chi.URLParam(r, "reviewId")
+	if _, err := uuid.Parse(reviewID); err != nil {
+		httpx.WriteCatalog(w, apicatalog.GatewayRequestInvalidReviewId)
+		return
+	}
+
+	if _, err := h.client.DeleteReviewReply(r.Context(), &reviewv1.DeleteReviewReplyRequest{
+		ReviewId: reviewID,
+		VenueId:  venueID,
+	}); err != nil {
+		httpx.GRPCErrorToHTTP(w, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
 func (h *ReviewHandler) resolveUserName(r *http.Request, userID string) string {

@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import {
@@ -29,7 +29,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
-import { ArrowLeft, ChevronRight, Loader2 } from "lucide-react";
+import { ChevronRight, Loader2 } from "lucide-react";
 import { redirectToLogin } from "@/lib/auth-redirect";
 import { getOwnerVenues, listVenueGuests } from "@/lib/api";
 import { useAuthStore } from "@/store/auth";
@@ -50,6 +50,7 @@ const PAGE_SIZE = 50;
 export default function OwnerVenueGuestsPage() {
   const params = useParams<{ venueId: string }>();
   const venueId = params.venueId;
+  const router = useRouter();
   const { token, user, hydrated } = useAuthStore();
 
   const [segment, setSegment] = useState("");
@@ -132,15 +133,9 @@ export default function OwnerVenueGuestsPage() {
   }
 
   return (
-    <section className="min-h-screen bg-muted/30 py-8 md:py-10">
+    <section className="py-4 md:py-6">
       <div className="container mx-auto max-w-5xl px-4">
-        <div className="mb-6 flex flex-wrap items-center gap-3">
-          <Button variant="ghost" size="sm" className="gap-1 px-0" asChild>
-            <Link href={`/owner/venues/${venue.id}/crm`}>
-              <ArrowLeft className="h-4 w-4" />
-              CRM
-            </Link>
-          </Button>
+        <div className="mb-6">
           <h1 className="text-2xl font-bold text-foreground md:text-3xl">
             Гости: {venue.name}
           </h1>
@@ -216,14 +211,19 @@ export default function OwnerVenueGuestsPage() {
                   </TableHeader>
                   <TableBody>
                     {guests.map((g: VenueGuest) => (
-                      <TableRow key={g.user_id}>
+                      <TableRow
+                        key={g.user_id}
+                        onClick={() =>
+                          router.push(
+                            `/owner/venues/${venue.id}/crm/guests/${g.user_id}`,
+                          )
+                        }
+                        className="cursor-pointer hover:bg-muted/50"
+                      >
                         <TableCell>
-                          <Link
-                            href={`/owner/venues/${venue.id}/crm/guests/${g.user_id}`}
-                            className="font-medium text-foreground hover:underline"
-                          >
+                          <span className="font-medium text-foreground">
                             {guestDisplayName(g)}
-                          </Link>
+                          </span>
                           {g.user_name && g.user_email ? (
                             <div className="mt-0.5 text-xs text-muted-foreground">
                               {g.user_email}
@@ -253,14 +253,10 @@ export default function OwnerVenueGuestsPage() {
                           </div>
                         </TableCell>
                         <TableCell className="text-right">
-                          <Button variant="ghost" size="sm" asChild>
-                            <Link
-                              href={`/owner/venues/${venue.id}/crm/guests/${g.user_id}`}
-                              aria-label="Открыть карточку гостя"
-                            >
-                              <ChevronRight className="h-4 w-4" />
-                            </Link>
-                          </Button>
+                          <ChevronRight
+                            aria-hidden
+                            className="ml-auto h-4 w-4 text-muted-foreground"
+                          />
                         </TableCell>
                       </TableRow>
                     ))}

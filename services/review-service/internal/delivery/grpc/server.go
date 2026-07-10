@@ -43,7 +43,7 @@ func (s *Server) GetReview(ctx context.Context, req *reviewv1.GetReviewRequest) 
 }
 
 func (s *Server) ListVenueReviews(ctx context.Context, req *reviewv1.ListVenueReviewsRequest) (*reviewv1.ListReviewsResponse, error) {
-	reviews, total, err := s.uc.ListVenueReviews(ctx, req.GetVenueId(), req.GetPage(), req.GetPageSize())
+	reviews, total, err := s.uc.ListVenueReviews(ctx, req.GetVenueId(), req.GetOnlyUnanswered(), req.GetPage(), req.GetPageSize())
 	if err != nil {
 		return nil, err
 	}
@@ -98,6 +98,34 @@ func (s *Server) ListMasterReviews(ctx context.Context, req *reviewv1.ListMaster
 	}, nil
 }
 
+func (s *Server) ReplyToReview(ctx context.Context, req *reviewv1.ReplyToReviewRequest) (*reviewv1.ReviewReply, error) {
+	reply, err := s.uc.ReplyToReview(ctx, req.GetReviewId(), req.GetVenueId(), req.GetAuthorUserId(), req.GetBody())
+	if err != nil {
+		return nil, err
+	}
+	return replyToProto(reply), nil
+}
+
+func (s *Server) DeleteReviewReply(ctx context.Context, req *reviewv1.DeleteReviewReplyRequest) (*reviewv1.DeleteReviewReplyResponse, error) {
+	if err := s.uc.DeleteReviewReply(ctx, req.GetReviewId(), req.GetVenueId()); err != nil {
+		return nil, err
+	}
+	return &reviewv1.DeleteReviewReplyResponse{}, nil
+}
+
+func (s *Server) GetVenueReviewSummary(ctx context.Context, req *reviewv1.GetVenueReviewSummaryRequest) (*reviewv1.VenueReviewSummaryResponse, error) {
+	sum, err := s.uc.GetVenueReviewSummary(ctx, req.GetVenueId())
+	if err != nil {
+		return nil, err
+	}
+	return &reviewv1.VenueReviewSummaryResponse{
+		VenueId:         sum.VenueID,
+		AvgRating:       sum.AvgRating,
+		ReviewCount:     sum.ReviewCount,
+		UnansweredCount: sum.UnansweredCount,
+	}, nil
+}
+
 func reviewToProto(r *domain.Review) *reviewv1.ReviewResponse {
 	return &reviewv1.ReviewResponse{
 		Id:          r.ID,
@@ -110,5 +138,17 @@ func reviewToProto(r *domain.Review) *reviewv1.ReviewResponse {
 		IsVerified:  r.IsVerified,
 		IsAnonymous: r.IsAnonymous,
 		CreatedAt:   timestamppb.New(r.CreatedAt),
+		OwnerReply:  replyToProto(r.Reply),
+	}
+}
+
+func replyToProto(r *domain.ReviewReply) *reviewv1.ReviewReply {
+	if r == nil {
+		return nil
+	}
+	return &reviewv1.ReviewReply{
+		Body:      r.Body,
+		CreatedAt: timestamppb.New(r.CreatedAt),
+		UpdatedAt: timestamppb.New(r.UpdatedAt),
 	}
 }

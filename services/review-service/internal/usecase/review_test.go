@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -491,7 +492,7 @@ func TestListVenueReviews_InvalidPagination(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, _, err := uc.ListVenueReviews(ctx, "v1", tc.page, tc.pageSize)
+			_, _, err := uc.ListVenueReviews(ctx, "v1", false, tc.page, tc.pageSize)
 			require.Error(t, err)
 			st, ok := status.FromError(err)
 			require.True(t, ok)
@@ -533,8 +534,9 @@ func TestListVenueReviews(t *testing.T) {
 	ctx := context.Background()
 	want := []*domain.Review{{ID: "r1", VenueID: "v1"}}
 	repo := &mockReviewRepo{
-		ListByVenueFunc: func(_ context.Context, venueID string, page, pageSize int32) ([]*domain.Review, int32, error) {
+		ListByVenueFunc: func(_ context.Context, venueID string, onlyUnanswered bool, page, pageSize int32) ([]*domain.Review, int32, error) {
 			assert.Equal(t, "v1", venueID)
+			assert.False(t, onlyUnanswered)
 			assert.Equal(t, int32(2), page)
 			assert.Equal(t, int32(10), pageSize)
 			return want, 99, nil
@@ -542,10 +544,78 @@ func TestListVenueReviews(t *testing.T) {
 	}
 	uc := NewReviewUseCaseWithOutbox(repo, &mockOutboxRepo{}, &mockBookingClient{}, nil)
 
-	got, total, err := uc.ListVenueReviews(ctx, "v1", 2, 10)
+	got, total, err := uc.ListVenueReviews(ctx, "v1", false, 2, 10)
 	require.NoError(t, err)
 	assert.Equal(t, want, got)
 	assert.Equal(t, int32(99), total)
+}
+
+func TestReplyToReview_Validation(t *testing.T) {
+	ctx := context.Background()
+	uc := NewReviewUseCaseWithOutbox(&mockReviewRepo{}, &mockOutboxRepo{}, &mockBookingClient{}, nil)
+
+	cases := []struct {
+		name              string
+		reviewID, venueID string
+		body              string
+	}{
+		{"missing review_id", "", "v1", "hi"},
+		{"missing venue_id", "r1", "", "hi"},
+		{"empty body", "r1", "v1", "   "},
+		{"body too long", "r1", "v1", strings.Repeat("я", maxReplyLen+1)},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := uc.ReplyToReview(ctx, tc.reviewID, tc.venueID, "owner1", tc.body)
+			require.Error(t, err)
+			assert.Equal(t, codes.InvalidArgument, status.Code(err))
+		})
+	}
+}
+
+func TestReplyToReview_TrimsAndPassesThrough(t *testing.T) {
+	ctx := context.Background()
+	repo := &mockReviewRepo{
+		UpsertReplyFunc: func(_ context.Context, reviewID, venueID, author, body string) (*domain.ReviewReply, error) {
+			assert.Equal(t, "r1", reviewID)
+			assert.Equal(t, "v1", venueID)
+			assert.Equal(t, "owner1", author)
+			assert.Equal(t, "спасибо", body) // trimmed
+			return &domain.ReviewReply{Body: body, AuthorUserID: author}, nil
+		},
+	}
+	uc := NewReviewUseCaseWithOutbox(repo, &mockOutboxRepo{}, &mockBookingClient{}, nil)
+
+	got, err := uc.ReplyToReview(ctx, "r1", "v1", "owner1", "  спасибо  ")
+	require.NoError(t, err)
+	assert.Equal(t, "спасибо", got.Body)
+}
+
+func TestDeleteReviewReply_Validation(t *testing.T) {
+	ctx := context.Background()
+	uc := NewReviewUseCaseWithOutbox(&mockReviewRepo{}, &mockOutboxRepo{}, &mockBookingClient{}, nil)
+	err := uc.DeleteReviewReply(ctx, "", "v1")
+	require.Error(t, err)
+	assert.Equal(t, codes.InvalidArgument, status.Code(err))
+}
+
+func TestGetVenueReviewSummary(t *testing.T) {
+	ctx := context.Background()
+	want := &domain.VenueReviewSummary{VenueID: "v1", AvgRating: 4.6, ReviewCount: 128, UnansweredCount: 14}
+	repo := &mockReviewRepo{
+		GetVenueReviewSummaryFunc: func(_ context.Context, venueID string) (*domain.VenueReviewSummary, error) {
+			assert.Equal(t, "v1", venueID)
+			return want, nil
+		},
+	}
+	uc := NewReviewUseCaseWithOutbox(repo, &mockOutboxRepo{}, &mockBookingClient{}, nil)
+
+	got, err := uc.GetVenueReviewSummary(ctx, "v1")
+	require.NoError(t, err)
+	assert.Equal(t, want, got)
+
+	_, err = uc.GetVenueReviewSummary(ctx, "")
+	assert.Equal(t, codes.InvalidArgument, status.Code(err))
 }
 
 func TestGetReview(t *testing.T) {

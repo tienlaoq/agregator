@@ -18,6 +18,7 @@ type mockVenueRepo struct {
 	GetBySlugFn               func(ctx context.Context, slug string) (*domain.Venue, error)
 	ListFn                    func(ctx context.Context, page, pageSize int32, venueType, sortBy string) (*domain.ListResult, error)
 	SearchFn                  func(ctx context.Context, params domain.SearchParams) (*domain.ListResult, error)
+	PopularCitiesFn           func(ctx context.Context, limit int32) ([]domain.CityCount, error)
 	ListByOwnerFn             func(ctx context.Context, ownerID uuid.UUID) ([]domain.Venue, error)
 	SuspendByOwnerFn          func(ctx context.Context, ownerID uuid.UUID) (int64, error)
 	ListByStatusFn            func(ctx context.Context, status string, page, pageSize int32, nameQuery string) (*domain.ListResult, error)
@@ -102,6 +103,13 @@ func (m *mockVenueRepo) List(ctx context.Context, page, pageSize int32, venueTyp
 func (m *mockVenueRepo) Search(ctx context.Context, params domain.SearchParams) (*domain.ListResult, error) {
 	if m.SearchFn != nil {
 		return m.SearchFn(ctx, params)
+	}
+	return nil, nil
+}
+
+func (m *mockVenueRepo) PopularCities(ctx context.Context, limit int32) ([]domain.CityCount, error) {
+	if m.PopularCitiesFn != nil {
+		return m.PopularCitiesFn(ctx, limit)
 	}
 	return nil, nil
 }

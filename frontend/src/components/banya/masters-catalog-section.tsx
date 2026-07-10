@@ -13,12 +13,11 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { Card, CardContent } from "@/components/ui/card"
-import { FramedImg } from "@/components/banya/framed-image"
-import { getPublicMastersCatalog, listPublicMasters, masterCardImageSrc, masterCardPriceLabel } from "@/lib/api"
+import { MasterCard } from "@/components/banya/master-card"
+import { getPublicMastersCatalog, listPublicMasters } from "@/lib/api"
 import { packCitiesForQuery, parseCitiesFromSearchParams, parseCitiesFromStableKey } from "@/lib/cities-http"
 import type { MasterProfile } from "@/lib/types"
-import { Search, MapPin, X, Users, ImageIcon } from "lucide-react"
-import Link from "next/link"
+import { Search, MapPin, X, Users } from "lucide-react"
 
 /** Значение `none` — без фильтра по API; не путать с `both` («и выезд, и в бане»). */
 const workFormatFilterValues = ["none", "mobile", "venue", "both"] as const
@@ -28,12 +27,6 @@ const workFormatFilterLabels: Record<(typeof workFormatFilterValues)[number], st
   venue: "В бане / у заведения",
   both: "И то и другое",
 }
-const workFormatCardLabels: Record<string, string> = {
-  mobile: workFormatFilterLabels.mobile,
-  venue: workFormatFilterLabels.venue,
-  both: workFormatFilterLabels.both,
-}
-
 const priceRanges = [
   { label: "Любая цена", min: 0, max: 0 },
   { label: "до 1 500 ₽", min: 0, max: 1500 },
@@ -339,54 +332,7 @@ export function MastersCatalogSection() {
               ? Array.from({ length: 6 }).map((_, i) => (
                   <div key={i} className="h-80 animate-pulse rounded-xl bg-muted" />
                 ))
-              : masters.map((m) => {
-                  const priceLine = masterCardPriceLabel(m)
-                  const cardImg = masterCardImageSrc(m)
-                  const wfLabel = workFormatCardLabels[m.work_format] ?? m.work_format
-                  return (
-                    <Link key={m.id} href={`/masters/${m.slug}`}>
-                      <Card className="group h-full cursor-pointer overflow-hidden border-border bg-card transition-all hover:border-primary/40 hover:shadow-xl">
-                        <div className="relative flex aspect-[4/3] items-center justify-center overflow-hidden bg-muted">
-                          {cardImg ? (
-                            <FramedImg
-                              src={cardImg}
-                              alt=""
-                              className="transition-transform duration-300 group-hover:scale-105"
-                            />
-                          ) : (
-                            <div className="flex flex-col items-center gap-1 text-muted-foreground/40">
-                              <ImageIcon className="h-8 w-8" />
-                              <span className="text-xs">Нет фото</span>
-                            </div>
-                          )}
-                          <Badge className="absolute left-3 top-3 border border-primary/20 bg-primary/10 text-primary">
-                            {wfLabel}
-                          </Badge>
-                        </div>
-                        <CardContent className="p-5">
-                          <h3 className="mb-2 line-clamp-1 text-lg font-semibold text-card-foreground">
-                            {m.display_name}
-                          </h3>
-                          <div className="mb-2 flex items-center gap-1 text-sm text-muted-foreground">
-                            <MapPin className="h-4 w-4 shrink-0" />
-                            <span className="line-clamp-1">{m.city}</span>
-                          </div>
-                          {m.experience_years > 0 && (
-                            <Badge variant="outline" className="mb-2 text-xs">
-                              Опыт {m.experience_years} лет
-                            </Badge>
-                          )}
-                          {m.bio ? (
-                            <p className="mb-3 line-clamp-2 text-sm text-muted-foreground">{m.bio}</p>
-                          ) : null}
-                          {priceLine ? (
-                            <span className="text-lg font-bold text-primary">{priceLine}</span>
-                          ) : null}
-                        </CardContent>
-                      </Card>
-                    </Link>
-                  )
-                })}
+              : masters.map((m) => <MasterCard key={m.id} master={m} />)}
           </div>
         )}
 

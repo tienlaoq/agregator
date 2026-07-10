@@ -260,6 +260,51 @@ export function buildVenueSocialLinksPayload(
   return out;
 }
 
+/**
+ * Форматирует `venue.working_hours` в человекочитаемую строку.
+ *
+ * Каноническая форма — JSON `{weekdays:{from,to}, weekends:{from,to}}`
+ * (см. форму владельца в owner/venues/[venueId]/edit). Возвращает:
+ *  - «Ежедневно 10:00–22:00», если будни и выходные совпадают;
+ *  - «Пн–Пт 10:00–22:00 · Сб–Вс 10:20–20:00» — если различаются;
+ *  - только заполненную половину, если вторая пустая.
+ *
+ * Обратная совместимость: строку старого свободного формата возвращает как есть;
+ * пустой ввод / `{}` / некорректный JSON без интервалов → `null` (блок скрывается).
+ */
+export function formatWorkingHours(raw?: string | null): string | null {
+  const s = raw?.trim();
+  if (!s) return null;
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(s);
+  } catch {
+    return s; // старый свободный формат — показываем как есть
+  }
+  if (!parsed || typeof parsed !== "object") return null;
+
+  const range = (v: unknown): string | null => {
+    if (!v || typeof v !== "object") return null;
+    const o = v as Record<string, unknown>;
+    const from = typeof o.from === "string" ? o.from.trim() : "";
+    const to = typeof o.to === "string" ? o.to.trim() : "";
+    if (!from || !to) return null;
+    return `${from}–${to}`;
+  };
+
+  const o = parsed as Record<string, unknown>;
+  const wd = range(o.weekdays);
+  const we = range(o.weekends);
+
+  if (wd && we) {
+    return wd === we ? `Ежедневно ${wd}` : `Пн–Пт ${wd} · Сб–Вс ${we}`;
+  }
+  if (wd) return `Пн–Пт ${wd}`;
+  if (we) return `Сб–Вс ${we}`;
+  return null;
+}
+
 export interface Venue {
   id: string;
   slug: string;
@@ -383,6 +428,40 @@ export interface VenueGuest {
   user_email?: string;
 }
 
+/**
+ * Клиент мастера — проекция из его бронирований (аналог VenueGuest, но для
+ * соло-мастера). Агрегируется на чтении в master-service; PII (имя) добавляет
+ * gateway из user-service.
+ */
+export interface MasterClient {
+  user_id: string;
+  bookings_count: number;
+  visits_count: number;
+  /** LTV в копейках (сумма total_price по «состоявшимся» броням). */
+  total_spent: number;
+  /** Вычисляемые сегменты: new | regular | at_risk. */
+  segments: string[];
+  first_visit_at?: string;
+  last_visit_at?: string;
+  last_booking_at?: string;
+  /** Имя из user-service (в master-service не хранится). */
+  user_name?: string;
+}
+
+/**
+ * Блокировка расписания мастера — интервал, когда заявки не принимаются.
+ * Пустые time_from/time_to = блокировка на весь день.
+ */
+export interface MasterSlotBlock {
+  id: string;
+  master_id: string;
+  date: string; // YYYY-MM-DD
+  time_from: string; // "HH:MM" или ""
+  time_to: string; // "HH:MM" или ""
+  note: string;
+  created_at: string;
+}
+
 /** Компактная строка брони для ленты в карточке гостя. */
 export interface GuestBookingSummary {
   booking_id: string;
@@ -423,6 +502,14 @@ export interface Booking {
   /** Редирект на оплату после создания брони */
   payment_url?: string;
   created_at: string;
+  /** Число заметок команды; заполняется только в CRM-реестре броней. */
+  staff_notes_count?: number;
+}
+
+export interface ReviewReply {
+  body: string;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface Review {
@@ -435,6 +522,13 @@ export interface Review {
   created_at: string;
   verified: boolean;
   is_anonymous?: boolean;
+  owner_reply?: ReviewReply;
+}
+
+export interface VenueReviewSummary {
+  avg_rating: number;
+  review_count: number;
+  unanswered_count: number;
 }
 
 export interface AuthResponse {

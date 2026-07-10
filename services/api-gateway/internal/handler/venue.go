@@ -141,6 +141,25 @@ func (h *VenueHandler) List(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// PopularCities GET /api/v1/analytics/popular-cities — города с наибольшим числом
+// активных заведений (фолбэк «Популярных» в героe, пока нет статистики поиска).
+func (h *VenueHandler) PopularCities(w http.ResponseWriter, r *http.Request) {
+	limit, ok := httpx.QueryInt(w, r, "limit", 6, 1, 20)
+	if !ok {
+		return
+	}
+	resp, err := h.client.GetPopularCities(r.Context(), &venuev1.GetPopularCitiesRequest{Limit: int32(limit)})
+	if err != nil {
+		httpx.GRPCErrorToHTTP(w, err)
+		return
+	}
+	cities := make([]map[string]any, 0, len(resp.GetCities()))
+	for _, c := range resp.GetCities() {
+		cities = append(cities, map[string]any{"city": c.GetCity(), "count": c.GetCount()})
+	}
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"cities": cities})
+}
+
 func (h *VenueHandler) Search(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	lat, _ := strconv.ParseFloat(q.Get("lat"), 64)
@@ -1057,22 +1076,26 @@ func venueToJSON(v *venuev1.VenueResponse, includeVerification bool) map[string]
 		createdAt = ts.AsTime()
 	}
 	result := map[string]any{
-		"id":                 v.GetId(),
-		"owner_id":           v.GetOwnerId(),
-		"slug":               v.GetSlug(),
-		"name":               v.GetName(),
-		"type":               v.GetType(),
-		"description":        v.GetDescription(),
-		"address":            v.GetAddress(),
-		"city":               v.GetCity(),
-		"latitude":           v.GetLatitude(),
-		"longitude":          v.GetLongitude(),
-		"price_from":         v.GetPriceFrom(),
-		"capacity":           v.GetCapacity(),
-		"amenities":          v.GetAmenities(),
-		"working_hours":      v.GetWorkingHours(),
-		"phone":              v.GetPhone(),
-		"avg_rating":         v.GetAvgRating(),
+		"id":            v.GetId(),
+		"owner_id":      v.GetOwnerId(),
+		"slug":          v.GetSlug(),
+		"name":          v.GetName(),
+		"type":          v.GetType(),
+		"description":   v.GetDescription(),
+		"address":       v.GetAddress(),
+		"city":          v.GetCity(),
+		"latitude":      v.GetLatitude(),
+		"longitude":     v.GetLongitude(),
+		"price_from":    v.GetPriceFrom(),
+		"capacity":      v.GetCapacity(),
+		"amenities":     v.GetAmenities(),
+		"working_hours": v.GetWorkingHours(),
+		"phone":         v.GetPhone(),
+		"avg_rating":    v.GetAvgRating(),
+		// `rating` is a legacy alias for `avg_rating`: the frontend Venue type
+		// reads `venue.rating` (catalog cards, venue page, owner dashboard).
+		// Emit both so neither contract breaks.
+		"rating":             v.GetAvgRating(),
 		"review_count":       v.GetReviewCount(),
 		"is_active":          v.GetIsActive(),
 		"status":             v.GetStatus(),
