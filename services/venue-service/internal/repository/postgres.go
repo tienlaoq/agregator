@@ -341,6 +341,34 @@ func (r *venueRepo) getPhotos(ctx context.Context, venueID uuid.UUID) ([]domain.
 	return photos, rows.Err()
 }
 
+// PopularCities returns active-venue counts per non-empty city, most first.
+func (r *venueRepo) PopularCities(ctx context.Context, limit int32) ([]domain.CityCount, error) {
+	if limit <= 0 {
+		limit = 6
+	}
+	rows, err := r.pool.Query(ctx, `
+		SELECT city, COUNT(*) AS cnt
+		FROM venues
+		WHERE status = 'active' AND city <> ''
+		GROUP BY city
+		ORDER BY cnt DESC, city ASC
+		LIMIT $1`, limit)
+	if err != nil {
+		return nil, fmt.Errorf("query popular cities: %w", err)
+	}
+	defer rows.Close()
+
+	var out []domain.CityCount
+	for rows.Next() {
+		var c domain.CityCount
+		if err := rows.Scan(&c.City, &c.Count); err != nil {
+			return nil, fmt.Errorf("scan popular city: %w", err)
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
 // attachVenueDetails подгружает услуги, фото карточки и залы с фото (модерация, кабинет владельца).
 func (r *venueRepo) attachVenueDetails(ctx context.Context, v *domain.Venue) error {
 	services, err := r.getServices(ctx, v.ID)

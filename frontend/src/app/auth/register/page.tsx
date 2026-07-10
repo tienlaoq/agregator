@@ -14,6 +14,7 @@ import { register, userFromRegisterResponse, ApiError, formatApiErrorMessage } f
 import { safeNextPath } from "@/lib/safe-redirect"
 import { useAuthStore } from "@/store/auth"
 import { PasswordStrength } from "@/components/banya/password-strength"
+import { ConsentCheckbox } from "@/components/banya/consent-checkbox"
 import { isPasswordValid, PASSWORD_MIN_LENGTH } from "@/lib/password"
 import { Flame } from "lucide-react"
 
@@ -60,6 +61,7 @@ function RegisterForm() {
   const [name, setName] = useState("")
   const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
+  const [consent, setConsent] = useState(false)
   const [error, setError] = useState("")
   const [loading, setLoading] = useState(false)
 
@@ -159,11 +161,12 @@ function RegisterForm() {
               />
               <PasswordStrength value={password} />
             </div>
+            <ConsentCheckbox checked={consent} onCheckedChange={setConsent} />
             {error && <p className="text-sm text-destructive">{error}</p>}
             <Button
               type="submit"
               className="w-full"
-              disabled={loading || !isPasswordValid(password)}
+              disabled={loading || !isPasswordValid(password) || !consent}
             >
               {loading ? "Создаём аккаунт..." : "Зарегистрироваться"}
             </Button>

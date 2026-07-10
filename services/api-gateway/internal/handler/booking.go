@@ -219,6 +219,8 @@ func (h *BookingHandler) ListVenueBookings(w http.ResponseWriter, r *http.Reques
 		OwnerId:  ownerID,
 		Status:   q.Get("status"),
 		Date:     q.Get("date"),
+		DateFrom: q.Get("date_from"),
+		DateTo:   q.Get("date_to"),
 		PageSize: int32(pageSize),
 		Cursor:   cursor,
 	})
@@ -298,6 +300,9 @@ func bookingToJSON(b *bookingv1.BookingResponse) map[string]any {
 	}
 	if url := b.GetPaymentUrl(); url != "" {
 		m["payment_url"] = url
+	}
+	if c := b.GetStaffNotesCount(); c > 0 {
+		m["staff_notes_count"] = c
 	}
 	return m
 }

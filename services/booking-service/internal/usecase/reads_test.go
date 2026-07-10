@@ -67,7 +67,7 @@ func TestListVenueBookings_AccessControl(t *testing.T) {
 
 	t.Run("empty requester rejected", func(t *testing.T) {
 		uc := ucWith(NewMockBookingRepository(t), nil)
-		_, _, _, err := uc.ListVenueBookings(ctx, "v1", "", "", "", "", 20)
+		_, _, _, err := uc.ListVenueBookings(ctx, "v1", "", "", "", "", "", "", 20)
 		require.Equal(t, codes.InvalidArgument, status.Code(err))
 	})
 
@@ -76,16 +76,16 @@ func TestListVenueBookings_AccessControl(t *testing.T) {
 			return &crmv1.GetManagementAccessResponse{Access: ""}, nil
 		}}
 		uc := ucWith(NewMockBookingRepository(t), crm)
-		_, _, _, err := uc.ListVenueBookings(ctx, "v1", "u1", "", "", "", 20)
+		_, _, _, err := uc.ListVenueBookings(ctx, "v1", "u1", "", "", "", "", "", 20)
 		require.Equal(t, codes.PermissionDenied, status.Code(err))
 	})
 
 	t.Run("access granted → repo result", func(t *testing.T) {
 		repo := NewMockBookingRepository(t)
-		repo.EXPECT().ListByVenue(ctx, "v1", "", "", "", 20).Return([]*domain.Booking{{ID: "b1"}}, 1, "next", nil)
+		repo.EXPECT().ListByVenue(ctx, "v1", "", "", "", "", "", 20).Return([]*domain.Booking{{ID: "b1"}}, 1, "next", nil)
 		// default mockCRMClient grants "owner" access.
 		uc := ucWith(repo, nil)
-		list, total, cursor, err := uc.ListVenueBookings(ctx, "v1", "u1", "", "", "", 20)
+		list, total, cursor, err := uc.ListVenueBookings(ctx, "v1", "u1", "", "", "", "", "", 20)
 		require.NoError(t, err)
 		require.Len(t, list, 1)
 		require.Equal(t, 1, total)

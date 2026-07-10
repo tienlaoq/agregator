@@ -88,13 +88,13 @@ func TestListByVenue_PaginationAndTotal(t *testing.T) {
 	}
 
 	// page 1, size 2 → 2 rows, total 3.
-	list, total, err := repo.ListByVenue(ctx, venue, 1, 2)
+	list, total, err := repo.ListByVenue(ctx, venue, false, 1, 2)
 	require.NoError(t, err)
 	require.Len(t, list, 2)
 	require.EqualValues(t, 3, total)
 
 	// page 2, size 2 → 1 row, total still 3.
-	list2, total2, err := repo.ListByVenue(ctx, venue, 2, 2)
+	list2, total2, err := repo.ListByVenue(ctx, venue, false, 2, 2)
 	require.NoError(t, err)
 	require.Len(t, list2, 1)
 	require.EqualValues(t, 3, total2)

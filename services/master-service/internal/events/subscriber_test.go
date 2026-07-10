@@ -195,6 +195,50 @@ func TestHandlePaymentCompleted_ErrorPathsDoNotPanic(t *testing.T) {
 	}
 }
 
+// TestHandlePaymentFailed_SkipsOnBadInput mirrors the completed variant: every
+// malformed/mismatched payload must Ack without touching the usecase.
+func TestHandlePaymentFailed_SkipsOnBadInput(t *testing.T) {
+	tests := []struct {
+		name string
+		msg  *nats.Msg
+	}{
+		{"malformed json", &nats.Msg{Subject: "payment.failed", Data: []byte("{not json")}},
+		{"empty booking id", mustMsg("payment.failed", paymentEvent{PaymentID: "p", BookingID: "", Status: "failed"})},
+		{"empty payment id", mustMsg("payment.failed", paymentEvent{PaymentID: "", BookingID: uuid.NewString(), Status: "failed"})},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := &bookingRepo{}
+			newSubscriber(repo).handlePaymentFailed(tt.msg)
+			if len(repo.cancelCalls) != 0 {
+				t.Errorf("usecase must not be called for %s, got %d calls", tt.name, len(repo.cancelCalls))
+			}
+		})
+	}
+}
+
+// TestHandlePaymentFailed_ErrorPathsDoNotPanic drives the sentinel and transient
+// error branches (Ack vs Nak) of the failed handler's error switch.
+func TestHandlePaymentFailed_ErrorPathsDoNotPanic(t *testing.T) {
+	for _, cancelErr := range []error{
+		domain.ErrBookingNotPending,
+		domain.ErrPaymentMismatch,
+		domain.ErrInvalidArgument,
+		domain.ErrNotFound,
+		context.DeadlineExceeded, // generic transient
+	} {
+		repo := &bookingRepo{cancelErr: cancelErr}
+		newSubscriber(repo).handlePaymentFailed(msgFor(t, "payment.failed", paymentEvent{
+			PaymentID: "pay-1",
+			BookingID: uuid.NewString(),
+			Status:    paymentStatusFailed,
+		}))
+		if len(repo.cancelCalls) != 1 {
+			t.Errorf("cancel should be attempted once for err=%v", cancelErr)
+		}
+	}
+}
+
 func mustMsg(subject string, evt paymentEvent) *nats.Msg {
 	data, _ := json.Marshal(evt)
 	return &nats.Msg{Subject: subject, Data: data}

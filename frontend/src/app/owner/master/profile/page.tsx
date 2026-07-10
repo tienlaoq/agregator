@@ -47,8 +47,6 @@ import { PhoneInput, getRawPhone, displayPhoneFromStored } from "@/components/ba
 import {
   Plus,
   Trash2,
-  ArrowLeft,
-  Send,
   Upload,
   CircleAlert,
   Award,
@@ -720,16 +718,12 @@ export default function MasterProfilePage() {
   const checklistBody = buildMasterPatchBody();
   const checklist = masterReadinessChecklist(checklistBody, masterPhotoCount);
   const checklistDone = checklist.filter((i) => i.done).length;
+  // Ready when every required (non-optional) checklist item is done — mirrors the
+  // venue editor's draftReadyForReview gate on the submit button.
+  const masterReadyForReview = checklist.every((i) => i.optional || i.done);
 
   return (
     <div className="container mx-auto max-w-6xl px-4 py-10">
-      <Button variant="ghost" asChild className="mb-6 gap-2">
-        <Link href="/owner/master">
-          <ArrowLeft className="h-4 w-4" />
-          Назад в кабинет
-        </Link>
-      </Button>
-
       <h1 className="mb-2 text-2xl font-bold">Профиль мастера</h1>
       <p className="mb-6 text-muted-foreground">
         До одобрения модератором профиль не показывается клиентам в каталоге.
@@ -1430,41 +1424,13 @@ export default function MasterProfilePage() {
                 )}
               </div>
 
-              <div className="flex flex-col gap-3 pt-4 sm:flex-row">
+              <div className="flex flex-col gap-3 pt-4 sm:flex-row sm:justify-end">
                 <Button
-                  className="flex-1"
                   disabled={saveMut.isPending}
                   onClick={() => saveMut.mutate()}
                 >
-                  {saveMut.isPending ? "Сохранение..." : "Сохранить изменения"}
+                  {saveMut.isPending ? "Сохранение…" : "Сохранить изменения"}
                 </Button>
-                {canSubmit && (
-                  <div className="flex min-w-0 flex-1 flex-col items-stretch gap-1 sm:max-w-md">
-                    <Button
-                      variant="secondary"
-                      className="w-full shrink-0 gap-2 sm:w-auto sm:self-start"
-                      disabled={submitMut.isPending || saveMut.isPending}
-                      onClick={handleSubmitForReview}
-                    >
-                      <Send className="h-4 w-4" />
-                      {submitMut.isPending
-                        ? "Сохранение и отправка..."
-                        : "Отправить на модерацию"}
-                    </Button>
-                    {submitWarning ? (
-                      <p
-                        role="alert"
-                        className="text-pretty pl-0.5 text-sm leading-snug text-muted-foreground"
-                      >
-                        <CircleAlert
-                          className="mr-1.5 inline-block size-3.5 shrink-0 align-[-0.15em] text-amber-600/85 dark:text-amber-500/85"
-                          aria-hidden
-                        />
-                        {submitWarning}
-                      </p>
-                    ) : null}
-                  </div>
-                )}
               </div>
               {profile.status === "pending_review" && (
                 <p className="text-sm text-muted-foreground">
@@ -1508,6 +1474,39 @@ export default function MasterProfilePage() {
                     </li>
                   ))}
                 </ul>
+                {canSubmit ? (
+                  <>
+                    {submitWarning ? (
+                      <p
+                        role="alert"
+                        className="mt-4 text-sm leading-snug text-muted-foreground"
+                      >
+                        <CircleAlert
+                          className="mr-1.5 inline-block size-3.5 shrink-0 align-[-0.15em] text-amber-600/85 dark:text-amber-500/85"
+                          aria-hidden
+                        />
+                        {submitWarning}
+                      </p>
+                    ) : null}
+                    <Button
+                      type="button"
+                      className="mt-4 w-full"
+                      onClick={handleSubmitForReview}
+                      disabled={
+                        !masterReadyForReview ||
+                        submitMut.isPending ||
+                        saveMut.isPending
+                      }
+                      title={
+                        !masterReadyForReview && !submitMut.isPending
+                          ? "Выполните обязательные пункты чек-листа."
+                          : undefined
+                      }
+                    >
+                      {submitMut.isPending ? "Отправка…" : "Отправить на проверку"}
+                    </Button>
+                  </>
+                ) : null}
               </CardContent>
             </Card>
           </aside>

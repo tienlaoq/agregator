@@ -30,6 +30,11 @@ service MasterService {
   rpc GetMasterBooking(GetMasterBookingRequest) returns (MasterBookingResponse);
   rpc GetMasterBookingsBatch(GetMasterBookingsBatchRequest) returns (GetMasterBookingsBatchResponse);
   rpc HasCompletedMasterBooking(HasCompletedMasterBookingRequest) returns (HasCompletedMasterBookingResponse);
+  rpc ListMyMasterClients(ListMyMasterClientsRequest) returns (ListMyMasterClientsResponse);
+
+  rpc CreateMasterSlotBlock(CreateMasterSlotBlockRequest) returns (MasterSlotBlockResponse);
+  rpc ListMasterSlotBlocks(ListMasterSlotBlocksRequest) returns (ListMasterSlotBlocksResponse);
+  rpc DeleteMasterSlotBlock(DeleteMasterSlotBlockRequest) returns (DeleteMasterSlotBlockResponse);
 
   rpc AddMasterPhoto(AddMasterPhotoRequest) returns (MasterResponse);
   rpc DeleteMasterPhoto(DeleteMasterPhotoRequest) returns (DeleteMasterPhotoResponse);
@@ -317,6 +322,75 @@ message ListClientMasterBookingsRequest {
 
 message ListMasterBookingsResponse {
   repeated MasterBooking bookings = 1;
+}
+
+// MasterClient is a per-master behavioural projection of one client, aggregated
+// on read from master_bookings. It holds only the client's user_id plus
+// counters — no PII; the gateway enriches the display name from user-service.
+message MasterClient {
+  string user_id = 1;
+  int32 bookings_count = 2;
+  int32 visits_count = 3;
+  int64 total_spent = 4; // kopecks, over visited bookings only
+  optional google.protobuf.Timestamp first_visit_at = 5;
+  optional google.protobuf.Timestamp last_visit_at = 6;
+  optional google.protobuf.Timestamp last_booking_at = 7;
+  // Segment labels computed as of now: "new" | "regular" | "at_risk".
+  repeated string segments = 8;
+}
+
+message ListMyMasterClientsRequest {
+  string user_id = 1;
+  string segment = 2; // "" | new | regular | at_risk
+  string sort = 3;    // "" (=last_visit) | last_visit | ltv | visits
+  int32 limit = 4;
+  int32 offset = 5;
+}
+
+message ListMyMasterClientsResponse {
+  repeated MasterClient clients = 1;
+  int32 total = 2;
+}
+
+// MasterSlotBlock is an interval when the master does not accept bookings.
+// time_from/time_to are "HH:MM"; both empty means the whole day is blocked.
+message MasterSlotBlock {
+  string id = 1;
+  string master_id = 2;
+  string date = 3; // YYYY-MM-DD
+  string time_from = 4; // "HH:MM" or "" for whole day
+  string time_to = 5;   // "HH:MM" or "" for whole day
+  string note = 6;
+  google.protobuf.Timestamp created_at = 7;
+}
+
+message CreateMasterSlotBlockRequest {
+  string user_id = 1;
+  string date = 2;
+  string time_from = 3; // "" for whole day
+  string time_to = 4;   // "" for whole day
+  string note = 5;
+}
+
+message MasterSlotBlockResponse {
+  MasterSlotBlock block = 1;
+}
+
+message ListMasterSlotBlocksRequest {
+  string user_id = 1;
+}
+
+message ListMasterSlotBlocksResponse {
+  repeated MasterSlotBlock blocks = 1;
+}
+
+message DeleteMasterSlotBlockRequest {
+  string user_id = 1;
+  string block_id = 2;
+}
+
+message DeleteMasterSlotBlockResponse {
+  bool deleted = 1;
 }
 
 message GetMasterBookingRequest {

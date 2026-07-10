@@ -27,7 +27,6 @@ import {
   BarChart3,
   Star,
   Building2,
-  Lock,
   Plus,
   Check,
   ChevronsUpDown,
@@ -169,7 +168,9 @@ export function OwnerWorkspaceShell({
                   <item.icon className="h-4 w-4 shrink-0" />
                   <span className="flex-1 truncate">{item.label}</span>
                   {item.locked ? (
-                    <Lock className="h-3.5 w-3.5 text-muted-foreground/60" />
+                    <span className="rounded-full bg-muted px-1.5 text-[11px] text-muted-foreground">
+                      Скоро
+                    </span>
                   ) : item.badge ? (
                     <span className="rounded-full bg-destructive/10 px-1.5 text-[11px] text-destructive">
                       {item.badge}

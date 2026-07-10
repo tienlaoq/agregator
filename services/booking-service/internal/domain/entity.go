@@ -134,6 +134,9 @@ type Booking struct {
 	PaymentURL string
 	CreatedAt  time.Time
 	UpdatedAt  time.Time
+	// StaffNotesCount is a transient, read-only count of internal staff notes,
+	// populated only by ListByVenue (CRM registry); zero elsewhere.
+	StaffNotesCount int32
 }
 
 // IsTerminal возвращает true для статусов из которых нет переходов.

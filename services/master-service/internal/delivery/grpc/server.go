@@ -416,6 +416,108 @@ func (s *Server) ListClientMasterBookings(ctx context.Context, req *masterv1.Lis
 	return &masterv1.ListMasterBookingsResponse{Bookings: out}, nil
 }
 
+func (s *Server) ListMyMasterClients(ctx context.Context, req *masterv1.ListMyMasterClientsRequest) (*masterv1.ListMyMasterClientsResponse, error) {
+	uid, err := callerUUID(ctx)
+	if err != nil {
+		return nil, err
+	}
+	clients, total, err := s.uc.ListMyClients(ctx, uid, domain.MasterClientListParams{
+		Segment: req.GetSegment(),
+		Sort:    req.GetSort(),
+		Limit:   int(req.GetLimit()),
+		Offset:  int(req.GetOffset()),
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*masterv1.MasterClient, 0, len(clients))
+	for i := range clients {
+		out = append(out, clientToProto(&clients[i]))
+	}
+	return &masterv1.ListMyMasterClientsResponse{Clients: out, Total: int32(total)}, nil
+}
+
+func clientToProto(c *domain.MasterClient) *masterv1.MasterClient {
+	if c == nil {
+		return nil
+	}
+	pb := &masterv1.MasterClient{
+		UserId:        c.UserID.String(),
+		BookingsCount: c.BookingsCount,
+		VisitsCount:   c.VisitsCount,
+		TotalSpent:    c.TotalSpent,
+		Segments:      c.Segments,
+	}
+	if c.FirstVisitAt != nil {
+		pb.FirstVisitAt = timestamppb.New(*c.FirstVisitAt)
+	}
+	if c.LastVisitAt != nil {
+		pb.LastVisitAt = timestamppb.New(*c.LastVisitAt)
+	}
+	if c.LastBookingAt != nil {
+		pb.LastBookingAt = timestamppb.New(*c.LastBookingAt)
+	}
+	return pb
+}
+
+func (s *Server) CreateMasterSlotBlock(ctx context.Context, req *masterv1.CreateMasterSlotBlockRequest) (*masterv1.MasterSlotBlockResponse, error) {
+	uid, err := callerUUID(ctx)
+	if err != nil {
+		return nil, err
+	}
+	b, err := s.uc.CreateSlotBlock(ctx, uid, req.GetDate(), req.GetTimeFrom(), req.GetTimeTo(), req.GetNote())
+	if err != nil {
+		return nil, err
+	}
+	return &masterv1.MasterSlotBlockResponse{Block: slotBlockToProto(b)}, nil
+}
+
+func (s *Server) ListMasterSlotBlocks(ctx context.Context, req *masterv1.ListMasterSlotBlocksRequest) (*masterv1.ListMasterSlotBlocksResponse, error) {
+	uid, err := callerUUID(ctx)
+	if err != nil {
+		return nil, err
+	}
+	blocks, err := s.uc.ListSlotBlocks(ctx, uid)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]*masterv1.MasterSlotBlock, 0, len(blocks))
+	for i := range blocks {
+		out = append(out, slotBlockToProto(&blocks[i]))
+	}
+	return &masterv1.ListMasterSlotBlocksResponse{Blocks: out}, nil
+}
+
+func (s *Server) DeleteMasterSlotBlock(ctx context.Context, req *masterv1.DeleteMasterSlotBlockRequest) (*masterv1.DeleteMasterSlotBlockResponse, error) {
+	uid, err := callerUUID(ctx)
+	if err != nil {
+		return nil, err
+	}
+	bid, err := parseUUID(req.GetBlockId(), "block_id")
+	if err != nil {
+		return nil, err
+	}
+	if err := s.uc.DeleteSlotBlock(ctx, uid, bid); err != nil {
+		return nil, err
+	}
+	return &masterv1.DeleteMasterSlotBlockResponse{Deleted: true}, nil
+}
+
+func slotBlockToProto(b *domain.MasterSlotBlock) *masterv1.MasterSlotBlock {
+	if b == nil {
+		return nil
+	}
+	return &masterv1.MasterSlotBlock{
+		Id:        b.ID.String(),
+		MasterId:  b.MasterID.String(),
+		Date:      b.Date,
+		TimeFrom:  b.TimeFrom,
+		TimeTo:    b.TimeTo,
+		Note:      b.Note,
+		CreatedAt: timestamppb.New(b.CreatedAt),
+	}
+}
+
 func (s *Server) GetMasterBooking(ctx context.Context, req *masterv1.GetMasterBookingRequest) (*masterv1.MasterBookingResponse, error) {
 	bid, err := parseUUID(req.GetBookingId(), "booking_id")
 	if err != nil {

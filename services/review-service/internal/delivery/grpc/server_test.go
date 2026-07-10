@@ -20,7 +20,7 @@ import (
 type mockRepo struct {
 	domain.ReviewRepository
 	GetByIDFunc         func(ctx context.Context, id string) (*domain.Review, error)
-	ListByVenueFunc     func(ctx context.Context, venueID string, page, pageSize int32) ([]*domain.Review, int32, error)
+	ListByVenueFunc     func(ctx context.Context, venueID string, onlyUnanswered bool, page, pageSize int32) ([]*domain.Review, int32, error)
 	ListByMasterFunc    func(ctx context.Context, masterID string, page, pageSize int32) ([]*domain.Review, int32, error)
 	GetVenueRatingFunc  func(ctx context.Context, venueID string) (*domain.VenueRating, error)
 	GetMasterRatingFunc func(ctx context.Context, masterID string) (*domain.MasterRating, error)
@@ -29,8 +29,8 @@ type mockRepo struct {
 func (m *mockRepo) GetByID(ctx context.Context, id string) (*domain.Review, error) {
 	return m.GetByIDFunc(ctx, id)
 }
-func (m *mockRepo) ListByVenue(ctx context.Context, venueID string, page, pageSize int32) ([]*domain.Review, int32, error) {
-	return m.ListByVenueFunc(ctx, venueID, page, pageSize)
+func (m *mockRepo) ListByVenue(ctx context.Context, venueID string, onlyUnanswered bool, page, pageSize int32) ([]*domain.Review, int32, error) {
+	return m.ListByVenueFunc(ctx, venueID, onlyUnanswered, page, pageSize)
 }
 func (m *mockRepo) ListByMaster(ctx context.Context, masterID string, page, pageSize int32) ([]*domain.Review, int32, error) {
 	return m.ListByMasterFunc(ctx, masterID, page, pageSize)
@@ -100,7 +100,7 @@ func TestGetReview_ErrorPropagates(t *testing.T) {
 }
 
 func TestListVenueReviews_Success(t *testing.T) {
-	repo := &mockRepo{ListByVenueFunc: func(_ context.Context, venueID string, page, pageSize int32) ([]*domain.Review, int32, error) {
+	repo := &mockRepo{ListByVenueFunc: func(_ context.Context, venueID string, _ bool, page, pageSize int32) ([]*domain.Review, int32, error) {
 		return []*domain.Review{{ID: "r1", VenueID: venueID}, {ID: "r2", VenueID: venueID}}, 7, nil
 	}}
 	resp, err := newServer(repo).ListVenueReviews(context.Background(), &reviewv1.ListVenueReviewsRequest{VenueId: "v1", Page: 1, PageSize: 2})

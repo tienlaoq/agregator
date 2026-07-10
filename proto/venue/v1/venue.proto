@@ -15,6 +15,7 @@ service VenueService {
   rpc GetVenueBySlug(GetVenueBySlugRequest) returns (VenueResponse);
   rpc ListVenues(ListVenuesRequest) returns (ListVenuesResponse);
   rpc SearchVenues(SearchVenuesRequest) returns (ListVenuesResponse);
+  rpc GetPopularCities(GetPopularCitiesRequest) returns (GetPopularCitiesResponse);
   // ListOwnerVenues was extracted to api-gateway composition: gateway calls
   // crm.ListManagedVenues + venue.GetVenuesBatch and merges the result.
   // Do NOT add an RPC with this name back without renaming — old clients
@@ -175,6 +176,19 @@ message SearchVenuesRequest {
   int32 page_size = 11;
   // Подстрока города (как в карточке заведения), без учёта регистра
   string city = 12;
+}
+
+message GetPopularCitiesRequest {
+  int32 limit = 1;
+}
+
+message PopularCity {
+  string city = 1;
+  int32 count = 2;
+}
+
+message GetPopularCitiesResponse {
+  repeated PopularCity cities = 1;
 }
 
 // ListOwnerVenuesRequest removed — api-gateway composes the owner list via

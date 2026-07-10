@@ -60,7 +60,7 @@ func buildRouter(ctx context.Context, log zerolog.Logger, cfg Config, d *deps) (
 	bookingHandler := handler.NewBookingHandler(d.Booking, d.Venue, d.User,
 		handler.WithBookingOwnerNotifier(notificationHandler),
 	)
-	reviewHandler := handler.NewReviewHandler(d.Review, d.User,
+	reviewHandler := handler.NewReviewHandler(d.Review, d.User, d.CRM,
 		handler.WithReviewOwnerNotifier(d.Venue, notificationHandler),
 		handler.WithReviewMasterNotifier(d.Master, notificationHandler),
 	)
@@ -348,6 +348,14 @@ func buildRouter(ctx context.Context, log zerolog.Logger, cfg Config, d *deps) (
 				r.With(ownerCabinet).Get("/owner/venues/{venueId}/bookings/{bookingId}/staff-notes", bookingHandler.ListBookingStaffNotes)
 				r.With(ownerCabinet).Post("/owner/venues/{venueId}/bookings/{bookingId}/staff-notes", bookingHandler.AddBookingStaffNote)
 
+				// Reviews cabinet. Management access (owner or staff role) is enforced
+				// inside the handler via crm-service GetManagementAccess; the role
+				// middleware only narrows candidates.
+				r.With(ownerCabinet).Get("/owner/venues/{venueId}/reviews", reviewHandler.ListForOwner)
+				r.With(ownerCabinet).Get("/owner/venues/{venueId}/reviews/summary", reviewHandler.SummaryForOwner)
+				r.With(ownerCabinet).Put("/owner/venues/{venueId}/reviews/{reviewId}/reply", reviewHandler.Reply)
+				r.With(ownerCabinet).Delete("/owner/venues/{venueId}/reviews/{reviewId}/reply", reviewHandler.DeleteReply)
+
 				// Venue payout cabinet (escrow). The handler enforces the real
 				// gate — caller must be the venue's legal owner (OwnerId match) —
 				// so the role middleware here only narrows the candidate set.
@@ -382,6 +390,10 @@ func buildRouter(ctx context.Context, log zerolog.Logger, cfg Config, d *deps) (
 					r.With(emailVerified).Post("/profile", masterHandler.CreateMyProfile)
 					r.Patch("/profile", masterHandler.PatchMyProfile)
 					r.Get("/bookings", masterHandler.ListMyBookings)
+					r.Get("/clients", masterHandler.ListMyClients)
+					r.Get("/schedule/blocks", masterHandler.ListSlotBlocks)
+					r.Post("/schedule/blocks", masterHandler.CreateSlotBlock)
+					r.Delete("/schedule/blocks/{blockId}", masterHandler.DeleteSlotBlock)
 
 					// Master payout cabinet (escrow). partner_id is resolved from
 					// the caller's own master profile, so no extra ownership check

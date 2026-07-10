@@ -773,3 +773,57 @@ HMAC, а не аутентифицируют по IP. То есть тригге
 **Если эквайер так и не подключат (демо навсегда на mock)** — запись можно
 закрыть как won't-fix: реальных вебхуков нет, IP-allowlist покрывает модель
 угроз. На проде это маловероятно — боевой контур требует реального эквайера.
+
+---
+
+## [REVIEW-UNANSWERED-ANTIJOIN] — Счётчик неотвеченных отзывов считается анти-джойном на каждый заход
+
+**File**: `services/review-service/internal/repository/postgres.go` —
+`GetVenueReviewSummary()` и фильтр `onlyUnanswered` в `ListByVenue()`  
+**Affected**: владельческий кабинет отзывов (`/owner/venues/{id}/reviews/summary`,
+`?only_unanswered=true`)
+
+**Current behaviour**  
+Число отзывов без ответа владельца вычисляется анти-джойном
+`reviews r LEFT JOIN review_replies rr ON rr.review_id = r.id
+WHERE r.venue_id = $1 AND rr.review_id IS NULL`.
+`avg_rating`/`review_count` берутся из O(1) кэша `ratings_cache`, но
+`unanswered_count` — живой пересчёт: планировщик сканирует все отзывы венью
+(через `idx_reviews_venue_created`) и на каждый пробит PK `review_replies`.
+Это O(reviews_per_venue) на каждый вызов. `GetVenueReviewSummary` дёргается
+на каждом открытии дашборда, `only_unanswered` — при каждой смене фильтра.
+
+**Accepted residual risk**  
+Для типичного венью (сотни-тысячи отзывов) анти-скан по частичному индексу
+дёшев и незаметен. Регресс возможен только у крупного венью с десятками тысяч
+отзывов, где каждый заход в кабинет даёт полный проход по всем отзывам. Данные
+всегда точны (это не кэш) — цена только в латентности горячего эндпоинта.
+
+**Upgrade path — вынести unanswered_count в тот же O(1) кэш**  
+Повторить приём, которым уже поддерживается `avg_rating`/`review_count`
+(`UpdateVenueRatingTx`):
+1. Добавить колонку `ratings_cache.unanswered_count INT NOT NULL DEFAULT 0`
+   (миграция).
+2. Поддерживать транзакционно в тех же местах, что и рейтинг:
+   - вставка отзыва → `unanswered_count + 1` (в той же TX, что `CreateTx`);
+   - `UpsertReply` для ранее неотвеченного отзыва → `- 1`;
+   - `DeleteReply` → `+ 1`.
+   Upsert/delete должны отличать «был ли ответ раньше», чтобы не двоить счётчик
+   при редактировании существующего ответа (правка ответа счётчик не трогает).
+3. `GetVenueReviewSummary` тогда читает три поля из `ratings_cache` одним
+   индексным lookup, без анти-джойна.
+4. Фильтр `only_unanswered` в списке оставить как есть (там анти-джойн идёт
+   вместе с пагинацией и ограничен `LIMIT` — регрессирует слабее сводки),
+   либо перевести на частичный индекс, если понадобится.
+
+Промежуточная дешёвая мера (без денормализации): частичный индекс
+`CREATE INDEX idx_reviews_venue_unanswered ON reviews (venue_id)
+WHERE NOT EXISTS (...)` не выразить напрямую (подзапрос в предикате запрещён);
+реалистичная альтернатива — колонка-флаг `reviews.has_reply BOOL` с частичным
+индексом `WHERE has_reply = false`, но это та же денормализация, что и п.2,
+только на стороне `reviews` вместо `ratings_cache`.
+
+**Triggers for prioritisation**  
+- Появление венью с десятками тысяч отзывов.
+- Рост p95-латентности на `/owner/venues/{id}/reviews/summary`.
+- Профайлинг, показывающий анти-скан `reviews` в топе по времени.

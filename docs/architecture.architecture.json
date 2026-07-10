@@ -1,0 +1,59 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "agregator — Baths & Saunas Aggregator",
+    "subtitle": "11 Go microservices behind an API gateway · gRPC (sync) + NATS JetStream (async)",
+    "output": "architecture.html"
+  },
+  "components": [
+    { "id": "users", "type": "external", "label": "Users", "sublabel": "Browser · SEO traffic", "pos": [40, 350], "size": [120, 62] },
+
+    { "id": "caddy", "type": "cloud", "label": "Caddy", "sublabel": "reverse proxy · TLS", "pos": [200, 350], "size": [128, 62] },
+    { "id": "frontend", "type": "frontend", "label": "Next.js 16", "sublabel": "React 19 · SSR", "pos": [368, 262], "size": [130, 62], "tag": "App Router" },
+    { "id": "gateway", "type": "backend", "label": "API Gateway", "sublabel": "REST → gRPC", "pos": [368, 438], "size": [130, 62], "tag": "httpx · apicatalog" },
+
+    { "id": "auth", "type": "security", "label": "auth-service", "sublabel": "JWT · sessions", "pos": [572, 130], "size": [128, 58] },
+    { "id": "user", "type": "backend", "label": "user-service", "sublabel": "profiles", "pos": [572, 224], "size": [128, 58] },
+    { "id": "venue", "type": "backend", "label": "venue-service", "sublabel": "PostGIS · search", "pos": [572, 318], "size": [128, 58] },
+    { "id": "review", "type": "backend", "label": "review-service", "sublabel": "ratings", "pos": [572, 412], "size": [128, 58] },
+    { "id": "master", "type": "backend", "label": "master-service", "sublabel": "profiles · media", "pos": [572, 506], "size": [128, 58] },
+    { "id": "chat", "type": "backend", "label": "chat-service", "sublabel": "WebSocket", "pos": [572, 600], "size": [128, 58] },
+
+    { "id": "booking", "type": "backend", "label": "booking-service", "sublabel": "slots · halls", "pos": [724, 130], "size": [128, 58] },
+    { "id": "payment", "type": "backend", "label": "payment-service", "sublabel": "webhooks · payouts", "pos": [724, 224], "size": [128, 58] },
+    { "id": "crm", "type": "backend", "label": "crm-service", "sublabel": "guests · tasks", "pos": [724, 318], "size": [128, 58] },
+    { "id": "notification", "type": "backend", "label": "notification-svc", "sublabel": "fanout", "pos": [724, 412], "size": [128, 58] },
+    { "id": "analytics", "type": "backend", "label": "analytics-service", "sublabel": "event consumer", "pos": [724, 506], "size": [128, 58] },
+
+    { "id": "postgres", "type": "database", "label": "PostgreSQL 16", "sublabel": "PostGIS · per service", "pos": [912, 130], "size": [132, 58] },
+    { "id": "redis", "type": "database", "label": "Redis", "sublabel": "cache", "pos": [912, 224], "size": [132, 58] },
+    { "id": "minio", "type": "database", "label": "MinIO", "sublabel": "S3 media", "pos": [912, 318], "size": [132, 58] },
+    { "id": "meili", "type": "database", "label": "Meilisearch", "sublabel": "full-text", "pos": [912, 412], "size": [132, 58] },
+    { "id": "nats", "type": "messagebus", "label": "NATS JetStream", "sublabel": "event bus", "pos": [912, 506], "size": [132, 58] }
+  ],
+  "boundaries": [
+    { "kind": "region", "label": "Domain microservices — Clean Architecture (cmd → domain → usecase → repository → delivery/grpc)", "wraps": ["auth", "user", "venue", "review", "master", "chat", "booking", "payment", "crm", "notification", "analytics"] },
+    { "kind": "region", "label": "Shared infrastructure", "wraps": ["postgres", "redis", "minio", "meili", "nats"] }
+  ],
+  "connections": [
+    { "from": "users", "to": "caddy", "label": "HTTPS", "variant": "emphasis" },
+    { "from": "caddy", "to": "frontend", "label": "SSR", "fromSide": "right", "toSide": "left" },
+    { "from": "caddy", "to": "gateway", "label": "/api/*", "fromSide": "right", "toSide": "left" },
+    { "from": "frontend", "to": "gateway", "label": "BFF", "variant": "dashed", "fromSide": "bottom", "toSide": "top", "labelDy": 74 },
+
+    { "from": "gateway", "to": "auth", "variant": "security", "fromSide": "right", "toSide": "left" },
+    { "from": "gateway", "to": "venue", "label": "REST → gRPC ×10", "variant": "emphasis", "fromSide": "right", "toSide": "left" },
+    { "from": "gateway", "to": "master", "fromSide": "right", "toSide": "left" },
+
+    { "from": "booking", "to": "postgres", "label": "SQL", "fromSide": "right", "toSide": "left" },
+    { "from": "booking", "to": "nats", "label": "publish", "variant": "dashed", "fromSide": "right", "toSide": "top", "via": [[878, 159], [878, 494]] },
+    { "from": "nats", "to": "analytics", "label": "consume", "variant": "dashed", "fromSide": "left", "toSide": "right" },
+    { "from": "nats", "to": "notification", "label": "fanout", "variant": "dashed", "fromSide": "left", "toSide": "right" }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "Edge & Frontend", "items": ["Caddy terminates TLS, routes / to Next.js and /api/* to the gateway", "Next.js 16 · React 19 SSR (SEO: \"баня рядом [город]\")", "TanStack Query · Zustand · Tailwind v4"] },
+    { "dot": "emerald", "title": "Sync — gRPC", "items": ["API gateway maps REST → gRPC for all 11 services", "Each service: Clean Architecture, own PostgreSQL DB", "venue: PostGIS geo · Redis cache · Meilisearch", "master: MinIO media · Meilisearch"] },
+    { "dot": "amber", "title": "Async — NATS JetStream", "items": ["booking.created/confirmed/cancelled/completed", "payment.succeeded/failed/refunded", "review.created · venue.created/updated", "Consumers: analytics, notification, crm, master"] }
+  ]
+}

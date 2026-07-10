@@ -74,6 +74,20 @@ type MasterRepository interface {
 	// Returns ErrPaymentMismatch or ErrBookingNotPending on logical conflicts.
 	CancelBookingByPayment(ctx context.Context, bookingID uuid.UUID, paymentID string) error
 	ListBookingsByMaster(ctx context.Context, masterID uuid.UUID, statusFilter string) ([]MasterBooking, error)
+	// ListClientsByMaster aggregates the master's bookings into one projection
+	// per distinct client_user_id. It returns every client; segment filtering,
+	// sorting and pagination are applied in the usecase (segments are computed,
+	// not stored).
+	ListClientsByMaster(ctx context.Context, masterID uuid.UUID) ([]MasterClient, error)
+
+	// InsertSlotBlock persists a new schedule block for the master.
+	InsertSlotBlock(ctx context.Context, b *MasterSlotBlock) error
+	// ListSlotBlocksByMaster returns the master's upcoming blocks (date >= today),
+	// ordered by date then time_from, whole-day blocks first.
+	ListSlotBlocksByMaster(ctx context.Context, masterID uuid.UUID) ([]MasterSlotBlock, error)
+	// DeleteSlotBlock removes a block owned by masterID. Returns ErrNotFound when
+	// no row matches (unknown id or not owned by this master).
+	DeleteSlotBlock(ctx context.Context, masterID, blockID uuid.UUID) error
 	ListBookingsByClient(ctx context.Context, clientUserID uuid.UUID, statusFilter string) ([]MasterBooking, error)
 	UpdateBookingStatus(ctx context.Context, bookingID uuid.UUID, status string) error
 	HasCompletedBookingByClientMaster(ctx context.Context, clientUserID, masterID uuid.UUID) (bool, error)

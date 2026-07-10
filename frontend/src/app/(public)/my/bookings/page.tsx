@@ -200,14 +200,13 @@ export default function MyBookingsPage() {
   })
 
   return (
-    <section className="bg-background py-16 md:py-24">
-      <div className="container mx-auto px-4">
-        <div className="mb-8 flex flex-wrap items-center justify-between gap-3">
-          <h2 className="text-3xl font-bold text-foreground md:text-4xl">Мои бронирования</h2>
-          <Button variant="outline" asChild>
-            <Link href="/support?source=my_bookings">Связаться с поддержкой</Link>
-          </Button>
-        </div>
+    <div className="mx-auto max-w-3xl px-4 py-8 md:px-8">
+      <div className="mb-8 flex flex-wrap items-center justify-between gap-3">
+        <h1 className="text-2xl font-bold text-foreground">Мои бронирования</h1>
+        <Button variant="outline" asChild>
+          <Link href="/support?source=my_bookings">Связаться с поддержкой</Link>
+        </Button>
+      </div>
 
         {isLoading || isLoadingMasterBookings ? (
           <div className="space-y-4">
@@ -289,7 +288,6 @@ export default function MyBookingsPage() {
             </TabsContent>
           </Tabs>
         )}
-      </div>
-    </section>
+    </div>
   )
 }

@@ -13,9 +13,11 @@ type BookingRepository interface {
 	ListByUser(ctx context.Context, userID, status string, offset, limit int) ([]*Booking, int, error)
 	// ListByVenue returns bookings for a venue using keyset pagination.
 	// cursor encodes the exclusive lower-bound as "date|time_from|id"; empty = first page.
+	// date filters an exact day; when empty, the inclusive [dateFrom, dateTo]
+	// range applies (either bound may be empty for an open range).
 	// total comes from COUNT(*) OVER() — single round-trip.
 	// nextCursor is empty when no more rows remain.
-	ListByVenue(ctx context.Context, venueID, status, date, cursor string, limit int) ([]*Booking, int, string, error)
+	ListByVenue(ctx context.Context, venueID, status, date, dateFrom, dateTo, cursor string, limit int) ([]*Booking, int, string, error)
 	UpdateStatus(ctx context.Context, id, status string) error
 	SetPaymentID(ctx context.Context, bookingID, paymentID string) error
 	// SetPaymentAndStatus атомарно устанавливает payment_id, payment_url и status за один UPDATE

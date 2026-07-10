@@ -37,6 +37,22 @@ func (m *mockMasterClient) ListClientMasterBookings(ctx context.Context, in *mas
 	return nil, status.Error(codes.Unimplemented, "ListClientMasterBookings")
 }
 
+func (m *mockMasterClient) ListMyMasterClients(context.Context, *masterv1.ListMyMasterClientsRequest, ...grpc.CallOption) (*masterv1.ListMyMasterClientsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "ListMyMasterClients")
+}
+
+func (m *mockMasterClient) CreateMasterSlotBlock(context.Context, *masterv1.CreateMasterSlotBlockRequest, ...grpc.CallOption) (*masterv1.MasterSlotBlockResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "CreateMasterSlotBlock")
+}
+
+func (m *mockMasterClient) ListMasterSlotBlocks(context.Context, *masterv1.ListMasterSlotBlocksRequest, ...grpc.CallOption) (*masterv1.ListMasterSlotBlocksResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "ListMasterSlotBlocks")
+}
+
+func (m *mockMasterClient) DeleteMasterSlotBlock(context.Context, *masterv1.DeleteMasterSlotBlockRequest, ...grpc.CallOption) (*masterv1.DeleteMasterSlotBlockResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "DeleteMasterSlotBlock")
+}
+
 func (m *mockMasterClient) CreateMyProfile(context.Context, *masterv1.CreateMyProfileRequest, ...grpc.CallOption) (*masterv1.MasterResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "CreateMyProfile")
 }

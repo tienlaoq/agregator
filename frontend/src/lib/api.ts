@@ -10,6 +10,8 @@ import type {
   VenueScheduleEntry,
   RegisterRequest,
   Review,
+  ReviewReply,
+  VenueReviewSummary,
   VenueCrmTask,
   VenueGuest,
   GuestBookingSummary,
@@ -19,6 +21,8 @@ import type {
   Venue,
   MasterProfile,
   MasterBooking,
+  MasterClient,
+  MasterSlotBlock,
   MasterRating,
   SbpBank,
   ChatThread,
@@ -489,19 +493,72 @@ export async function getOwnerVenueBookings(
   venueId: string,
   params?: {
     status?: string;
+    /** exact day (YYYY-MM-DD); takes precedence over date_from/date_to */
     date?: string;
-    page?: number;
+    /** inclusive range bounds (YYYY-MM-DD) for the CRM registry view */
+    date_from?: string;
+    date_to?: string;
+    /** keyset token from a previous response's next_cursor; empty = first page */
+    cursor?: string;
     page_size?: number;
   },
-): Promise<{ bookings: Booking[]; total: number }> {
+): Promise<{ bookings: Booking[]; total: number; next_cursor?: string }> {
   const search = new URLSearchParams();
   if (params?.status) search.set("status", params.status);
   if (params?.date) search.set("date", params.date);
+  if (params?.date_from) search.set("date_from", params.date_from);
+  if (params?.date_to) search.set("date_to", params.date_to);
+  if (params?.cursor) search.set("cursor", params.cursor);
+  if (params?.page_size != null) search.set("page_size", String(params.page_size));
+  const qs = search.toString();
+  return fetchAPI<{ bookings: Booking[]; total: number; next_cursor?: string }>(
+    `/api/v1/owner/venues/${venueId}/bookings${qs ? `?${qs}` : ""}`,
+  );
+}
+
+/** Owner cabinet: venue reviews with owner replies, optional unanswered-only filter. */
+export async function getOwnerVenueReviews(
+  venueId: string,
+  params?: { only_unanswered?: boolean; page?: number; page_size?: number },
+): Promise<{ reviews: Review[]; total: number }> {
+  const search = new URLSearchParams();
+  if (params?.only_unanswered) search.set("only_unanswered", "true");
   if (params?.page != null) search.set("page", String(params.page));
   if (params?.page_size != null) search.set("page_size", String(params.page_size));
   const qs = search.toString();
-  return fetchAPI<{ bookings: Booking[]; total: number }>(
-    `/api/v1/owner/venues/${venueId}/bookings${qs ? `?${qs}` : ""}`,
+  const data = await fetchAPI<{ reviews: Review[]; total: number }>(
+    `/api/v1/owner/venues/${venueId}/reviews${qs ? `?${qs}` : ""}`,
+  );
+  return { reviews: data.reviews ?? [], total: data.total ?? 0 };
+}
+
+export async function getOwnerVenueReviewSummary(
+  venueId: string,
+): Promise<VenueReviewSummary> {
+  return fetchAPI<VenueReviewSummary>(
+    `/api/v1/owner/venues/${venueId}/reviews/summary`,
+  );
+}
+
+/** Create or replace the owner reply to a review (idempotent upsert). */
+export async function replyToVenueReview(
+  venueId: string,
+  reviewId: string,
+  text: string,
+): Promise<ReviewReply> {
+  return fetchAPI<ReviewReply>(
+    `/api/v1/owner/venues/${venueId}/reviews/${reviewId}/reply`,
+    { method: "PUT", body: JSON.stringify({ text }) },
+  );
+}
+
+export async function deleteVenueReviewReply(
+  venueId: string,
+  reviewId: string,
+): Promise<void> {
+  await fetchAPI(
+    `/api/v1/owner/venues/${venueId}/reviews/${reviewId}/reply`,
+    { method: "DELETE" },
   );
 }
 
@@ -583,7 +640,7 @@ export async function getProfile(): Promise<User> {
 }
 
 export async function updateProfile(
-  data: Partial<Pick<User, "name" | "phone">>,
+  data: Partial<Pick<User, "name" | "phone" | "bio">>,
 ): Promise<User> {
   return fetchAPI<User>("/api/v1/users/me", {
     method: "PATCH",
@@ -1216,6 +1273,52 @@ export async function listMyMasterBookings(params?: {
   const qs = search.toString();
   return fetchAPI<{ bookings: MasterBooking[] }>(
     `/api/v1/owner/master/bookings${qs ? `?${qs}` : ""}`,
+  );
+}
+
+export async function listMyMasterClients(params?: {
+  segment?: string;
+  sort?: string;
+  limit?: number;
+  offset?: number;
+}): Promise<{ clients: MasterClient[]; total: number }> {
+  const search = new URLSearchParams();
+  if (params?.segment) search.set("segment", params.segment);
+  if (params?.sort) search.set("sort", params.sort);
+  if (params?.limit != null) search.set("limit", String(params.limit));
+  if (params?.offset != null) search.set("offset", String(params.offset));
+  const qs = search.toString();
+  const data = await fetchAPI<{ clients: MasterClient[]; total: number }>(
+    `/api/v1/owner/master/clients${qs ? `?${qs}` : ""}`,
+  );
+  return { clients: data.clients ?? [], total: data.total ?? 0 };
+}
+
+export async function listMasterSlotBlocks(): Promise<{
+  blocks: MasterSlotBlock[];
+}> {
+  const data = await fetchAPI<{ blocks: MasterSlotBlock[] }>(
+    "/api/v1/owner/master/schedule/blocks",
+  );
+  return { blocks: data.blocks ?? [] };
+}
+
+export async function createMasterSlotBlock(body: {
+  date: string;
+  time_from?: string;
+  time_to?: string;
+  note?: string;
+}): Promise<MasterSlotBlock> {
+  return fetchAPI<MasterSlotBlock>("/api/v1/owner/master/schedule/blocks", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+export async function deleteMasterSlotBlock(blockId: string): Promise<void> {
+  return fetchAPI<void>(
+    `/api/v1/owner/master/schedule/blocks/${encodeURIComponent(blockId)}`,
+    { method: "DELETE" },
   );
 }
 

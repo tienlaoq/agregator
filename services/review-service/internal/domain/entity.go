@@ -19,6 +19,16 @@ type Review struct {
 	IsVerified  bool
 	IsAnonymous bool
 	CreatedAt   time.Time
+	Reply       *ReviewReply // non-nil when the venue owner has replied
+}
+
+// ReviewReply is the venue owner's public response to a review. At most one
+// reply exists per review (review_replies.review_id is the primary key).
+type ReviewReply struct {
+	Body         string
+	AuthorUserID string
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
 }
 
 // VenueRating is the denormalised rating summary for a venue, maintained by
@@ -29,6 +39,15 @@ type VenueRating struct {
 	AvgRating   float64
 	ReviewCount int32
 	UpdatedAt   time.Time
+}
+
+// VenueReviewSummary is the owner-dashboard header aggregate: the cached
+// average/count plus how many reviews still await an owner reply.
+type VenueReviewSummary struct {
+	VenueID         string
+	AvgRating       float64
+	ReviewCount     int32
+	UnansweredCount int32
 }
 
 // MasterRating is the denormalised rating summary for a master, maintained by

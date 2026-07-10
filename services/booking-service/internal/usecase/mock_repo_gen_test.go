@@ -144,11 +144,11 @@ func (_c *MockBookingRepository_ListByUser_Call) Return(_a0 []*domain.Booking, _
 	return _c
 }
 
-func (_m *MockBookingRepository) ListByVenue(ctx context.Context, venueID, status, date, cursor string, limit int) ([]*domain.Booking, int, string, error) {
-	ret := _m.Called(ctx, venueID, status, date, cursor, limit)
+func (_m *MockBookingRepository) ListByVenue(ctx context.Context, venueID, status, date, dateFrom, dateTo, cursor string, limit int) ([]*domain.Booking, int, string, error) {
+	ret := _m.Called(ctx, venueID, status, date, dateFrom, dateTo, cursor, limit)
 	var r0 []*domain.Booking
-	if rf, ok := ret.Get(0).(func(context.Context, string, string, string, string, int) []*domain.Booking); ok {
-		r0 = rf(ctx, venueID, status, date, cursor, limit)
+	if rf, ok := ret.Get(0).(func(context.Context, string, string, string, string, string, string, int) []*domain.Booking); ok {
+		r0 = rf(ctx, venueID, status, date, dateFrom, dateTo, cursor, limit)
 	} else {
 		if ret.Get(0) != nil {
 			r0 = ret.Get(0).([]*domain.Booking)
@@ -159,8 +159,8 @@ func (_m *MockBookingRepository) ListByVenue(ctx context.Context, venueID, statu
 
 type MockBookingRepository_ListByVenue_Call struct{ *mock.Call }
 
-func (_e *MockBookingRepository_Expecter) ListByVenue(ctx, venueID, status, date, cursor, limit interface{}) *MockBookingRepository_ListByVenue_Call {
-	return &MockBookingRepository_ListByVenue_Call{Call: _e.mock.On("ListByVenue", ctx, venueID, status, date, cursor, limit)}
+func (_e *MockBookingRepository_Expecter) ListByVenue(ctx, venueID, status, date, dateFrom, dateTo, cursor, limit interface{}) *MockBookingRepository_ListByVenue_Call {
+	return &MockBookingRepository_ListByVenue_Call{Call: _e.mock.On("ListByVenue", ctx, venueID, status, date, dateFrom, dateTo, cursor, limit)}
 }
 
 func (_c *MockBookingRepository_ListByVenue_Call) Return(_a0 []*domain.Booking, _a1 int, _a2 string, _a3 error) *MockBookingRepository_ListByVenue_Call {

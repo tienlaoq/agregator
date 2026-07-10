@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/gosimple/slug"
@@ -1218,6 +1219,109 @@ FROM master_bookings WHERE client_user_id = $1`
 		out = append(out, b)
 	}
 	return out, rows.Err()
+}
+
+// ListClientsByMaster aggregates master_bookings into one row per distinct
+// client_user_id. "Visited" bookings — those that generated income and count
+// toward segments/LTV — are completed rows plus confirmed rows whose date has
+// already passed (mirrors HasCompletedBookingByClientMaster's definition).
+// The visited predicate uses only constant literals, so no user input is
+// interpolated; masterID is bound as $1.
+func (r *MasterRepo) ListClientsByMaster(ctx context.Context, masterID uuid.UUID) ([]domain.MasterClient, error) {
+	const visited = `(status = 'completed' OR (status = 'confirmed' AND date < CURRENT_DATE))`
+	q := `
+SELECT
+  client_user_id,
+  (COUNT(*))::int AS bookings_count,
+  (COUNT(*) FILTER (WHERE ` + visited + `))::int AS visits_count,
+  COALESCE(SUM(total_price) FILTER (WHERE ` + visited + `), 0)::bigint AS total_spent,
+  MIN(date) FILTER (WHERE ` + visited + `) AS first_visit,
+  MAX(date) FILTER (WHERE ` + visited + `) AS last_visit,
+  MAX(created_at) AS last_booking
+FROM master_bookings
+WHERE master_id = $1
+GROUP BY client_user_id`
+	rows, err := r.pool.Query(ctx, q, masterID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []domain.MasterClient
+	for rows.Next() {
+		var c domain.MasterClient
+		var firstVisit, lastVisit, lastBooking *time.Time
+		if err := rows.Scan(&c.UserID, &c.BookingsCount, &c.VisitsCount, &c.TotalSpent, &firstVisit, &lastVisit, &lastBooking); err != nil {
+			return nil, err
+		}
+		c.FirstVisitAt = firstVisit
+		c.LastVisitAt = lastVisit
+		c.LastBookingAt = lastBooking
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
+// InsertSlotBlock persists a schedule block. Empty TimeFrom/TimeTo are stored as
+// SQL NULL (whole-day block); the CHECK constraint enforces the invariant.
+func (r *MasterRepo) InsertSlotBlock(ctx context.Context, b *domain.MasterSlotBlock) error {
+	const q = `
+INSERT INTO master_slot_blocks (id, master_id, date, time_from, time_to, note)
+VALUES ($1, $2, $3, $4, $5, $6)
+RETURNING created_at`
+	return r.pool.QueryRow(ctx, q,
+		b.ID, b.MasterID, b.Date, nullableTime(b.TimeFrom), nullableTime(b.TimeTo), b.Note,
+	).Scan(&b.CreatedAt)
+}
+
+// ListSlotBlocksByMaster returns upcoming blocks (date >= today) ordered by date,
+// then whole-day blocks (NULL time_from) before timed ones.
+func (r *MasterRepo) ListSlotBlocksByMaster(ctx context.Context, masterID uuid.UUID) ([]domain.MasterSlotBlock, error) {
+	const q = `
+SELECT id, master_id, date::text,
+       COALESCE(to_char(time_from, 'HH24:MI'), ''),
+       COALESCE(to_char(time_to,   'HH24:MI'), ''),
+       note, created_at
+FROM master_slot_blocks
+WHERE master_id = $1 AND date >= CURRENT_DATE
+ORDER BY date, time_from NULLS FIRST`
+	rows, err := r.pool.Query(ctx, q, masterID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []domain.MasterSlotBlock
+	for rows.Next() {
+		var b domain.MasterSlotBlock
+		if err := rows.Scan(&b.ID, &b.MasterID, &b.Date, &b.TimeFrom, &b.TimeTo, &b.Note, &b.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, b)
+	}
+	return out, rows.Err()
+}
+
+// DeleteSlotBlock removes a block scoped to its owning master. The master_id
+// predicate is the ownership check — a block belonging to another master is
+// indistinguishable from a missing one (both yield ErrNotFound).
+func (r *MasterRepo) DeleteSlotBlock(ctx context.Context, masterID, blockID uuid.UUID) error {
+	const q = `DELETE FROM master_slot_blocks WHERE id = $1 AND master_id = $2`
+	tag, err := r.pool.Exec(ctx, q, blockID, masterID)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return domain.ErrNotFound
+	}
+	return nil
+}
+
+// nullableTime maps an empty "HH:MM" string to SQL NULL (whole-day block) and a
+// non-empty one to the string itself (pgx casts to TIME).
+func nullableTime(hhmm string) any {
+	if hhmm == "" {
+		return nil
+	}
+	return hhmm
 }
 
 // HasCompletedBookingByClientMaster returns true when the client has at least

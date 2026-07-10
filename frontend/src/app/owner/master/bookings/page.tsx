@@ -11,7 +11,7 @@ import { listMyMasterBookings, ApiError } from "@/lib/api";
 import { BookingCardLayout } from "@/components/banya/booking-card-layout";
 import { BookingChatPanel } from "@/components/banya/booking-chat-panel";
 import type { MasterBooking } from "@/lib/types";
-import { ArrowLeft, CalendarDays, Clock, Tag, Users } from "lucide-react";
+import { CalendarDays, Clock, Tag, Users } from "lucide-react";
 
 function formatMasterTime(b: MasterBooking): string {
   if (b.time_from && b.time_to) return `${b.time_from}–${b.time_to}`;
@@ -104,13 +104,6 @@ export default function MasterBookingsPage() {
 
   return (
     <div className="container mx-auto max-w-3xl px-4 py-10">
-      <Button variant="ghost" asChild className="mb-6 gap-2">
-        <Link href="/owner/master">
-          <ArrowLeft className="h-4 w-4" />
-          Назад
-        </Link>
-      </Button>
-
       <h1 className="mb-2 text-2xl font-bold">Входящие заявки</h1>
       <p className="mb-6 text-muted-foreground">
         Заявки от клиентов. Подтверждение записи вы согласуете с клиентом напрямую (позвонить,

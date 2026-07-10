@@ -153,9 +153,9 @@ export function Header({ isLoggedIn = false, userName = "Иван", userAvatar, 
                   </Link>
                 </DropdownMenuItem>
                 <DropdownMenuItem asChild>
-                  <Link href="/my/profile" className="flex items-center gap-2">
+                  <Link href="/my" className="flex items-center gap-2">
                     <User className="h-4 w-4" />
-                    Профиль
+                    Личный кабинет
                   </Link>
                 </DropdownMenuItem>
                 <DropdownMenuItem asChild>
@@ -301,8 +301,8 @@ export function Header({ isLoggedIn = false, userName = "Иван", userAvatar, 
                     <Link href="/my/bookings" className="text-muted-foreground" onClick={() => setMobileMenuOpen(false)}>
                       Мои бронирования
                     </Link>
-                    <Link href="/my/profile" className="text-muted-foreground" onClick={() => setMobileMenuOpen(false)}>
-                      Профиль
+                    <Link href="/my" className="text-muted-foreground" onClick={() => setMobileMenuOpen(false)}>
+                      Личный кабинет
                     </Link>
                     <Link href="/support" className="text-muted-foreground" onClick={() => setMobileMenuOpen(false)}>
                       Поддержка

@@ -13,6 +13,12 @@ type ListResult struct {
 	PageSize int32
 }
 
+// CityCount — город и число активных заведений в нём (агрегат для «Популярных»).
+type CityCount struct {
+	City  string
+	Count int32
+}
+
 type SearchParams struct {
 	Query     string
 	Cities    []string
@@ -38,6 +44,8 @@ type VenueRepository interface {
 	GetBySlug(ctx context.Context, slug string) (*Venue, error)
 	List(ctx context.Context, page, pageSize int32, venueType, sortBy string) (*ListResult, error)
 	Search(ctx context.Context, params SearchParams) (*ListResult, error)
+	// PopularCities returns active-venue counts per city, most first, capped at limit.
+	PopularCities(ctx context.Context, limit int32) ([]CityCount, error)
 	ListByOwner(ctx context.Context, ownerID uuid.UUID) ([]Venue, error)
 
 	// SuspendByOwner sets every not-yet-suspended venue owned by ownerID to
