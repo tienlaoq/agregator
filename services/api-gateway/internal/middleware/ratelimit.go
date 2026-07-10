@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"context"
+	"net"
 	"net/http"
 	"time"
 
@@ -9,6 +10,21 @@ import (
 	"github.com/tienlao/agregator/services/api-gateway/internal/apicatalog"
 	"github.com/tienlao/agregator/services/api-gateway/internal/ratelimit"
 )
+
+// clientIP returns the resolved real client IP for rate-limiting and audit
+// purposes. It prefers the value stored by the RealIP middleware in context
+// (ClientIPFromCtx); if the middleware has not run (e.g. in tests that call
+// handlers directly) it falls back to parsing r.RemoteAddr.
+func clientIP(r *http.Request) string {
+	if ip := ClientIPFromCtx(r.Context()); ip != "" {
+		return ip
+	}
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return host
+}
 
 // rateLimiter mirrors ratelimit.Limiter; the interface is kept local so callers
 // can also pass Redis-backed or test-double limiters without a hard dependency.

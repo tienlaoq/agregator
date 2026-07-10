@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"net/url"
 	"strings"
 	"time"
 
@@ -63,25 +62,8 @@ func NewNotificationHandler(
 		ticketRedis: ticketRedis,
 		natsConn:    natsConn,
 		upgrader: websocket.Upgrader{
-			// Same Origin policy as the chat WS upgrader: enforce the CORS
-			// allowlist for browser callers; allow empty-Origin (non-browser)
-			// callers since the ws_ticket is the primary auth layer.
-			CheckOrigin: func(r *http.Request) bool {
-				origin := strings.TrimSpace(r.Header.Get("Origin"))
-				if origin == "" {
-					return true
-				}
-				originURL, err := url.Parse(origin)
-				if err != nil || originURL.Host == "" {
-					return false
-				}
-				for _, a := range middleware.CORSAllowedOrigins() {
-					if u, err := url.Parse(a); err == nil && strings.EqualFold(u.Host, originURL.Host) {
-						return true
-					}
-				}
-				return middleware.IsLocalLoopbackOrigin(origin)
-			},
+			// Same shared WS origin policy as the chat upgrader.
+			CheckOrigin: middleware.OriginAllowed,
 		},
 		hub: chatws.NewHub(),
 	}

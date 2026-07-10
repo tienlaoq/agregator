@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -133,47 +132,13 @@ func NewChatHandler(
 		// in the HTTP handler, keeping ChatHandler as a thin routing/auth layer.
 		resolver: newChatThreadResolver(log, client, booking, venue, master, users, crm),
 		upgrader: websocket.Upgrader{
-			// CheckOrigin enforces the CORS allowlist for browser clients.
-			//
-			// Empty-Origin policy (N1 — intentional):
-			//   Browsers always send an Origin header on cross-origin WebSocket
-			//   upgrades (RFC 6455 §4).  A missing Origin means the caller is
-			//   NOT a browser: native mobile apps, CLI tools, server-side test
-			//   scripts, Postman.  These callers also cannot obtain CSRF cookies,
-			//   so the CSRF risk that Origin-checking guards against does not apply.
-			//
-			//   The WS ticket mechanism (IssueWSTicket / Auth middleware) provides
-			//   the primary auth layer.  When a ticket is issued to a server-side
-			//   caller (no Origin), storedOrigin is "" and the middleware intentionally
-			//   skips the origin-match check — mirroring this policy here.
-			//
-			//   If you introduce browser-only flows that must never allow headless
-			//   access, require a non-empty Origin at ticket-issuance time instead
-			//   of here.
-			CheckOrigin: func(r *http.Request) bool {
-				origin := strings.TrimSpace(r.Header.Get("Origin"))
-				if origin == "" {
-					// Non-browser caller (mobile / CLI / server): allow.
-					// Auth is enforced by the WS ticket; see comment above.
-					return true
-				}
-				originURL, err := url.Parse(origin)
-				if err != nil || originURL.Host == "" {
-					return false
-				}
-				allowed := middleware.CORSAllowedOrigins()
-				for _, a := range allowed {
-					u, err := url.Parse(a)
-					if err == nil && strings.EqualFold(u.Host, originURL.Host) {
-						return true
-					}
-				}
-				// Локальная разработка: любой порт localhost / 127.0.0.1 (::1 включён — см. middleware).
-				if middleware.IsLocalLoopbackOrigin(origin) {
-					return true
-				}
-				return false
-			},
+			// Shared WS origin policy (chat + notifications) — see
+			// middleware.OriginAllowed. Empty Origin (non-browser: mobile / CLI /
+			// server) is allowed because the ws_ticket is the primary auth layer;
+			// a present Origin must match the CORS allowlist by host or be a
+			// localhost origin. To forbid headless access on a browser-only flow,
+			// require a non-empty Origin at ticket-issuance time instead.
+			CheckOrigin: middleware.OriginAllowed,
 		},
 		hub: chatws.NewHub(),
 	}

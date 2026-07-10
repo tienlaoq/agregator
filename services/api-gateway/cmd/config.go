@@ -91,7 +91,7 @@ type Config struct {
 	RateLimitMasterPublicMax     int
 	RateLimitMasterPublicWindow  time.Duration
 
-	// Forgot-password legacy rate-limit
+	// Forgot-password rate-limit (fed into the generic RateLimit middleware, KeyModeIP)
 	ForgotPasswordMax       int
 	ForgotPasswordWindow    time.Duration
 	ForgotPasswordKeyPrefix string
