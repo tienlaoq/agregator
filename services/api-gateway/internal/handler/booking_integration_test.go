@@ -127,6 +127,9 @@ func (noopVenueClient) SearchVenues(context.Context, *venuev1.SearchVenuesReques
 
 // ListOwnerVenues removed from venue.proto (gateway composes from CRM + venue).
 
+func (noopVenueClient) GetPopularCities(context.Context, *venuev1.GetPopularCitiesRequest, ...grpc.CallOption) (*venuev1.GetPopularCitiesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "not set up")
+}
 func (noopVenueClient) CheckSlotAvailability(context.Context, *venuev1.CheckSlotRequest, ...grpc.CallOption) (*venuev1.CheckSlotResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "not set up")
 }

@@ -66,6 +66,9 @@ func (m *mockVenueClient) CheckSlotAvailability(ctx context.Context, in *venuev1
 func (m *mockVenueClient) BatchCheckSlotAvailability(ctx context.Context, in *venuev1.BatchCheckSlotRequest, opts ...grpc.CallOption) (*venuev1.BatchCheckSlotResponse, error) {
 	return nil, nil
 }
+func (m *mockVenueClient) GetPopularCities(ctx context.Context, in *venuev1.GetPopularCitiesRequest, opts ...grpc.CallOption) (*venuev1.GetPopularCitiesResponse, error) {
+	return nil, nil
+}
 func (m *mockVenueClient) ReserveSlot(ctx context.Context, in *venuev1.ReserveSlotRequest, opts ...grpc.CallOption) (*venuev1.ReserveSlotResponse, error) {
 	if m.ReserveSlotFunc != nil {
 		return m.ReserveSlotFunc(ctx, in, opts...)

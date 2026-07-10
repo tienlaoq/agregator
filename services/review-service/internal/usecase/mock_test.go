@@ -335,3 +335,12 @@ func (m *mockMasterClient) SetMasterCoverPhoto(ctx context.Context, in *masterv1
 func (m *mockMasterClient) SuspendMasterByUser(ctx context.Context, in *masterv1.SuspendMasterByUserRequest, opts ...grpc.CallOption) (*masterv1.SuspendMasterByUserResponse, error) {
 	return nil, nil
 }
+func (m *mockMasterClient) CreateMasterSlotBlock(ctx context.Context, in *masterv1.CreateMasterSlotBlockRequest, opts ...grpc.CallOption) (*masterv1.MasterSlotBlockResponse, error) {
+	return nil, nil
+}
+func (m *mockMasterClient) ListMasterSlotBlocks(ctx context.Context, in *masterv1.ListMasterSlotBlocksRequest, opts ...grpc.CallOption) (*masterv1.ListMasterSlotBlocksResponse, error) {
+	return nil, nil
+}
+func (m *mockMasterClient) DeleteMasterSlotBlock(ctx context.Context, in *masterv1.DeleteMasterSlotBlockRequest, opts ...grpc.CallOption) (*masterv1.DeleteMasterSlotBlockResponse, error) {
+	return nil, nil
+}

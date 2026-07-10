@@ -198,6 +198,9 @@ func (m *mockVenueClient) GetVenuesBatch(ctx context.Context, in *venuev1.GetVen
 func (m *mockVenueClient) BatchCheckSlotAvailability(ctx context.Context, in *venuev1.BatchCheckSlotRequest, opts ...grpc.CallOption) (*venuev1.BatchCheckSlotResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "BatchCheckSlotAvailability")
 }
+func (m *mockVenueClient) GetPopularCities(ctx context.Context, in *venuev1.GetPopularCitiesRequest, opts ...grpc.CallOption) (*venuev1.GetPopularCitiesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "GetPopularCities")
+}
 
 // noopUploader satisfies storage.Uploader without touching the filesystem.
 type noopVenueUploader struct{}
