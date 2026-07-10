@@ -5,6 +5,7 @@ import (
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"google.golang.org/grpc/codes"
@@ -95,8 +96,6 @@ func TestGRPCErrorToHTTP_MapsCodes(t *testing.T) {
 		{"not found", codes.NotFound, 404, "GATEWAY.UPSTREAM.NOT_FOUND"},
 		{"invalid argument", codes.InvalidArgument, 400, "GATEWAY.UPSTREAM.INVALID_ARGUMENT"},
 		{"permission denied", codes.PermissionDenied, 403, "GATEWAY.UPSTREAM.PERMISSION_DENIED"},
-		// Unmapped code falls back to UPSTREAM.UNKNOWN (500).
-		{"unmapped data loss falls back", codes.DataLoss, 500, "GATEWAY.UPSTREAM.UNKNOWN"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -116,6 +115,42 @@ func TestGRPCErrorToHTTP_MapsCodes(t *testing.T) {
 			// The upstream detail message should be surfaced.
 			if body.Error != "upstream detail" {
 				t.Fatalf("error = %q, want upstream detail", body.Error)
+			}
+		})
+	}
+}
+
+// Internal/Unknown/Unavailable and unmapped codes must never forward the raw
+// upstream status text — it can carry pg errors, dial failures, or panic values.
+func TestGRPCErrorToHTTP_HidesInternalMessages(t *testing.T) {
+	tests := []struct {
+		name     string
+		code     codes.Code
+		wantCode string
+	}{
+		{"internal", codes.Internal, "GATEWAY.UPSTREAM.INTERNAL"},
+		{"unknown", codes.Unknown, "GATEWAY.UPSTREAM.UNKNOWN"},
+		{"unavailable", codes.Unavailable, "GATEWAY.UPSTREAM.UNAVAILABLE"},
+		{"unmapped data loss", codes.DataLoss, "GATEWAY.UPSTREAM.UNKNOWN"},
+	}
+	const secret = "pq: relation \"users\" does not exist at 10.0.0.5:5432"
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			rr := httptest.NewRecorder()
+			GRPCErrorToHTTP(rr, status.Error(tc.code, secret))
+
+			var body struct{ Code, Error string }
+			if err := json.Unmarshal(rr.Body.Bytes(), &body); err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			if body.Code != tc.wantCode {
+				t.Fatalf("code = %q, want %q", body.Code, tc.wantCode)
+			}
+			if strings.Contains(body.Error, secret) || strings.Contains(body.Error, "10.0.0.5") {
+				t.Fatalf("raw upstream message leaked to client: %q", body.Error)
+			}
+			if body.Error == "" {
+				t.Fatal("error message should be the catalog default, got empty")
 			}
 		})
 	}

@@ -18,6 +18,7 @@ import (
 
 	"github.com/tienlao/agregator/services/api-gateway/internal/apicatalog"
 	"github.com/tienlao/agregator/services/api-gateway/internal/limits"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
 
@@ -102,25 +103,46 @@ func WriteCatalog(w http.ResponseWriter, e apicatalog.Entry) {
 	e.Write(w)
 }
 
+// forwardableMsgCodes lists the gRPC codes whose status message is a deliberate,
+// client-safe message set by an upstream delivery layer (domain errors). For
+// every other code — Internal, Unknown, Unavailable, and any unmapped code — the
+// message is framework- or infrastructure-generated (raw pg text surfaced via
+// grpc's Unknown fallback for non-status errors, dial errors, panic values) and
+// MUST NOT reach the client. Those get the catalog entry's generic default
+// message instead. See CLAUDE.md / backend rules: never expose internals to
+// callers.
+var forwardableMsgCodes = map[codes.Code]bool{
+	codes.InvalidArgument:    true,
+	codes.NotFound:           true,
+	codes.AlreadyExists:      true,
+	codes.Unauthenticated:    true,
+	codes.PermissionDenied:   true,
+	codes.FailedPrecondition: true,
+}
+
 // GRPCErrorToHTTP maps a gRPC status error onto the matching catalogued HTTP
-// response, falling back to GatewayUpstreamUnknown for unmapped codes.
+// response. The upstream status message is forwarded to the client only for the
+// domain codes in forwardableMsgCodes; Internal/Unknown/Unavailable and unmapped
+// codes fall back to the catalog entry's generic message so raw internal error
+// text never leaks past the gateway boundary.
 func GRPCErrorToHTTP(w http.ResponseWriter, err error) {
 	if err == nil {
-		WriteCatalog(w, apicatalog.GatewayUpstreamUnknown.WithMessage("unknown error"))
+		WriteCatalog(w, apicatalog.GatewayUpstreamUnknown)
 		return
 	}
 	st := status.Convert(err)
-	if ent, ok := apicatalog.FromGRPC(st.Code()); ok {
-		msg := strings.TrimSpace(st.Message())
-		if msg == "" {
-			msg = strings.TrimSpace(err.Error())
-		}
-		WriteCatalog(w, ent.WithMessage(msg))
+	ent, ok := apicatalog.FromGRPC(st.Code())
+	if !ok {
+		// Unmapped code (Canceled, ResourceExhausted, DataLoss, …): infra/
+		// framework origin — generic message only, never the raw status text.
+		WriteCatalog(w, apicatalog.GatewayUpstreamUnknown)
 		return
 	}
-	msg := strings.TrimSpace(st.Message())
-	if msg == "" {
-		msg = strings.TrimSpace(err.Error())
+	if forwardableMsgCodes[st.Code()] {
+		if msg := strings.TrimSpace(st.Message()); msg != "" {
+			WriteCatalog(w, ent.WithMessage(msg))
+			return
+		}
 	}
-	WriteCatalog(w, apicatalog.GatewayUpstreamUnknown.WithMessage(msg))
+	WriteCatalog(w, ent)
 }
