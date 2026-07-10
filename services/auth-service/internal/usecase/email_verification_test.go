@@ -21,7 +21,7 @@ func testAuthUCVerify(
 	creds *mockCredRepo,
 	tokens *mockTokenRepo,
 	users *mockUserClient,
-	verifyRepo domain.EmailVerificationRepository,
+	verifyRepo domain.TokenRepository,
 	verifyMail EmailVerificationMailer,
 ) *AuthUseCase {
 	if verifyRepo == nil {

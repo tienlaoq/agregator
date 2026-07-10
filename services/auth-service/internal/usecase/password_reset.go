@@ -35,9 +35,30 @@ func emailFingerprint(email string) string {
 	return hex.EncodeToString(sum[:])[:8]
 }
 
-func passwordResetVerboseLogs() bool {
+// verboseAuditLogs gates the audit-line level for both password-reset and
+// email-verification resend. The env var keeps its original PASSWORD_RESET_
+// prefix for deploy compatibility.
+func verboseAuditLogs() bool {
 	v := strings.ToLower(strings.TrimSpace(os.Getenv("PASSWORD_RESET_VERBOSE")))
 	return v == "1" || v == "true" || v == "yes"
+}
+
+// auditOnce returns a closure that emits exactly one anti-enumeration audit line
+// for msg, carrying only a non-reversible email fingerprint. Level is Info when
+// PASSWORD_RESET_VERBOSE is set (staging), else Debug. Callers arm it on every
+// non-error return path (via a guarded defer), so log presence never varies with
+// the account outcome — the property that keeps these endpoints non-enumerable
+// through log access. Shared by RequestPasswordReset and ResendVerification.
+func (uc *AuthUseCase) auditOnce(email, msg string) func() {
+	fp := emailFingerprint(email)
+	verbose := verboseAuditLogs()
+	return func() {
+		if verbose {
+			uc.appLog.Info().Str("email_fp", fp).Msg(msg)
+		} else {
+			uc.appLog.Debug().Str("email_fp", fp).Msg(msg)
+		}
+	}
 }
 
 // RequestPasswordReset completes without distinguishing cases in the public API
@@ -68,22 +89,15 @@ func (uc *AuthUseCase) RequestPasswordReset(ctx context.Context, email string) e
 		return nil
 	}
 
-	fp := emailFingerprint(email)
-	verbose := passwordResetVerboseLogs()
+	logProcessed := uc.auditOnce(email, "password reset: processed")
 
-	// audit gates the deferred log line. It is set to true on every non-error
-	// return path so that exactly one "processed" line appears in the log
-	// regardless of which branch was taken. Error returns leave audit=false so
-	// we don't emit a misleading "processed" line when the operation failed.
+	// audit gates the deferred log line: set true on every non-error return path
+	// so exactly one "processed" line appears regardless of branch; error returns
+	// leave it false so no misleading "processed" line is emitted on failure.
 	audit := false
 	defer func() {
-		if !audit {
-			return
-		}
-		if verbose {
-			uc.appLog.Info().Str("email_fp", fp).Msg("password reset: processed")
-		} else {
-			uc.appLog.Debug().Str("email_fp", fp).Msg("password reset: processed")
+		if audit {
+			logProcessed()
 		}
 	}()
 
