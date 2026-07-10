@@ -136,7 +136,13 @@ func buildRouter(ctx context.Context, log zerolog.Logger, cfg Config, d *deps) (
 		FailOpen:  true,
 		Mode:      middleware.KeyModeIP,
 	})
-	forgotPasswordRL := middleware.ForgotPasswordRateLimit(log, d.RateLimiter)
+	forgotPasswordRL := middleware.RateLimit(log, d.RateLimiter, middleware.RateLimitConfig{
+		KeyPrefix: cfg.ForgotPasswordKeyPrefix,
+		Max:       cfg.ForgotPasswordMax,
+		Window:    cfg.ForgotPasswordWindow,
+		FailOpen:  cfg.ForgotPasswordFailOpen,
+		Mode:      middleware.KeyModeIP,
+	})
 	// reset-password consumes a one-time token produced by forgot-password.
 	// Brute-forcing the token (SHA-256 of 32 random bytes) is computationally
 	// infeasible, but rate-limiting still prevents amplification attacks where
@@ -190,7 +196,7 @@ func buildRouter(ctx context.Context, log zerolog.Logger, cfg Config, d *deps) (
 	// ── Router ────────────────────────────────────────────────────────────
 	r := chi.NewRouter()
 
-	r.Use(middleware.RealIP(log)) // must be first: rewrites r.RemoteAddr from trusted XFF
+	r.Use(middleware.RealIP(log)) // first: resolves real client IP into context (ClientIPFromCtx); leaves r.RemoteAddr untouched
 	r.Use(middleware.RequestID)
 	r.Use(gwmetrics.HTTPMiddleware)
 	r.Use(middleware.Logging(log))

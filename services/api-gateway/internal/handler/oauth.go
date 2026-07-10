@@ -26,16 +26,18 @@ import (
 // not pin a goroutine for the full handler budget.
 const vkHTTPTimeout = 8 * time.Second
 
-// newVKHTTPClient returns a dedicated *http.Client for VK ID API calls.
+// newOAuthHTTPClient returns a dedicated *http.Client shared by all OAuth
+// provider calls (VK + Yandex token exchange and user-info).
 // Using a private client instead of http.DefaultClient ensures:
 //   - an explicit Timeout that covers dial + TLS + response body read
 //   - a private Transport so connection-pool tuning does not bleed into
-//     other outbound HTTP made by the process
-func newVKHTTPClient() *http.Client {
+//     other outbound HTTP made by the process, and keep-alive connections
+//     are reused across callbacks instead of a fresh dial per request
+func newOAuthHTTPClient() *http.Client {
 	return &http.Client{
 		Timeout: vkHTTPTimeout,
 		Transport: &http.Transport{
-			// Keep VK keep-alive connections separate from the default pool.
+			// Keep OAuth keep-alive connections separate from the default pool.
 			MaxIdleConns:        10,
 			IdleConnTimeout:     60 * time.Second,
 			TLSHandshakeTimeout: 5 * time.Second,
@@ -93,7 +95,7 @@ type OAuthHandler struct {
 	authClient   authv1.AuthServiceClient
 	vk           *oauth2.Config
 	yandex       *oauth2.Config
-	vkClient     *http.Client // dedicated client for VK ID API — never http.DefaultClient
+	httpClient   *http.Client // shared client for all OAuth provider calls — never http.DefaultClient
 	frontURL     string
 	secureCookie bool // true when BASE_URL is https — sets Secure flag on state cookie
 	log          zerolog.Logger
@@ -140,7 +142,7 @@ func NewOAuthHandler(log zerolog.Logger, authClient authv1.AuthServiceClient, cf
 
 	h := &OAuthHandler{
 		authClient:   authClient,
-		vkClient:     newVKHTTPClient(),
+		httpClient:   newOAuthHTTPClient(),
 		frontURL:     strings.TrimRight(strings.TrimSpace(cfg.FrontendURL), "/"),
 		secureCookie: baseU.Scheme == "https",
 		log:          log,
@@ -376,14 +378,14 @@ func (h *OAuthHandler) VKCallback(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 
 	// VK ID token exchange via POST form — pass the real PKCE verifier, not state.
-	vkTokenResp, err := exchangeVKCode(ctx, h.vkClient, h.vk, code, codeVerifier, deviceID)
+	vkTokenResp, err := exchangeVKCode(ctx, h.httpClient, h.vk, code, codeVerifier, deviceID)
 	if err != nil {
 		h.redirectError(w, r, oauthErrExchangeFailed, err)
 		return
 	}
 
 	// Get user info from VK ID
-	vkUser, err := fetchVKIDUserInfo(ctx, h.vkClient, h.vk.ClientID, vkTokenResp.AccessToken)
+	vkUser, err := fetchVKIDUserInfo(ctx, h.httpClient, h.vk.ClientID, vkTokenResp.AccessToken)
 	if err != nil {
 		h.redirectError(w, r, oauthErrUserInfoFailed, err)
 		return
@@ -513,13 +515,17 @@ func (h *OAuthHandler) YandexCallback(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 
+	// Route the oauth2 token exchange through the shared pooled client instead
+	// of http.DefaultClient (oauth2 reads it from the context under this key).
+	ctx = context.WithValue(ctx, oauth2.HTTPClient, h.httpClient)
+
 	token, err := h.yandex.Exchange(ctx, code)
 	if err != nil {
 		h.redirectError(w, r, oauthErrExchangeFailed, err)
 		return
 	}
 
-	userInfo, err := fetchYandexUserInfo(ctx, token.AccessToken)
+	userInfo, err := fetchYandexUserInfo(ctx, h.httpClient, token.AccessToken)
 	if err != nil {
 		h.redirectError(w, r, oauthErrUserInfoFailed, err)
 		return
@@ -554,14 +560,13 @@ type yandexUserInfo struct {
 // fetchYandexUserInfo calls https://login.yandex.ru/info with the OAuth access
 // token. Yandex requires the token to be passed via the `Authorization: OAuth …`
 // header (not Bearer) — this is documented in their identity API spec.
-func fetchYandexUserInfo(ctx context.Context, accessToken string) (*yandexUserInfo, error) {
+func fetchYandexUserInfo(ctx context.Context, client *http.Client, accessToken string) (*yandexUserInfo, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://login.yandex.ru/info?format=json", nil)
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Authorization", "OAuth "+accessToken)
 
-	client := &http.Client{Timeout: 8 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
