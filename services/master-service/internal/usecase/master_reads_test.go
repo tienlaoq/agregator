@@ -705,6 +705,54 @@ func TestUpdateMyProfile(t *testing.T) {
 		}
 	})
 
+	t.Run("invalid services list does not mutate the profile", func(t *testing.T) {
+		repo := newStubRepo()
+		m := activeMaster()
+		repo.addMaster(m)
+		_, err := nopUC(repo).UpdateMyProfile(context.Background(), m.UserID, UpdateMasterInput{
+			Bio:                  strptr("новое описание профиля мастера"),
+			ApplyServicesReplace: true,
+			ServicesReplace:      []domain.MasterServiceUpsert{{Name: ""}}, // empty name → invalid
+		})
+		if status.Code(err) != codes.InvalidArgument {
+			t.Fatalf("got code %v, want InvalidArgument", status.Code(err))
+		}
+		// Validation runs before the write: status must still be active and the
+		// new bio must not have been persisted.
+		saved := repo.masters[m.ID]
+		if saved.Status != domain.StatusActive {
+			t.Fatalf("status = %q, want unchanged active (write leaked before validation)", saved.Status)
+		}
+		if saved.Bio == "новое описание профиля мастера" {
+			t.Fatal("bio was persisted despite invalid services — write ran before validation")
+		}
+	})
+
+	t.Run("failed credentials replace rolls back the whole save", func(t *testing.T) {
+		repo := newStubRepo()
+		m := activeMaster()
+		repo.addMaster(m)
+		repo.replaceCredsErr = errors.New("boom") // credentials step fails inside the tx
+		_, err := nopUC(repo).UpdateMyProfile(context.Background(), m.UserID, UpdateMasterInput{
+			Bio:                     strptr("новое описание профиля мастера"),
+			ApplyCredentialsReplace: true,
+			CredentialsReplace: []domain.MasterCredentialUpsert{
+				{Kind: domain.CredentialKindCertificate, Title: "Диплом"},
+			},
+		})
+		if err == nil {
+			t.Fatal("expected error when the credentials step fails, got nil")
+		}
+		// Single transaction: the scalar UPDATE must not survive the rollback.
+		saved := repo.masters[m.ID]
+		if saved.Status != domain.StatusActive {
+			t.Fatalf("status = %q, want unchanged active (scalar write leaked past a failed tx)", saved.Status)
+		}
+		if saved.Bio == "новое описание профиля мастера" {
+			t.Fatal("bio persisted despite a failed credentials step — writes were not atomic")
+		}
+	})
+
 	t.Run("clearing an existing phone is rejected", func(t *testing.T) {
 		repo := newStubRepo()
 		m := activeMaster()

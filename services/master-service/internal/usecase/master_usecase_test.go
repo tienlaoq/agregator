@@ -58,6 +58,8 @@ type stubRepo struct {
 	suspendByUserErr    error
 	hasCompletedVal     bool
 	hasCompletedErr     error
+	slotConflictVal     bool  // returned by HasSlotBlockConflict
+	slotConflictErr     error // returned by HasSlotBlockConflict
 	listModHistoryErr   error
 	getMasterUserIDsErr error
 
@@ -272,6 +274,35 @@ func (r *stubRepo) UpdateProfile(_ context.Context, m *domain.Master) error {
 	r.masters[m.ID] = &cp
 	return nil
 }
+
+// UpdateProfileWithAssociations mirrors the real single-tx repo method: injected
+// errors (updateProfileErr / replaceServicesErr / replaceCredsErr) are checked
+// up front so that when any step "fails" no scalar write is applied — the same
+// all-or-nothing guarantee the transaction gives in production.
+func (r *stubRepo) UpdateProfileWithAssociations(ctx context.Context, m *domain.Master, applyServices bool, services []domain.MasterServiceUpsert, applyCredentials bool, credentials []domain.MasterCredentialUpsert) error {
+	if r.updateProfileErr != nil {
+		return r.updateProfileErr
+	}
+	if applyServices && r.replaceServicesErr != nil {
+		return r.replaceServicesErr
+	}
+	if applyCredentials && r.replaceCredsErr != nil {
+		return r.replaceCredsErr
+	}
+	cp := *m
+	r.masters[m.ID] = &cp
+	if applyServices {
+		if _, err := r.ReplaceServices(ctx, m.ID, services); err != nil {
+			return err
+		}
+	}
+	if applyCredentials {
+		if _, err := r.ReplaceCredentials(ctx, m.ID, credentials); err != nil {
+			return err
+		}
+	}
+	return nil
+}
 func (r *stubRepo) ListByStatus(_ context.Context, status string, limit, offset int32) ([]domain.Master, int32, error) {
 	if r.listByStatusErr != nil {
 		return nil, 0, r.listByStatusErr
@@ -414,6 +445,10 @@ func (r *stubRepo) DeleteSlotBlock(_ context.Context, masterID, blockID uuid.UUI
 	}
 	delete(r.slotBlocks, blockID)
 	return nil
+}
+
+func (r *stubRepo) HasSlotBlockConflict(_ context.Context, _ uuid.UUID, _, _, _ string) (bool, error) {
+	return r.slotConflictVal, r.slotConflictErr
 }
 
 // ListClientsByMaster aggregates in-memory bookings the same way the Postgres
@@ -846,6 +881,47 @@ func TestCreateBooking_happyPath_hourly(t *testing.T) {
 	}
 	if b.TotalPrice != 10_000 {
 		t.Fatalf("total_price = %d, want 10000", b.TotalPrice)
+	}
+}
+
+// A booking over time the master blocked is rejected before any booking row is
+// inserted or any payment is created.
+func TestCreateBooking_slotBlocked(t *testing.T) {
+	repo := newStubRepo()
+	m := activeMaster()
+	repo.addMaster(m)
+	repo.slotConflictVal = true // HasSlotBlockConflict → blocked
+
+	// A payment client that fails the test if it is ever reached: the block must
+	// short-circuit before CreatePayment.
+	pay := &stubPayment{err: errors.New("CreatePayment must not be called for a blocked slot")}
+	uc := newUC(repo, pay)
+
+	_, err := uc.CreateBooking(context.Background(), uuid.New(), m.Slug, nil, futureDate(), "09:00", "10:00", "")
+	if err == nil {
+		t.Fatal("expected error for blocked slot, got nil")
+	}
+	if len(repo.bookings) != 0 {
+		t.Fatalf("no booking row must be inserted for a blocked slot, got %d", len(repo.bookings))
+	}
+}
+
+// When the DB exclusion constraint rejects the insert (concurrent double-book),
+// the repo returns domain.ErrSlotTaken and CreateBooking surfaces it as an error
+// without proceeding to the payment saga.
+func TestCreateBooking_slotTaken(t *testing.T) {
+	repo := newStubRepo()
+	m := activeMaster()
+	repo.addMaster(m)
+	repo.insertErr = domain.ErrSlotTaken // InsertBooking hits master_bookings_no_overlap
+
+	pay := &stubPayment{err: errors.New("CreatePayment must not be called when the slot is taken")}
+	uc := newUC(repo, pay)
+
+	svcID := m.Services[0].ID
+	_, err := uc.CreateBooking(context.Background(), uuid.New(), m.Slug, &svcID, futureDate(), "10:00", "11:00", "")
+	if err == nil {
+		t.Fatal("expected error for taken slot, got nil")
 	}
 }
 

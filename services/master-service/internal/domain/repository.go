@@ -18,6 +18,12 @@ type MasterRepository interface {
 	GetByID(ctx context.Context, id uuid.UUID) (*Master, error)
 	GetBySlug(ctx context.Context, slug string) (*Master, error)
 	UpdateProfile(ctx context.Context, m *Master) error
+	// UpdateProfileWithAssociations updates the master row and, when the apply
+	// flags are set, replaces services and/or credentials in a SINGLE transaction.
+	// A mid-save failure rolls back everything, so callers never see scalar fields
+	// + status committed while services/credentials are stale. Use this for the
+	// profile-save path instead of UpdateProfile + ReplaceServices + ReplaceCredentials.
+	UpdateProfileWithAssociations(ctx context.Context, m *Master, applyServices bool, services []MasterServiceUpsert, applyCredentials bool, credentials []MasterCredentialUpsert) error
 	UpdateStatus(ctx context.Context, masterID uuid.UUID, status, comment string, moderatedBy *uuid.UUID) error
 	// SuspendByUser sets the master profile owned by userID to status
 	// "suspended" (account-deletion cascade). Returns true when a row was
@@ -79,6 +85,12 @@ type MasterRepository interface {
 	// sorting and pagination are applied in the usecase (segments are computed,
 	// not stored).
 	ListClientsByMaster(ctx context.Context, masterID uuid.UUID) ([]MasterClient, error)
+
+	// HasSlotBlockConflict reports whether [timeFrom, timeTo) on date overlaps
+	// any of the master's slot blocks (a whole-day block matches any interval).
+	// date is "YYYY-MM-DD" and timeFrom/timeTo are "HH:MM". Used by CreateBooking
+	// to reject bookings over time the master marked unavailable.
+	HasSlotBlockConflict(ctx context.Context, masterID uuid.UUID, date, timeFrom, timeTo string) (bool, error)
 
 	// InsertSlotBlock persists a new schedule block for the master.
 	InsertSlotBlock(ctx context.Context, b *MasterSlotBlock) error

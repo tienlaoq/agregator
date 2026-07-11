@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Label } from "@/components/ui/label"
@@ -173,6 +173,10 @@ export function VenuePublicPageClient({
   const [reviews, setReviews] = useState<Review[]>([])
   const [loading, setLoading] = useState(!initialVenue)
   const [error, setError] = useState("")
+  const [activeTab, setActiveTab] = useState("services")
+  // Пока идёт программный скролл по клику на вкладку — гасим scroll-spy,
+  // чтобы промежуточные секции не перебивали выбранную (timestamp, без таймеров).
+  const suppressSpyUntil = useRef(0)
 
   useEffect(() => {
     if (!slug) return
@@ -227,6 +231,26 @@ export function VenuePublicPageClient({
     void load()
     return () => { active = false }
   }, [slug, initialVenue])
+
+  // Подсветка активного раздела в липких вкладках (scroll-spy).
+  useEffect(() => {
+    if (!venue) return
+    const ids = ["services", "halls", "reviews", "about"]
+    const obs = new IntersectionObserver(
+      (entries) => {
+        if (Date.now() < suppressSpyUntil.current) return
+        for (const e of entries) {
+          if (e.isIntersecting) setActiveTab(e.target.id)
+        }
+      },
+      { rootMargin: "-45% 0px -50% 0px" },
+    )
+    for (const id of ids) {
+      const el = document.getElementById(id)
+      if (el) obs.observe(el)
+    }
+    return () => obs.disconnect()
+  }, [venue])
 
   const reloadReviews = async () => {
     if (!venue?.id) return
@@ -305,6 +329,29 @@ export function VenuePublicPageClient({
   const verified = venue.status === "active"
   const venueHours = formatWorkingHours(venue.working_hours)
   const hallsCount = venue.halls?.length ?? 0
+  const capacity = venue.capacity ?? 0
+  const socialEntries =
+    venue.social_links && typeof venue.social_links === "object" && !Array.isArray(venue.social_links)
+      ? (Object.entries(venue.social_links) as [string, unknown][]).filter(
+          ([, u]) => typeof u === "string" && u.trim().length > 0,
+        )
+      : []
+  const hasAbout =
+    Boolean(venue.description) || Boolean(venueHours) || capacity > 0 || hallsCount > 0 || Boolean(venue.phone) || socialEntries.length > 0
+
+  const tabs = [
+    { id: "services", label: "Услуги", show: (venue.services?.length ?? 0) > 0 },
+    { id: "halls", label: "Залы", show: hallsCount > 0 },
+    { id: "reviews", label: "Отзывы", show: true },
+    { id: "about", label: "О месте", show: hasAbout },
+  ].filter((t) => t.show)
+  const currentTab = tabs.some((t) => t.id === activeTab) ? activeTab : tabs[0]?.id
+
+  const scrollToSection = (id: string) => {
+    suppressSpyUntil.current = Date.now() + 700
+    setActiveTab(id)
+    document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" })
+  }
 
   return (
     <section className="bg-background py-10 md:py-16">
@@ -314,269 +361,176 @@ export function VenuePublicPageClient({
           Назад к каталогу
         </Link>
 
+        {/* Галерея — мозаика во всю ширину (клик открывает лайтбокс) */}
+        {carouselSlides.length > 0 && gallery.current ? (
+          <div className="mb-8">
+            {/* мобайл: одно фото-баннер */}
+            <button
+              type="button"
+              onClick={() => gallery.openAt(0)}
+              aria-label="Открыть фотографии"
+              className="group relative block aspect-[4/3] w-full cursor-zoom-in overflow-hidden rounded-2xl bg-muted md:hidden"
+            >
+              <FramedImg src={carouselSlides[0].src} alt={venue.name} />
+              {carouselSlides.length > 1 ? (
+                <span className="absolute bottom-3 right-3 inline-flex items-center gap-1.5 rounded-full bg-black/60 px-3 py-1.5 text-xs font-medium text-white">
+                  <ImageIcon className="h-3.5 w-3.5" />
+                  {carouselSlides.length} фото
+                </span>
+              ) : null}
+            </button>
+
+            {/* десктоп: герой + до 4 миниатюр */}
+            <div className="hidden h-[400px] grid-cols-4 grid-rows-2 gap-1.5 overflow-hidden rounded-2xl md:grid">
+              <button
+                type="button"
+                onClick={() => gallery.openAt(0)}
+                aria-label="Открыть фото 1"
+                className="group relative col-span-2 row-span-2 cursor-zoom-in overflow-hidden bg-muted"
+              >
+                <FramedImg src={carouselSlides[0].src} alt={venue.name} />
+                <span className="pointer-events-none absolute left-3 top-3 z-10 inline-flex items-center gap-1 rounded-md bg-black/55 px-2 py-1 text-xs text-white opacity-0 transition-opacity group-hover:opacity-100">
+                  <Maximize2 className="h-3.5 w-3.5" />
+                  Развернуть
+                </span>
+              </button>
+              {carouselSlides.slice(1, 5).map((slide, i) => {
+                const idx = i + 1
+                const extra = carouselSlides.length - 5
+                return (
+                  <button
+                    key={slide.id}
+                    type="button"
+                    onClick={() => gallery.openAt(idx)}
+                    aria-label={`Открыть фото ${idx + 1}`}
+                    className="group relative cursor-zoom-in overflow-hidden bg-muted"
+                  >
+                    <FramedImg src={slide.src} alt="" />
+                    {i === 3 && extra > 0 ? (
+                      <div className="absolute inset-0 flex items-center justify-center bg-black/55 text-xl font-semibold text-white">
+                        +{extra}
+                      </div>
+                    ) : null}
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+        ) : (
+          <div className="mb-8 flex aspect-[16/7] items-center justify-center rounded-2xl bg-muted">
+            <div className="flex flex-col items-center gap-2 text-muted-foreground/40">
+              <ImageIcon className="h-16 w-16" />
+              <span className="text-sm">Фото ещё не добавлены</span>
+            </div>
+          </div>
+        )}
+
+        {/* Липкие вкладки-разделы */}
+        <div className="sticky top-16 z-30 -mx-4 mb-8 flex gap-1.5 overflow-x-auto border-b border-border bg-background/95 px-4 py-3 backdrop-blur [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+          {tabs.map((t) => (
+            <button
+              key={t.id}
+              type="button"
+              onClick={() => scrollToSection(t.id)}
+              className={cn(
+                "shrink-0 rounded-full px-4 py-1.5 text-sm transition-colors",
+                currentTab === t.id
+                  ? "border border-border bg-card font-medium text-foreground"
+                  : "text-muted-foreground hover:text-foreground",
+              )}
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
+
         <div className="grid gap-8 lg:grid-cols-3">
           {/* Main Content */}
           <div className="lg:col-span-2">
-            {/* Галерея: крупное фото + ряд миниатюр под ним */}
-            <div className="mb-8">
-              {gallery.count > 0 && gallery.current ? (
-                <div className="space-y-3">
-                  <div
-                    className="relative outline-none"
-                    role="region"
-                    aria-label={`Фотографии: ${venue.name}`}
-                    tabIndex={0}
-                    onKeyDown={(e) => {
-                      if (gallery.count < 2) return
-                      if (e.key === "ArrowLeft") { e.preventDefault(); gallery.prev() }
-                      else if (e.key === "ArrowRight") { e.preventDefault(); gallery.next() }
-                    }}
-                  >
-                    <button
-                      type="button"
-                      onClick={() => gallery.openAt(gallery.index)}
-                      aria-label="Открыть фото на весь экран"
-                      className="group relative block aspect-[16/9] w-full cursor-zoom-in overflow-hidden rounded-xl bg-muted"
-                    >
-                      <FramedImg
-                        src={gallery.current.src}
-                        alt={`${venue.name} — фото ${gallery.index + 1} из ${gallery.count}`}
-                      />
-                      <span className="pointer-events-none absolute right-2 top-2 z-10 inline-flex items-center gap-1 rounded-md bg-black/55 px-2 py-1 text-xs text-white opacity-0 transition-opacity group-hover:opacity-100">
-                        <Maximize2 className="h-3.5 w-3.5" />
-                        Развернуть
-                      </span>
-                    </button>
-                    {gallery.count > 1 ? (
-                      <>
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="icon"
-                          className="absolute left-2 top-1/2 z-10 size-9 -translate-y-1/2 border-border/80 bg-background/90 shadow-sm hover:bg-background"
-                          aria-label="Предыдущее фото"
-                          onClick={gallery.prev}
-                        >
-                          <ChevronLeft className="size-5" />
-                        </Button>
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="icon"
-                          className="absolute right-2 top-1/2 z-10 size-9 -translate-y-1/2 border-border/80 bg-background/90 shadow-sm hover:bg-background"
-                          aria-label="Следующее фото"
-                          onClick={gallery.next}
-                        >
-                          <ChevronRight className="size-5" />
-                        </Button>
-                      </>
-                    ) : null}
-                  </div>
-                  <div
-                    className="flex gap-2 overflow-x-auto p-1.5 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
-                    role="tablist"
-                    aria-label="Миниатюры фотографий"
-                  >
-                    {carouselSlides.map((slide, i) => (
-                      <button
-                        key={slide.id}
-                        type="button"
-                        role="tab"
-                        aria-selected={i === gallery.index}
-                        aria-label={`Фото ${i + 1}`}
-                        onClick={() => gallery.goTo(i)}
-                        className={cn(
-                          "relative h-16 w-16 shrink-0 overflow-hidden rounded-md bg-muted transition-[opacity,box-shadow]",
-                          i === gallery.index
-                            ? "ring-2 ring-primary ring-offset-2 ring-offset-background"
-                            : "opacity-90 hover:opacity-100",
-                        )}
-                      >
-                        <img
-                          src={slide.src}
-                          alt=""
-                          className="h-full w-full object-cover"
-                        />
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              ) : (
-                <div className="flex aspect-[16/9] items-center justify-center rounded-xl bg-muted">
-                  <div className="flex flex-col items-center gap-2 text-muted-foreground/40">
-                    <ImageIcon className="h-16 w-16" />
-                    <span className="text-sm">Фото ещё не добавлены</span>
-                  </div>
-                </div>
-              )}
-            </div>
-
             {/* Venue Header */}
             <div className="mb-8">
-              <div className="mb-4 flex flex-wrap items-center gap-3">
-                <Badge className="bg-primary/10 text-primary border-primary/20">
-                  {VENUE_TYPE_LABELS[venue.type] ?? venue.type}
-                </Badge>
-                {verified && (
-                  <Badge className="gap-1.5 border-emerald-200 bg-emerald-50 text-emerald-700">
-                    <ShieldCheck className="h-3.5 w-3.5" />
-                    Проверено
-                  </Badge>
-                )}
+              <div className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
                 {venue.rating > 0 && (
-                  <div className="flex items-center gap-1">
-                    <Star className="h-5 w-5 fill-amber-400 text-amber-400" />
-                    <span className="font-semibold">{venue.rating.toFixed(1)}</span>
+                  <span className="inline-flex items-center gap-1.5 text-foreground">
+                    <Star className="h-4 w-4 fill-amber-400 text-amber-400" />
+                    <span className="font-medium">{venue.rating.toFixed(1)}</span>
                     <span className="text-muted-foreground">({venue.review_count} отзывов)</span>
-                  </div>
+                  </span>
+                )}
+                {verified && (
+                  <>
+                    {venue.rating > 0 && <span className="text-border" aria-hidden>·</span>}
+                    <span className="inline-flex items-center gap-1.5 text-emerald-700">
+                      <ShieldCheck className="h-4 w-4" />
+                      Проверено
+                    </span>
+                  </>
                 )}
               </div>
-              <h1 className="mb-4 text-3xl font-bold text-foreground md:text-4xl">{venue.name}</h1>
-              <div className="flex flex-col gap-2 text-muted-foreground">
-                <div className="flex items-center gap-2">
-                  <MapPin className="h-5 w-5 shrink-0" />
-                  {venue.city}{venue.address ? `, ${venue.address}` : ""}
-                </div>
-                {venue.phone && (
-                  <div className="flex items-center gap-2">
-                    <Phone className="h-5 w-5 shrink-0" />
-                    {venue.phone}
-                  </div>
-                )}
-                {venue.social_links &&
-                  typeof venue.social_links === "object" &&
-                  !Array.isArray(venue.social_links) && (
-                    <div className="mt-1 flex flex-wrap gap-x-4 gap-y-2">
-                      {(Object.entries(venue.social_links) as [string, unknown][])
-                        .filter(
-                          ([, u]) =>
-                            typeof u === "string" && u.trim().length > 0,
-                        )
-                        .map(([key, u]) => {
-                          const url = String(u).trim()
-                          const label =
-                            VENUE_SOCIAL_PUBLIC_LABELS[
-                              key as VenueSocialLinkKey
-                            ] ?? key
-                          return (
-                            <a
-                              key={key}
-                              href={socialHref(url)}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="inline-flex items-center gap-1.5 text-sm font-medium text-primary hover:underline"
-                            >
-                              <ExternalLink className="h-4 w-4 shrink-0" />
-                              {label}
-                            </a>
-                          )
-                        })}
-                    </div>
-                  )}
+              <h1 className="mb-2 text-3xl font-bold text-foreground md:text-4xl">{venue.name}</h1>
+              <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-sm text-muted-foreground">
+                <MapPin className="h-4 w-4 shrink-0" />
+                <span>{venue.city}{venue.address ? `, ${venue.address}` : ""}</span>
+                <span aria-hidden>·</span>
+                <span>{VENUE_TYPE_LABELS[venue.type] ?? venue.type}</span>
               </div>
-
-              {(venueHours || (venue.capacity ?? 0) > 0 || hallsCount > 0) && (
-                <div className="mt-6 flex flex-wrap gap-3">
-                  {venueHours && (
-                    <div className="flex min-w-[8.5rem] items-center gap-2.5 rounded-xl border border-border bg-card px-3.5 py-2.5">
-                      <Clock className="h-5 w-5 shrink-0 text-primary" />
-                      <div className="leading-tight">
-                        <div className="text-xs text-muted-foreground">Часы работы</div>
-                        <div className="text-sm font-medium text-foreground">{venueHours}</div>
-                      </div>
-                    </div>
-                  )}
-                  {(venue.capacity ?? 0) > 0 && (
-                    <div className="flex min-w-[8.5rem] items-center gap-2.5 rounded-xl border border-border bg-card px-3.5 py-2.5">
-                      <Users className="h-5 w-5 shrink-0 text-primary" />
-                      <div className="leading-tight">
-                        <div className="text-xs text-muted-foreground">Вместимость</div>
-                        <div className="text-sm font-medium text-foreground">до {venue.capacity} чел.</div>
-                      </div>
-                    </div>
-                  )}
-                  {hallsCount > 0 && (
-                    <div className="flex min-w-[8.5rem] items-center gap-2.5 rounded-xl border border-border bg-card px-3.5 py-2.5">
-                      <DoorOpen className="h-5 w-5 shrink-0 text-primary" />
-                      <div className="leading-tight">
-                        <div className="text-xs text-muted-foreground">Залов</div>
-                        <div className="text-sm font-medium text-foreground">{hallsCount}</div>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              )}
             </div>
-
-            {/* Description */}
-            {venue.description && (
-              <div className="mb-8">
-                <h2 className="mb-4 text-xl font-semibold text-foreground">Описание</h2>
-                <p className="leading-relaxed text-muted-foreground">{venue.description}</p>
-              </div>
-            )}
 
             {/* Services */}
             {venue.services && venue.services.length > 0 && (
-              <div className="mb-8">
-                <h2 className="mb-2 text-xl font-semibold text-foreground">Услуги и цены</h2>
-                <p className="mb-4 text-sm text-muted-foreground">
-                  Нажмите на карточку, чтобы добавить услугу в бронь или убрать её. Можно выбрать несколько пакетов
-                  одновременно; время визита и стоимость справа подстроятся под выбор.
+              <div id="services" className="mb-10 scroll-mt-32">
+                <h2 className="mb-1 text-xl font-semibold text-foreground">Услуги и цены</h2>
+                <p className="mb-3 text-sm text-muted-foreground">
+                  Выберите пакеты — время визита и стоимость справа подстроятся. Можно выбрать несколько.
                 </p>
-                <div className="space-y-3">
+                <div className="divide-y divide-border border-y border-border">
                   {venue.services.map((svc) => {
                     const selected = selectedServiceIds.includes(svc.id)
+                    const toggle = () =>
+                      setSelectedServiceIds((prev) =>
+                        prev.includes(svc.id) ? prev.filter((x) => x !== svc.id) : [...prev, svc.id],
+                      )
                     return (
-                      <Card
+                      <div
                         key={svc.id}
                         role="button"
                         tabIndex={0}
                         aria-pressed={selected}
-                        onClick={() =>
-                          setSelectedServiceIds((prev) =>
-                            prev.includes(svc.id) ? prev.filter((x) => x !== svc.id) : [...prev, svc.id],
-                          )
-                        }
+                        onClick={toggle}
                         onKeyDown={(e) => {
                           if (e.key === "Enter" || e.key === " ") {
                             e.preventDefault()
-                            setSelectedServiceIds((prev) =>
-                              prev.includes(svc.id) ? prev.filter((x) => x !== svc.id) : [...prev, svc.id],
-                            )
+                            toggle()
                           }
                         }}
                         className={cn(
-                          "cursor-pointer border-2 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-                          selected ? "border-primary bg-primary/5" : "border-border hover:border-primary/40",
+                          "flex cursor-pointer items-center gap-4 py-4 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                          selected && "bg-primary/5",
                         )}
                       >
-                        <CardContent className="relative flex items-center justify-between gap-4 p-4 pr-14">
-                          {selected ? (
-                            <div
-                              className="absolute right-3 top-1/2 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-full bg-primary text-primary-foreground"
-                              aria-hidden
-                            >
-                              <Check className="h-4 w-4" />
-                            </div>
-                          ) : null}
-                          <div className="min-w-0">
-                            <p className="font-medium text-card-foreground">{svc.name}</p>
-                            {venueServiceDurationMinutes(svc) > 0 && (
-                              <p className="text-sm text-muted-foreground">
-                                {venueServiceDurationMinutes(svc)} мин
-                              </p>
-                            )}
-                          </div>
-                          {svc.price > 0 ? (
-                            <span className="shrink-0 font-semibold text-primary">
-                              {svc.price.toLocaleString("ru-RU")} ₽
-                            </span>
-                          ) : (
-                            <span className="shrink-0 text-sm text-muted-foreground">Почасово</span>
+                        <div className="min-w-0 flex-1">
+                          <p className="font-medium text-card-foreground">{svc.name}</p>
+                          {venueServiceDurationMinutes(svc) > 0 && (
+                            <p className="mt-0.5 text-sm text-muted-foreground">
+                              {venueServiceDurationMinutes(svc)} мин
+                            </p>
                           )}
-                        </CardContent>
-                      </Card>
+                          <p className="mt-1.5 text-sm font-medium text-foreground">
+                            {svc.price > 0 ? `${svc.price.toLocaleString("ru-RU")} ₽` : "Почасово"}
+                          </p>
+                        </div>
+                        <span
+                          className={cn(
+                            "inline-flex shrink-0 items-center gap-1.5 rounded-full px-4 py-2 text-sm font-medium transition-colors",
+                            selected
+                              ? "bg-primary text-primary-foreground"
+                              : "border border-input bg-background text-foreground",
+                          )}
+                        >
+                          {selected && <Check className="h-4 w-4" />}
+                          {selected ? "Выбрано" : "Выбрать"}
+                        </span>
+                      </div>
                     )
                   })}
                 </div>
@@ -585,95 +539,81 @@ export function VenuePublicPageClient({
 
             {/* Залы */}
             {venue.halls && venue.halls.length > 0 ? (
-              <div className="mb-8">
-                <h2 className="mb-2 text-xl font-semibold text-foreground">Залы</h2>
+              <div id="halls" className="mb-10 scroll-mt-32">
+                <h2 className="mb-1 text-xl font-semibold text-foreground">Залы</h2>
                 <p className="mb-4 text-sm text-muted-foreground">
-                  Нажмите на карточку зала, чтобы добавить его в бронь или убрать. Можно выбрать несколько залов;
-                  почасовая часть стоимости справа считается по максимальной ставке среди заведения и выбранных залов.
+                  Выберите залы для брони. Почасовая ставка справа считается по максимальной среди заведения и выбранных залов.
                 </p>
-                <div className="space-y-6">
+                <div className="space-y-4">
                   {venue.halls.map((hall) => {
                     const hallSelected = selectedHallIds.includes(hall.id)
+                    const toggleHall = () =>
+                      setSelectedHallIds((prev) =>
+                        prev.includes(hall.id) ? prev.filter((x) => x !== hall.id) : [...prev, hall.id],
+                      )
                     return (
-                      <Card
+                      <div
                         key={hall.id}
                         role="button"
                         tabIndex={0}
                         aria-pressed={hallSelected}
-                        onClick={() =>
-                          setSelectedHallIds((prev) =>
-                            prev.includes(hall.id)
-                              ? prev.filter((x) => x !== hall.id)
-                              : [...prev, hall.id],
-                          )
-                        }
+                        onClick={toggleHall}
                         onKeyDown={(e) => {
                           if (e.key === "Enter" || e.key === " ") {
                             e.preventDefault()
-                            setSelectedHallIds((prev) =>
-                              prev.includes(hall.id)
-                                ? prev.filter((x) => x !== hall.id)
-                                : [...prev, hall.id],
-                            )
+                            toggleHall()
                           }
                         }}
                         className={cn(
-                          "cursor-pointer overflow-hidden border-2 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-                          hallSelected
-                            ? "border-primary bg-primary/5"
-                            : "border-border hover:border-primary/40",
+                          "cursor-pointer overflow-hidden rounded-2xl border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                          hallSelected ? "border-primary bg-primary/5" : "border-border hover:border-primary/40",
                         )}
                       >
-                        <CardContent className="relative p-0">
-                          {hallSelected ? (
-                            <div
-                              className="absolute right-3 top-3 z-10 flex h-8 w-8 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-sm"
-                              aria-hidden
-                            >
-                              <Check className="h-4 w-4" />
-                            </div>
-                          ) : null}
-                          <HallPhotos photos={hall.photos ?? []} />
-                          <div className="space-y-3 p-4 pr-14 sm:p-5 sm:pr-16">
-                            <h3 className="text-lg font-semibold text-foreground">
-                              {hall.name}
-                            </h3>
-                            <div className="flex flex-wrap gap-3 text-sm text-muted-foreground">
+                        <HallPhotos photos={hall.photos ?? []} />
+                        <div className="flex items-center gap-4 p-4 sm:p-5">
+                          <div className="min-w-0 flex-1 space-y-2">
+                            <h3 className="text-lg font-semibold text-foreground">{hall.name}</h3>
+                            <div className="flex flex-wrap gap-x-3 gap-y-1 text-sm text-muted-foreground">
                               {hall.price_from > 0 ? (
                                 <span>
                                   от{" "}
-                                  <span className="font-semibold text-primary">
+                                  <span className="font-semibold text-foreground">
                                     {hall.price_from.toLocaleString("ru-RU")} ₽
                                   </span>
                                   /час
                                 </span>
                               ) : null}
-                              {hall.capacity > 0 ? (
-                                <span>до {hall.capacity} гостей</span>
-                              ) : null}
+                              {hall.capacity > 0 ? <span>до {hall.capacity} гостей</span> : null}
                             </div>
                             {hall.amenities && hall.amenities.length > 0 ? (
-                              <div className="flex flex-wrap gap-2">
+                              <div className="flex flex-wrap gap-2 pt-1">
                                 {hall.amenities.map((a) => (
-                                  <Badge
-                                    key={`${hall.id}-${a}`}
-                                    variant="secondary"
-                                    className="px-3 py-1 text-sm"
-                                  >
+                                  <Badge key={`${hall.id}-${a}`} variant="secondary" className="px-3 py-1 text-sm">
                                     {a}
                                   </Badge>
                                 ))}
                               </div>
                             ) : null}
                           </div>
-                        </CardContent>
-                      </Card>
+                          <span
+                            className={cn(
+                              "inline-flex shrink-0 items-center gap-1.5 self-start rounded-full px-4 py-2 text-sm font-medium transition-colors",
+                              hallSelected
+                                ? "bg-primary text-primary-foreground"
+                                : "border border-input bg-background text-foreground",
+                            )}
+                          >
+                            {hallSelected && <Check className="h-4 w-4" />}
+                            {hallSelected ? "Выбрано" : "Выбрать"}
+                          </span>
+                        </div>
+                      </div>
                     )
                   })}
                 </div>
               </div>
             ) : venue.amenities && venue.amenities.length > 0 ? (
-              <div className="mb-8">
+              <div className="mb-10">
                 <h2 className="mb-4 text-xl font-semibold text-foreground">Удобства</h2>
                 <div className="flex flex-wrap gap-2">
                   {venue.amenities.map((a) => (
@@ -686,17 +626,88 @@ export function VenuePublicPageClient({
             ) : null}
 
             {/* Reviews */}
-            <div>
+            <div id="reviews" className="mb-10 scroll-mt-32">
               <h2 className="mb-6 text-xl font-semibold text-foreground">
                 Отзывы {totalReviews > 0 && `(${totalReviews})`}
               </h2>
               <ReviewList targetId={venue.id} targetType="venue" reviews={reviews} onReviewAdded={reloadReviews} />
             </div>
+
+            {/* О месте */}
+            {hasAbout && (
+              <div id="about" className="scroll-mt-32">
+                <h2 className="mb-4 text-xl font-semibold text-foreground">О месте</h2>
+                {venue.description && (
+                  <p className="mb-5 leading-relaxed text-muted-foreground">{venue.description}</p>
+                )}
+                {(venueHours || capacity > 0 || hallsCount > 0) && (
+                  <div className="mb-5 flex flex-wrap gap-3">
+                    {venueHours && (
+                      <div className="flex min-w-[8.5rem] items-center gap-2.5 rounded-xl border border-border bg-card px-3.5 py-2.5">
+                        <Clock className="h-5 w-5 shrink-0 text-primary" />
+                        <div className="leading-tight">
+                          <div className="text-xs text-muted-foreground">Часы работы</div>
+                          <div className="text-sm font-medium text-foreground">{venueHours}</div>
+                        </div>
+                      </div>
+                    )}
+                    {capacity > 0 && (
+                      <div className="flex min-w-[8.5rem] items-center gap-2.5 rounded-xl border border-border bg-card px-3.5 py-2.5">
+                        <Users className="h-5 w-5 shrink-0 text-primary" />
+                        <div className="leading-tight">
+                          <div className="text-xs text-muted-foreground">Вместимость</div>
+                          <div className="text-sm font-medium text-foreground">до {capacity} чел.</div>
+                        </div>
+                      </div>
+                    )}
+                    {hallsCount > 0 && (
+                      <div className="flex min-w-[8.5rem] items-center gap-2.5 rounded-xl border border-border bg-card px-3.5 py-2.5">
+                        <DoorOpen className="h-5 w-5 shrink-0 text-primary" />
+                        <div className="leading-tight">
+                          <div className="text-xs text-muted-foreground">Залов</div>
+                          <div className="text-sm font-medium text-foreground">{hallsCount}</div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+                {(venue.phone || socialEntries.length > 0) && (
+                  <div className="flex flex-col gap-2 text-sm text-muted-foreground">
+                    {venue.phone && (
+                      <div className="flex items-center gap-2">
+                        <Phone className="h-4 w-4 shrink-0" />
+                        {venue.phone}
+                      </div>
+                    )}
+                    {socialEntries.length > 0 && (
+                      <div className="flex flex-wrap gap-x-4 gap-y-2">
+                        {socialEntries.map(([key, u]) => {
+                          const url = String(u).trim()
+                          const label = VENUE_SOCIAL_PUBLIC_LABELS[key as VenueSocialLinkKey] ?? key
+                          return (
+                            <a
+                              key={key}
+                              href={socialHref(url)}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="inline-flex items-center gap-1.5 font-medium text-primary hover:underline"
+                            >
+                              <ExternalLink className="h-4 w-4 shrink-0" />
+                              {label}
+                            </a>
+                          )
+                        })}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
 
           {/* Booking Sidebar */}
           <div className="lg:col-span-1">
-            <Card className="sticky top-24 border-border">
+            <Card className="sticky top-24 rounded-2xl border-border">
               <CardHeader>
                 <div className="flex items-baseline justify-between gap-2">
                   <CardTitle className="text-xl text-card-foreground">Забронировать</CardTitle>
@@ -922,7 +933,7 @@ export function VenuePublicPageClient({
                     </p>
                   )}
                   <Button
-                    className="w-full"
+                    className="w-full rounded-full"
                     size="lg"
                     disabled={!user || !date || !time || !slotValid || booking}
                     onClick={handleBook}

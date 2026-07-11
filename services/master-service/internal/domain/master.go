@@ -62,6 +62,14 @@ var (
 	// The usecase maps this to an Aborted gRPC status so the client can refresh
 	// and retry with the current state rather than silently overwriting it.
 	ErrModerationConflict = errors.New("moderation conflict: status changed by another moderator")
+
+	// ErrSlotTaken is returned by InsertBooking when the exclusion constraint
+	// master_bookings_no_overlap (migration 024) fires: another non-cancelled
+	// booking already covers an overlapping interval for this master. Enforced
+	// at the DB layer so two concurrent bookings (or a double-clicked request)
+	// cannot both create a payment_pending row for the same slot. The usecase
+	// maps it to Aborted so the client picks a different time.
+	ErrSlotTaken = errors.New("slot already booked")
 )
 
 // MaxMasterPhotos is the maximum number of photos allowed per master profile.

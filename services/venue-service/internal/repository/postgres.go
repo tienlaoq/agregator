@@ -44,6 +44,11 @@ var ErrVenuePhotosLimit = errors.New("venue photos limit reached")
 // ErrHallPhotosLimit is returned when adding a hall photo would exceed the per-hall limit.
 var ErrHallPhotosLimit = errors.New("hall photos limit reached")
 
+// ErrBookingModeHasReservations is returned when a booking-mode switch is
+// refused because the venue still has upcoming reserved slots keyed to the
+// current mode (see SetBookingMode for the exclusion-constraint rationale).
+var ErrBookingModeHasReservations = errors.New("booking mode has upcoming reservations")
+
 type venueRepo struct {
 	pool *pgxpool.Pool
 }
@@ -126,6 +131,37 @@ func (r *venueRepo) Create(ctx context.Context, venue *domain.Venue) error {
 		svc.VenueID = venue.ID
 	}
 
+	// Halls ride in the same transaction as the venue row, so a create either
+	// lands the whole card (venue + services + halls) or nothing — no orphan
+	// venue left behind if hall insertion fails.
+	for i := range venue.Halls {
+		h := &venue.Halls[i]
+		amenities := h.Amenities
+		if amenities == nil {
+			amenities = []string{}
+		}
+		if err = tx.QueryRow(ctx, `
+			INSERT INTO venue_halls (venue_id, name, price_from, capacity, amenities, sort_order)
+			VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
+			venue.ID, h.Name, h.PriceFrom, h.Capacity, amenities, int32(i),
+		).Scan(&h.ID); err != nil {
+			return fmt.Errorf("insert venue_hall: %w", err)
+		}
+		h.VenueID = venue.ID
+		h.SortOrder = int32(i)
+		h.Photos = []domain.VenueHallPhoto{}
+	}
+	if len(venue.Halls) > 0 {
+		pf, capacity, am := derivedVenueFieldsFromHalls(venue.Halls)
+		if _, err := tx.Exec(ctx, `
+			UPDATE venues SET price_from = $2, capacity = $3, amenities = $4 WHERE id = $1`,
+			venue.ID, pf, capacity, am,
+		); err != nil {
+			return fmt.Errorf("update venue derived from halls: %w", err)
+		}
+		venue.PriceFrom, venue.Capacity, venue.Amenities = pf, capacity, am
+	}
+
 	return tx.Commit(ctx)
 }
 
@@ -170,6 +206,9 @@ func (r *venueRepo) Update(ctx context.Context, venue *domain.Venue) error {
 		venue.SocialLinks = "{}"
 	}
 
+	// Editing an active/rejected card sends it back to moderation. The status
+	// transition rides in the same UPDATE as the content, so a partial failure
+	// can never leave edited content live under the old "active" status.
 	_, err := r.pool.Exec(ctx, `
 		UPDATE venues SET
 			name = $2, description = $3, address = $4, city = $5,
@@ -179,6 +218,11 @@ func (r *venueRepo) Update(ctx context.Context, venue *domain.Venue) error {
 			legal_entity_name = $13, inn = $14, ogrn = $15,
 			public_listing_url = $16, social_links = $17::jsonb, verification_note = $18,
 			payout_legal_form = $19,
+			status = CASE WHEN status IN ('active', 'rejected') THEN 'pending_review' ELSE status END,
+			is_active = CASE WHEN status IN ('active', 'rejected') THEN false ELSE is_active END,
+			moderation_comment = CASE WHEN status IN ('active', 'rejected') THEN '' ELSE moderation_comment END,
+			moderated_at = CASE WHEN status IN ('active', 'rejected') THEN NULL ELSE moderated_at END,
+			moderated_by = CASE WHEN status IN ('active', 'rejected') THEN NULL ELSE moderated_by END,
 			updated_at = now()
 		WHERE id = $1`,
 		venue.ID, venue.Name, venue.Description, venue.Address, venue.City,
@@ -220,17 +264,7 @@ func (r *venueRepo) GetByIDs(ctx context.Context, ids []uuid.UUID) ([]domain.Ven
 	var venues []domain.Venue
 	for rows.Next() {
 		var v domain.Venue
-		if err := rows.Scan(
-			&v.ID, &v.OwnerID, &v.Slug, &v.Name, &v.Type, &v.Description, &v.Address, &v.City,
-			&v.Latitude, &v.Longitude,
-			&v.PriceFrom, &v.Capacity, &v.Amenities, &v.WorkingHours, &v.Phone,
-			&v.AvgRating, &v.ReviewCount, &v.IsActive, &v.Status, &v.ModerationComment,
-			&v.ModeratedAt, &v.ModeratedBy,
-			&v.LegalEntityName, &v.INN, &v.OGRN, &v.PublicListingURL, &v.VerificationNote,
-			&v.SocialLinks,
-			&v.PayoutLegalForm,
-			&v.CreatedAt, &v.UpdatedAt,
-		); err != nil {
+		if err := rows.Scan(venueScanTargets(&v)...); err != nil {
 			return nil, fmt.Errorf("scan venue batch: %w", err)
 		}
 		venues = append(venues, v)
@@ -261,17 +295,7 @@ func (r *venueRepo) getVenue(ctx context.Context, where string, arg any) (*domai
 			COALESCE(v.payout_legal_form, ''),
 			v.created_at, v.updated_at
 		FROM venues v `+where, arg,
-	).Scan(
-		&v.ID, &v.OwnerID, &v.Slug, &v.Name, &v.Type, &v.Description, &v.Address, &v.City,
-		&v.Latitude, &v.Longitude,
-		&v.PriceFrom, &v.Capacity, &v.Amenities, &v.WorkingHours, &v.Phone,
-		&v.AvgRating, &v.ReviewCount, &v.IsActive, &v.Status, &v.ModerationComment,
-		&v.ModeratedAt, &v.ModeratedBy,
-		&v.LegalEntityName, &v.INN, &v.OGRN, &v.PublicListingURL, &v.VerificationNote,
-		&v.SocialLinks,
-		&v.PayoutLegalForm,
-		&v.CreatedAt, &v.UpdatedAt,
-	)
+	).Scan(venueScanTargets(v)...)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
@@ -279,24 +303,9 @@ func (r *venueRepo) getVenue(ctx context.Context, where string, arg any) (*domai
 		return nil, fmt.Errorf("get venue: %w", err)
 	}
 
-	services, err := r.getServices(ctx, v.ID)
-	if err != nil {
+	if err := r.attachVenueDetails(ctx, v); err != nil {
 		return nil, err
 	}
-	v.Services = services
-
-	photos, err := r.getPhotos(ctx, v.ID)
-	if err != nil {
-		return nil, err
-	}
-	v.Photos = photos
-
-	halls, err := r.getHallsWithPhotos(ctx, v.ID)
-	if err != nil {
-		return nil, err
-	}
-	v.Halls = halls
-
 	return v, nil
 }
 
@@ -428,17 +437,13 @@ func (r *venueRepo) getHallsWithPhotosByVenueIDs(ctx context.Context, venueIDs [
 	}
 	defer rows.Close()
 
-	type hallRow struct {
-		h       domain.VenueHall
-		venueID uuid.UUID
-	}
-	var flat []hallRow
+	var flat []domain.VenueHall
 	for rows.Next() {
 		var h domain.VenueHall
 		if err := rows.Scan(&h.ID, &h.VenueID, &h.Name, &h.PriceFrom, &h.Capacity, &h.Amenities, &h.SortOrder); err != nil {
 			return nil, fmt.Errorf("scan venue_hall: %w", err)
 		}
-		flat = append(flat, hallRow{h: h, venueID: h.VenueID})
+		flat = append(flat, h)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -449,7 +454,7 @@ func (r *venueRepo) getHallsWithPhotosByVenueIDs(ctx context.Context, venueIDs [
 
 	hallIDs := make([]uuid.UUID, len(flat))
 	for i := range flat {
-		hallIDs[i] = flat[i].h.ID
+		hallIDs[i] = flat[i].ID
 	}
 	prows, err := r.pool.Query(ctx, `
 		SELECT id, hall_id, url, sort_order, is_cover
@@ -471,13 +476,12 @@ func (r *venueRepo) getHallsWithPhotosByVenueIDs(ctx context.Context, venueIDs [
 	if err := prows.Err(); err != nil {
 		return nil, err
 	}
-	for _, hr := range flat {
-		h := hr.h
+	for _, h := range flat {
 		h.Photos = byHall[h.ID]
 		if h.Photos == nil {
 			h.Photos = []domain.VenueHallPhoto{}
 		}
-		out[hr.venueID] = append(out[hr.venueID], h)
+		out[h.VenueID] = append(out[h.VenueID], h)
 	}
 	return out, nil
 }
@@ -664,7 +668,9 @@ func (r *venueRepo) Search(ctx context.Context, params domain.SearchParams) (*do
 		}
 	}
 
-	if params.Lat != 0 && params.Lng != 0 && params.RadiusKM > 0 {
+	// A positive radius is the sole gate: the caller sets RadiusKM only when it
+	// wants a geo filter, so Lat/Lng of exactly 0 stay valid coordinates.
+	if params.RadiusKM > 0 {
 		conditions = append(conditions, fmt.Sprintf(
 			"ST_DWithin(location, ST_SetSRID(ST_MakePoint($%d, $%d), 4326)::geography, $%d)", argIdx, argIdx+1, argIdx+2))
 		args = append(args, params.Lng, params.Lat, params.RadiusKM*1000)
@@ -876,10 +882,8 @@ func (r *venueRepo) ListByStatus(ctx context.Context, status string, page, pageS
 	if err != nil {
 		return nil, err
 	}
-	for i := range venues {
-		if err := r.attachVenueDetails(ctx, &venues[i]); err != nil {
-			return nil, err
-		}
+	if err := r.attachVenueDetailsBatch(ctx, venues); err != nil {
+		return nil, err
 	}
 	return &domain.ListResult{Venues: venues, Total: total, Page: page, PageSize: pageSize}, nil
 }
@@ -909,13 +913,27 @@ func (r *venueRepo) SuspendByOwner(ctx context.Context, ownerID uuid.UUID) (int6
 	return tag.RowsAffected(), nil
 }
 
+const resetToPendingReviewSQL = `
+	UPDATE venues
+	SET status = $2, moderation_comment = '', is_active = false,
+	    moderated_at = NULL, moderated_by = NULL,
+	    updated_at = now()
+	WHERE id = $1 AND status IN ($3, $4)`
+
 func (r *venueRepo) ResetToPendingReview(ctx context.Context, venueID uuid.UUID) error {
-	_, err := r.pool.Exec(ctx, `
-		UPDATE venues
-		SET status = $2, moderation_comment = '', is_active = false,
-		    moderated_at = NULL, moderated_by = NULL,
-		    updated_at = now()
-		WHERE id = $1 AND status IN ($3, $4)`,
+	_, err := r.pool.Exec(ctx, resetToPendingReviewSQL,
+		venueID, domain.StatusPendingReview, domain.StatusActive, domain.StatusRejected)
+	if err != nil {
+		return fmt.Errorf("reset to pending_review: %w", err)
+	}
+	return nil
+}
+
+// resetToPendingReviewTx sends an active/rejected venue back to pending_review
+// inside an existing transaction, so a content edit (photos, halls) and its
+// re-moderation flag commit atomically. No-op for draft/pending/suspended.
+func resetToPendingReviewTx(ctx context.Context, tx pgx.Tx, venueID uuid.UUID) error {
+	_, err := tx.Exec(ctx, resetToPendingReviewSQL,
 		venueID, domain.StatusPendingReview, domain.StatusActive, domain.StatusRejected)
 	if err != nil {
 		return fmt.Errorf("reset to pending_review: %w", err)
@@ -973,6 +991,9 @@ func (r *venueRepo) AddVenuePhoto(ctx context.Context, venueID, ownerID uuid.UUI
 	if err != nil {
 		return nil, fmt.Errorf("insert venue_photo: %w", err)
 	}
+	if err := resetToPendingReviewTx(ctx, tx, venueID); err != nil {
+		return nil, err
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return nil, fmt.Errorf("commit: %w", err)
 	}
@@ -1013,6 +1034,9 @@ func (r *venueRepo) DeleteVenuePhoto(ctx context.Context, venueID, ownerID, phot
 		return "", fmt.Errorf("set cover: %w", err)
 	}
 
+	if err := resetToPendingReviewTx(ctx, tx, venueID); err != nil {
+		return "", err
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return "", fmt.Errorf("commit: %w", err)
 	}
@@ -1042,6 +1066,9 @@ func (r *venueRepo) SetVenueCoverPhoto(ctx context.Context, venueID, ownerID, ph
 	}
 	if ct.RowsAffected() == 0 {
 		return ErrPhotoNotFound
+	}
+	if err := resetToPendingReviewTx(ctx, tx, venueID); err != nil {
+		return err
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("commit: %w", err)
@@ -1171,6 +1198,9 @@ func (r *venueRepo) ReplaceVenueHalls(ctx context.Context, venueID, ownerID uuid
 		return fmt.Errorf("update venue derived from halls: %w", err)
 	}
 
+	if err := resetToPendingReviewTx(ctx, tx, venueID); err != nil {
+		return err
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("commit: %w", err)
 	}
@@ -1223,6 +1253,9 @@ func (r *venueRepo) AddVenueHallPhoto(ctx context.Context, venueID, hallID uuid.
 	if err != nil {
 		return nil, fmt.Errorf("insert venue_hall_photo: %w", err)
 	}
+	if err := resetToPendingReviewTx(ctx, tx, venueID); err != nil {
+		return nil, err
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return nil, fmt.Errorf("commit: %w", err)
 	}
@@ -1270,6 +1303,9 @@ func (r *venueRepo) DeleteVenueHallPhoto(ctx context.Context, venueID, hallID, p
 		return "", fmt.Errorf("set hall cover: %w", err)
 	}
 
+	if err := resetToPendingReviewTx(ctx, tx, venueID); err != nil {
+		return "", err
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return "", fmt.Errorf("commit: %w", err)
 	}
@@ -1306,6 +1342,9 @@ func (r *venueRepo) SetVenueHallCoverPhoto(ctx context.Context, venueID, hallID,
 	}
 	if ct.RowsAffected() == 0 {
 		return ErrPhotoNotFound
+	}
+	if err := resetToPendingReviewTx(ctx, tx, venueID); err != nil {
+		return err
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("commit: %w", err)
@@ -1510,12 +1549,52 @@ func (r *venueRepo) BookingMode(ctx context.Context, venueID uuid.UUID) (string,
 	return mode, nil
 }
 
-// SetBookingMode updates the venue's booking mode.
+// SetBookingMode updates the venue's booking mode, refusing a real switch while
+// upcoming reservations exist.
+//
+// The reserved_slots exclusion constraint keys on COALESCE(hall_id, venue_id):
+// whole-venue rows key on venue_id, per-hall rows on hall_id, so the two key
+// domains never overlap. Flipping the mode with upcoming rows still on the books
+// would let a new booking overlap an old one without the constraint (or the
+// mode-derived CheckSlot query) ever noticing — so we block it.
+//
+// ponytail: the venue row lock serializes concurrent mode switches and gives a
+// consistent mode read, but a ReserveSlot racing this switch reads booking_mode
+// without that lock, so a reservation landing in the same instant is not fenced
+// out. Practically negligible (mode change is a rare owner action); tighten by
+// share-locking the venue in ReserveSlot if it ever matters.
 func (r *venueRepo) SetBookingMode(ctx context.Context, venueID uuid.UUID, mode string) error {
-	if _, err := r.pool.Exec(ctx, `UPDATE venues SET booking_mode = $2 WHERE id = $1`, venueID, mode); err != nil {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("set booking mode begin: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	var current string
+	if err := tx.QueryRow(ctx, `SELECT booking_mode FROM venues WHERE id = $1 FOR UPDATE`, venueID).Scan(&current); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrVenueNotFound
+		}
+		return fmt.Errorf("lock venue for booking mode: %w", err)
+	}
+	if current == mode {
+		return tx.Commit(ctx) // no-op switch, nothing to guard
+	}
+
+	var n int
+	if err := tx.QueryRow(ctx, `
+		SELECT COUNT(*) FROM reserved_slots
+		WHERE venue_id = $1 AND date >= CURRENT_DATE`, venueID).Scan(&n); err != nil {
+		return fmt.Errorf("count upcoming reserved slots: %w", err)
+	}
+	if n > 0 {
+		return ErrBookingModeHasReservations
+	}
+
+	if _, err := tx.Exec(ctx, `UPDATE venues SET booking_mode = $2 WHERE id = $1`, venueID, mode); err != nil {
 		return fmt.Errorf("set booking mode: %w", err)
 	}
-	return nil
+	return tx.Commit(ctx)
 }
 
 func (r *venueRepo) ReleaseSlot(ctx context.Context, venueID, bookingID uuid.UUID) error {
@@ -1682,6 +1761,23 @@ func (r *venueRepo) ListVenueSchedule(ctx context.Context, venueID uuid.UUID, da
 	return out, rows.Err()
 }
 
+// venueScanTargets returns Scan destinations for the full venue column list, in
+// the order every venue SELECT in this file projects them. Shared so the column
+// list lives in one place across getVenue/GetByIDs/scanVenues*.
+func venueScanTargets(v *domain.Venue) []any {
+	return []any{
+		&v.ID, &v.OwnerID, &v.Slug, &v.Name, &v.Type, &v.Description, &v.Address, &v.City,
+		&v.Latitude, &v.Longitude,
+		&v.PriceFrom, &v.Capacity, &v.Amenities, &v.WorkingHours, &v.Phone,
+		&v.AvgRating, &v.ReviewCount, &v.IsActive, &v.Status, &v.ModerationComment,
+		&v.ModeratedAt, &v.ModeratedBy,
+		&v.LegalEntityName, &v.INN, &v.OGRN, &v.PublicListingURL, &v.VerificationNote,
+		&v.SocialLinks,
+		&v.PayoutLegalForm,
+		&v.CreatedAt, &v.UpdatedAt,
+	}
+}
+
 func (r *venueRepo) scanVenuesWithTotal(rows pgx.Rows) ([]domain.Venue, int32, error) {
 	var venues []domain.Venue
 	var total int32
@@ -1689,18 +1785,7 @@ func (r *venueRepo) scanVenuesWithTotal(rows pgx.Rows) ([]domain.Venue, int32, e
 	for rows.Next() {
 		var v domain.Venue
 		var totalRaw int64
-		if err := rows.Scan(
-			&v.ID, &v.OwnerID, &v.Slug, &v.Name, &v.Type, &v.Description, &v.Address, &v.City,
-			&v.Latitude, &v.Longitude,
-			&v.PriceFrom, &v.Capacity, &v.Amenities, &v.WorkingHours, &v.Phone,
-			&v.AvgRating, &v.ReviewCount, &v.IsActive, &v.Status, &v.ModerationComment,
-			&v.ModeratedAt, &v.ModeratedBy,
-			&v.LegalEntityName, &v.INN, &v.OGRN, &v.PublicListingURL, &v.VerificationNote,
-			&v.SocialLinks,
-			&v.PayoutLegalForm,
-			&v.CreatedAt, &v.UpdatedAt,
-			&totalRaw,
-		); err != nil {
+		if err := rows.Scan(append(venueScanTargets(&v), &totalRaw)...); err != nil {
 			return nil, 0, fmt.Errorf("scan venue: %w", err)
 		}
 		if first {
@@ -1723,17 +1808,7 @@ func (r *venueRepo) scanVenues(rows pgx.Rows) ([]domain.Venue, error) {
 	var venues []domain.Venue
 	for rows.Next() {
 		var v domain.Venue
-		if err := rows.Scan(
-			&v.ID, &v.OwnerID, &v.Slug, &v.Name, &v.Type, &v.Description, &v.Address, &v.City,
-			&v.Latitude, &v.Longitude,
-			&v.PriceFrom, &v.Capacity, &v.Amenities, &v.WorkingHours, &v.Phone,
-			&v.AvgRating, &v.ReviewCount, &v.IsActive, &v.Status, &v.ModerationComment,
-			&v.ModeratedAt, &v.ModeratedBy,
-			&v.LegalEntityName, &v.INN, &v.OGRN, &v.PublicListingURL, &v.VerificationNote,
-			&v.SocialLinks,
-			&v.PayoutLegalForm,
-			&v.CreatedAt, &v.UpdatedAt,
-		); err != nil {
+		if err := rows.Scan(venueScanTargets(&v)...); err != nil {
 			return nil, fmt.Errorf("scan venue: %w", err)
 		}
 		venues = append(venues, v)

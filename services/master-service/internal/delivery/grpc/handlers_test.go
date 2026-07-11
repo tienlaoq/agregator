@@ -79,6 +79,22 @@ func (r *fakeRepo) UpdateProfile(_ context.Context, m *domain.Master) error {
 	r.masters[m.ID] = &cp
 	return nil
 }
+func (r *fakeRepo) UpdateProfileWithAssociations(ctx context.Context, m *domain.Master, applyServices bool, services []domain.MasterServiceUpsert, applyCredentials bool, credentials []domain.MasterCredentialUpsert) error {
+	if err := r.UpdateProfile(ctx, m); err != nil {
+		return err
+	}
+	if applyServices {
+		if _, err := r.ReplaceServices(ctx, m.ID, services); err != nil {
+			return err
+		}
+	}
+	if applyCredentials {
+		if _, err := r.ReplaceCredentials(ctx, m.ID, credentials); err != nil {
+			return err
+		}
+	}
+	return nil
+}
 func (r *fakeRepo) UpdateStatus(_ context.Context, masterID uuid.UUID, st, comment string, by *uuid.UUID) error {
 	m, ok := r.masters[masterID]
 	if !ok {
@@ -298,6 +314,9 @@ func (r *fakeRepo) DeleteSlotBlock(_ context.Context, masterID, blockID uuid.UUI
 	}
 	delete(r.slotBlocks, blockID)
 	return nil
+}
+func (r *fakeRepo) HasSlotBlockConflict(_ context.Context, _ uuid.UUID, _, _, _ string) (bool, error) {
+	return false, nil
 }
 func (r *fakeRepo) UpdateBookingStatus(_ context.Context, id uuid.UUID, st string) error {
 	if b, ok := r.bookings[id]; ok {

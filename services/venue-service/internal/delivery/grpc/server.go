@@ -83,32 +83,15 @@ func (s *Server) CreateVenue(ctx context.Context, req *venuev1.CreateVenueReques
 			Description: svc.GetDescription(),
 		})
 	}
+	// Halls are inserted atomically inside uc.Create's transaction, so a failed
+	// create never leaves an orphan venue behind.
+	venue.Halls = hallProtoInputsToDomain(req.GetHalls())
 
 	if err := s.uc.Create(ctx, venue); err != nil {
 		if _, ok := status.FromError(err); ok {
 			return nil, err
 		}
 		return nil, s.internalErr(err, "create venue failed")
-	}
-
-	if len(req.GetHalls()) > 0 {
-		ups, convErr := hallProtoInputsToUpserts(req.GetHalls())
-		if convErr != nil {
-			return nil, pkgerrors.InvalidArgument("invalid hall id")
-		}
-		if err := s.uc.ReplaceVenueHalls(ctx, venue.ID, ownerID, ups); err != nil {
-			if _, ok := status.FromError(err); ok {
-				return nil, err
-			}
-			return nil, s.internalErr(err, "replace venue halls failed")
-		}
-		v2, err := s.uc.GetByID(ctx, venue.ID)
-		if err != nil {
-			return nil, s.internalErr(err, "get venue after create failed")
-		}
-		if v2 != nil {
-			venue = v2
-		}
 	}
 
 	if pubErr := s.publisher.VenueCreated(ctx, venue); pubErr != nil {
@@ -1040,6 +1023,26 @@ func venueToProto(v *domain.Venue) *venuev1.VenueResponse {
 	}
 
 	return resp
+}
+
+// hallProtoInputsToDomain converts create-time hall inputs to domain halls. Any
+// client-supplied id is ignored — on create every hall is new — so unlike
+// hallProtoInputsToUpserts it cannot fail on a malformed id.
+func hallProtoInputsToDomain(items []*venuev1.VenueHallInput) []domain.VenueHall {
+	out := make([]domain.VenueHall, 0, len(items))
+	for _, it := range items {
+		am := it.GetAmenities()
+		if am == nil {
+			am = []string{}
+		}
+		out = append(out, domain.VenueHall{
+			Name:      it.GetName(),
+			PriceFrom: it.GetPriceFrom(),
+			Capacity:  it.GetCapacity(),
+			Amenities: append([]string(nil), am...),
+		})
+	}
+	return out
 }
 
 func hallProtoInputsToUpserts(items []*venuev1.VenueHallInput) ([]domain.VenueHallUpsert, error) {
