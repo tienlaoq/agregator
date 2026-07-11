@@ -435,8 +435,11 @@ func (r *MasterRepo) attachAssociations(ctx context.Context, list []domain.Maste
 	return nil
 }
 
-func (r *MasterRepo) UpdateProfile(ctx context.Context, m *domain.Master) error {
-	const q = `
+// updateMasterSQL updates every editable column on the masters row and returns
+// the new updated_at. Shared by UpdateProfile and UpdateProfileWithAssociations
+// so the column list lives in one place. The argument order must match
+// updateMasterArgs exactly.
+const updateMasterSQL = `
 UPDATE masters SET
   display_name = $2, bio = $3, phone = $4, city = $5, work_format = $6,
   travel_radius_km = $7, travel_base_latitude = $8, travel_base_longitude = $9,
@@ -450,11 +453,11 @@ UPDATE masters SET
 WHERE id = $1
 RETURNING updated_at
 `
-	zj, err := marshalTravelExcludeZonesJSON(m.TravelExcludeZones)
-	if err != nil {
-		return err
-	}
-	err = r.pool.QueryRow(ctx, q,
+
+// updateMasterArgs returns the positional args for updateMasterSQL. zj is the
+// pre-marshalled travel_exclude_zones JSON.
+func updateMasterArgs(m *domain.Master, zj string) []any {
+	return []any{
 		m.ID, m.DisplayName, m.Bio, m.Phone, m.City, m.WorkFormat,
 		m.TravelRadiusKm, float64PtrArg(m.TravelBaseLatitude), float64PtrArg(m.TravelBaseLongitude), zj,
 		m.ExperienceYears, m.Specializations, m.HourlyRate, m.AvailabilityJSON,
@@ -462,11 +465,55 @@ RETURNING updated_at
 		m.PayoutLegalName, m.PayoutINN, m.PayoutKPP, m.PayoutOGRN, m.PayoutOGRNIP,
 		m.PayoutBankName, m.PayoutBIK, m.PayoutSettlementAccount, m.PayoutCorrespondentAccount, m.PayoutVerificationStatus,
 		m.Status, m.ModerationComment, m.ModeratedBy, m.ModeratedAt,
-	).Scan(&m.UpdatedAt)
+	}
+}
+
+func (r *MasterRepo) UpdateProfile(ctx context.Context, m *domain.Master) error {
+	zj, err := marshalTravelExcludeZonesJSON(m.TravelExcludeZones)
+	if err != nil {
+		return err
+	}
+	err = r.pool.QueryRow(ctx, updateMasterSQL, updateMasterArgs(m, zj)...).Scan(&m.UpdatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.ErrNotFound
 	}
 	return err
+}
+
+// UpdateProfileWithAssociations updates the master row and, when the apply flags
+// are set, replaces services and/or credentials — all in ONE transaction. A
+// failure in any step rolls back the whole save, so the caller never observes a
+// profile whose scalar fields and status were committed while its services or
+// credentials are stale. m.UpdatedAt is populated from the UPDATE's RETURNING.
+func (r *MasterRepo) UpdateProfileWithAssociations(ctx context.Context, m *domain.Master, applyServices bool, services []domain.MasterServiceUpsert, applyCredentials bool, credentials []domain.MasterCredentialUpsert) error {
+	zj, err := marshalTravelExcludeZonesJSON(m.TravelExcludeZones)
+	if err != nil {
+		return err
+	}
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }() // no-op after Commit
+
+	err = tx.QueryRow(ctx, updateMasterSQL, updateMasterArgs(m, zj)...).Scan(&m.UpdatedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.ErrNotFound
+	}
+	if err != nil {
+		return err
+	}
+	if applyServices {
+		if _, err := replaceServicesTx(ctx, tx, m.ID, services); err != nil {
+			return err
+		}
+	}
+	if applyCredentials {
+		if _, err := replaceCredentialsTx(ctx, tx, m.ID, credentials); err != nil {
+			return err
+		}
+	}
+	return tx.Commit(ctx)
 }
 
 func (r *MasterRepo) UpdateStatus(ctx context.Context, masterID uuid.UUID, status, comment string, moderatedBy *uuid.UUID) error {
@@ -689,12 +736,9 @@ func (r *MasterRepo) ListPublic(ctx context.Context, p domain.ListPublicMastersP
 	return list, total, nil
 }
 
-func (r *MasterRepo) ReplaceServices(ctx context.Context, masterID uuid.UUID, items []domain.MasterServiceUpsert) ([]domain.MasterService, error) {
-	tx, err := r.pool.Begin(ctx)
-	if err != nil {
-		return nil, err
-	}
-	defer tx.Rollback(ctx)
+// replaceServicesTx deletes and re-inserts a master's services within tx. Shared
+// by ReplaceServices (own tx) and UpdateProfileWithAssociations (shared tx).
+func replaceServicesTx(ctx context.Context, tx pgx.Tx, masterID uuid.UUID, items []domain.MasterServiceUpsert) ([]domain.MasterService, error) {
 	if _, err := tx.Exec(ctx, `DELETE FROM master_services WHERE master_id = $1`, masterID); err != nil {
 		return nil, err
 	}
@@ -719,21 +763,12 @@ RETURNING id, master_id, name, description, duration_min, price, sort_order`,
 		}
 		out = append(out, s)
 	}
-	if err := tx.Commit(ctx); err != nil {
-		return nil, err
-	}
 	return out, nil
 }
 
-// ReplaceCredentials atomically swaps a master's full credential list. Like
-// ReplaceServices it DELETEs the existing rows and re-INSERTs the supplied
-// items inside one transaction, so a failed save never leaves a partial list.
-func (r *MasterRepo) ReplaceCredentials(ctx context.Context, masterID uuid.UUID, items []domain.MasterCredentialUpsert) ([]domain.MasterCredential, error) {
-	tx, err := r.pool.Begin(ctx)
-	if err != nil {
-		return nil, err
-	}
-	defer tx.Rollback(ctx)
+// replaceCredentialsTx deletes and re-inserts a master's credentials within tx.
+// Shared by ReplaceCredentials (own tx) and UpdateProfileWithAssociations.
+func replaceCredentialsTx(ctx context.Context, tx pgx.Tx, masterID uuid.UUID, items []domain.MasterCredentialUpsert) ([]domain.MasterCredential, error) {
 	if _, err := tx.Exec(ctx, `DELETE FROM master_credentials WHERE master_id = $1`, masterID); err != nil {
 		return nil, err
 	}
@@ -750,6 +785,38 @@ RETURNING id, master_id, kind, title, issuer, year, sort_order`,
 			return nil, err
 		}
 		out = append(out, c)
+	}
+	return out, nil
+}
+
+func (r *MasterRepo) ReplaceServices(ctx context.Context, masterID uuid.UUID, items []domain.MasterServiceUpsert) ([]domain.MasterService, error) {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+	out, err := replaceServicesTx(ctx, tx, masterID, items)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// ReplaceCredentials atomically swaps a master's full credential list. Like
+// ReplaceServices it DELETEs the existing rows and re-INSERTs the supplied
+// items inside one transaction, so a failed save never leaves a partial list.
+func (r *MasterRepo) ReplaceCredentials(ctx context.Context, masterID uuid.UUID, items []domain.MasterCredentialUpsert) ([]domain.MasterCredential, error) {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+	out, err := replaceCredentialsTx(ctx, tx, masterID, items)
+	if err != nil {
+		return nil, err
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return nil, err
@@ -1064,7 +1131,32 @@ INSERT INTO master_bookings (id, master_id, client_user_id, master_service_id, d
 VALUES ($1,$2,$3,$4,$5::date,$6::time,$7::time,$8,$9,$10,$11,$12)`,
 		b.ID, b.MasterID, b.ClientUserID, b.MasterServiceID, b.Date, b.TimeFrom, b.TimeTo, b.Comment, b.Status, b.PaymentID, b.PaymentURL, b.TotalPrice,
 	)
+	// 23P01 = exclusion_violation from master_bookings_no_overlap (migration 024):
+	// another non-cancelled booking already covers an overlapping interval.
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == "23P01" {
+		return domain.ErrSlotTaken
+	}
 	return err
+}
+
+// HasSlotBlockConflict reports whether [timeFrom, timeTo) on date overlaps any
+// of the master's slot blocks. A whole-day block (time_from IS NULL) matches any
+// interval on that date. The interval predicate uses only constant literals plus
+// bound params, so no user input is interpolated; masterID is bound as $1.
+func (r *MasterRepo) HasSlotBlockConflict(ctx context.Context, masterID uuid.UUID, date, timeFrom, timeTo string) (bool, error) {
+	var exists bool
+	err := r.pool.QueryRow(ctx, `
+SELECT EXISTS(
+  SELECT 1 FROM master_slot_blocks
+  WHERE master_id = $1 AND date = $2::date
+    AND (
+      time_from IS NULL
+      OR tsrange(($2::date + time_from)::timestamp, ($2::date + time_to)::timestamp, '[)')
+         && tsrange(($2::date + $3::time)::timestamp, ($2::date + $4::time)::timestamp, '[)')
+    )
+)`, masterID, date, timeFrom, timeTo).Scan(&exists)
+	return exists, err
 }
 
 // DeleteBooking hard-deletes a booking row. It is a compensating action for

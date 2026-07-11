@@ -151,7 +151,7 @@ func TestModerate_LogsHistoryInsertFailure(t *testing.T) {
 			return errors.New("audit write failed")
 		},
 	}
-	uc := NewVenueUseCaseWithLogger(repo, dummyRedis(t), log)
+	uc := NewVenueUseCaseWithConfig(repo, dummyRedis(t), log, Config{})
 
 	out, err := uc.Moderate(ctx, venueID, "approve", "", moderatorID)
 	require.NoError(t, err)
@@ -326,90 +326,37 @@ func TestModerate_VenueNotFound(t *testing.T) {
 	assert.Contains(t, err.Error(), "площадка не найдена")
 }
 
-func TestUpdate_RejectedResetsToReview(t *testing.T) {
+// The active/rejected → pending_review transition now rides inside repo.Update
+// (a single UPDATE), so the usecase must delegate to it and never issue a
+// separate reset call. The actual status transition is covered by the repository
+// integration test (TestIntegration_UpdateResendsActiveToReview).
+func TestUpdate_DelegatesTransitionToRepo(t *testing.T) {
 	ctx := context.Background()
 	id := uuid.New()
 	v := &domain.Venue{
 		ID:     id,
 		Slug:   "re-edit",
 		Type:   domain.VenueTypeBanya,
-		Status: domain.StatusRejected,
+		Status: domain.StatusActive,
 	}
 
-	var resetCalled bool
+	var updateCalled, resetCalled bool
 	repo := &mockVenueRepo{
 		UpdateFn: func(_ context.Context, venue *domain.Venue) error {
+			updateCalled = true
 			assert.Equal(t, id, venue.ID)
 			return nil
 		},
-		ResetToPendingReviewFn: func(_ context.Context, venueID uuid.UUID) error {
-			resetCalled = true
-			assert.Equal(t, id, venueID)
-			return nil
-		},
-	}
-
-	uc := NewVenueUseCase(repo, dummyRedis(t))
-	err := uc.Update(ctx, v)
-	require.NoError(t, err)
-	assert.True(t, resetCalled)
-	assert.Equal(t, domain.StatusPendingReview, v.Status)
-	assert.False(t, v.IsActive)
-}
-
-func TestUpdate_ActiveResetsToReview(t *testing.T) {
-	ctx := context.Background()
-	id := uuid.New()
-	v := &domain.Venue{
-		ID:       id,
-		Slug:     "active-edit",
-		Type:     domain.VenueTypeBanya,
-		Status:   domain.StatusActive,
-		IsActive: true,
-	}
-
-	var resetCalled bool
-	repo := &mockVenueRepo{
-		UpdateFn: func(_ context.Context, venue *domain.Venue) error { return nil },
-		ResetToPendingReviewFn: func(_ context.Context, venueID uuid.UUID) error {
-			resetCalled = true
-			assert.Equal(t, id, venueID)
-			return nil
-		},
-	}
-
-	uc := NewVenueUseCase(repo, dummyRedis(t))
-	err := uc.Update(ctx, v)
-	require.NoError(t, err)
-	assert.True(t, resetCalled)
-	assert.Equal(t, domain.StatusPendingReview, v.Status)
-	assert.False(t, v.IsActive)
-}
-
-func TestUpdate_PendingStaysPending(t *testing.T) {
-	ctx := context.Background()
-	id := uuid.New()
-	v := &domain.Venue{
-		ID:     id,
-		Slug:   "pending-edit",
-		Type:   domain.VenueTypeBanya,
-		Status: domain.StatusPendingReview,
-	}
-
-	var resetCalled bool
-	repo := &mockVenueRepo{
-		UpdateFn: func(_ context.Context, venue *domain.Venue) error { return nil },
-		ResetToPendingReviewFn: func(_ context.Context, venueID uuid.UUID) error {
+		ResetToPendingReviewFn: func(_ context.Context, _ uuid.UUID) error {
 			resetCalled = true
 			return nil
 		},
 	}
 
 	uc := NewVenueUseCase(repo, dummyRedis(t))
-	err := uc.Update(ctx, v)
-	require.NoError(t, err)
-	assert.False(t, resetCalled)
-	assert.Equal(t, domain.StatusPendingReview, v.Status)
+	require.NoError(t, uc.Update(ctx, v))
+	assert.True(t, updateCalled)
+	assert.False(t, resetCalled, "reset must be atomic inside repo.Update, not a separate call")
 }
 
 func TestOwnerMutationMethods_OwnerChangedDuringWrite(t *testing.T) {
@@ -820,6 +767,17 @@ func TestSetBookingMode(t *testing.T) {
 		st, ok := status.FromError(err)
 		require.True(t, ok)
 		assert.Equal(t, codes.PermissionDenied, st.Code())
+	})
+
+	t.Run("upcoming_reservations_rejected", func(t *testing.T) {
+		uc := NewVenueUseCase(newRepo(func(_ context.Context, _ uuid.UUID, _ string) error {
+			return repository.ErrBookingModeHasReservations
+		}), dummyRedis(t))
+		err := uc.SetBookingMode(ctx, owner, vid, domain.BookingModePerHall)
+		require.Error(t, err)
+		st, ok := status.FromError(err)
+		require.True(t, ok)
+		assert.Equal(t, codes.FailedPrecondition, st.Code())
 	})
 }
 

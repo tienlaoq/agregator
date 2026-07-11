@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -50,6 +51,16 @@ func (uc *MasterUseCase) CreateBooking(ctx context.Context, clientUserID uuid.UU
 	if err != nil {
 		return nil, err
 	}
+	// Reject bookings over time the master marked unavailable. This is a plain
+	// read (small TOCTOU window vs. a concurrent CreateSlotBlock is acceptable —
+	// blocking your own calendar while a client books is rare and low-stakes).
+	// Double-booking of the same slot by two clients is guarded separately and
+	// race-free by the master_bookings_no_overlap constraint below.
+	if blocked, err := uc.repo.HasSlotBlockConflict(ctx, m.ID, date, timeFrom, timeTo); err != nil {
+		return nil, err
+	} else if blocked {
+		return nil, pkgerrors.FailedPrecondition("мастер недоступен в выбранное время")
+	}
 	b := &domain.MasterBooking{
 		ID:              uuid.New(),
 		MasterID:        m.ID,
@@ -63,6 +74,9 @@ func (uc *MasterUseCase) CreateBooking(ctx context.Context, clientUserID uuid.UU
 		TotalPrice:      totalPrice,
 	}
 	if err := uc.repo.InsertBooking(ctx, b); err != nil {
+		if errors.Is(err, domain.ErrSlotTaken) {
+			return nil, pkgerrors.Aborted("это время уже забронировано — выберите другой слот")
+		}
 		return nil, err
 	}
 

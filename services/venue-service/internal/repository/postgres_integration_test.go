@@ -215,6 +215,109 @@ func TestIntegration_ModerationWorkflow(t *testing.T) {
 	assert.False(t, got.IsActive)
 }
 
+// TestIntegration_UpdateResendsActiveToReview proves repo.Update performs the
+// active/rejected → pending_review transition in the same statement as the
+// content write, so an edit can never leave changed content live under the old
+// status. Also checks a pending card is not spuriously re-transitioned.
+func TestIntegration_UpdateResendsActiveToReview(t *testing.T) {
+	repo := NewVenueRepo(testPool)
+	ctx := context.Background()
+	adminID := uuid.New()
+
+	venue := &domain.Venue{
+		OwnerID: uuid.New(),
+		Name:    "Правки " + uuid.New().String()[:8],
+		Type:    "banya",
+		Address: "ул. Правок, 1",
+		City:    "Москва",
+	}
+	require.NoError(t, repo.Create(ctx, venue))
+	require.NoError(t, repo.UpdateStatus(ctx, venue.ID, domain.StatusActive, "", adminID))
+
+	venue.Name = "Правки обновлены"
+	require.NoError(t, repo.Update(ctx, venue))
+
+	got, err := repo.GetByID(ctx, venue.ID)
+	require.NoError(t, err)
+	assert.Equal(t, domain.StatusPendingReview, got.Status)
+	assert.False(t, got.IsActive)
+	assert.Equal(t, "Правки обновлены", got.Name)
+
+	// Already pending — a further edit keeps it pending, no spurious transition.
+	venue.Name = "Ещё правки"
+	require.NoError(t, repo.Update(ctx, venue))
+	got, err = repo.GetByID(ctx, venue.ID)
+	require.NoError(t, err)
+	assert.Equal(t, domain.StatusPendingReview, got.Status)
+}
+
+// TestIntegration_SetBookingModeGuardedByReservations proves a real mode switch
+// is refused while the venue has upcoming reserved slots (which are keyed to the
+// current mode), while a same-mode call stays a no-op.
+func TestIntegration_SetBookingModeGuardedByReservations(t *testing.T) {
+	repo := NewVenueRepo(testPool)
+	ctx := context.Background()
+
+	venue := &domain.Venue{
+		OwnerID: uuid.New(),
+		Name:    "Баня Режим " + uuid.New().String()[:8],
+		Type:    "banya",
+		Address: "ул. Режимов, 4",
+		City:    "Москва",
+	}
+	require.NoError(t, repo.Create(ctx, venue))
+
+	futureDate := time.Now().AddDate(0, 0, 7).Format("2006-01-02")
+	bookingID := uuid.New()
+	require.NoError(t, repo.ReserveSlot(ctx, venue.ID, bookingID, futureDate, "10:00", "12:00", nil))
+
+	// Same mode is always a no-op, even with an upcoming reservation.
+	require.NoError(t, repo.SetBookingMode(ctx, venue.ID, domain.BookingModeWhole))
+
+	// A real switch is refused while the upcoming reservation exists.
+	err := repo.SetBookingMode(ctx, venue.ID, domain.BookingModePerHall)
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrBookingModeHasReservations)
+
+	// After releasing it, the switch goes through.
+	require.NoError(t, repo.ReleaseSlot(ctx, venue.ID, bookingID))
+	require.NoError(t, repo.SetBookingMode(ctx, venue.ID, domain.BookingModePerHall))
+	mode, err := repo.BookingMode(ctx, venue.ID)
+	require.NoError(t, err)
+	assert.Equal(t, domain.BookingModePerHall, mode)
+}
+
+// TestIntegration_CreateWithHallsIsAtomic proves venue + halls land in one
+// transaction: hall IDs and the derived venue fields (cheapest price, max
+// capacity) come back populated and persist.
+func TestIntegration_CreateWithHallsIsAtomic(t *testing.T) {
+	repo := NewVenueRepo(testPool)
+	ctx := context.Background()
+
+	venue := &domain.Venue{
+		OwnerID: uuid.New(),
+		Name:    "Баня Залы " + uuid.New().String()[:8],
+		Type:    "banya",
+		Address: "ул. Залов, 5",
+		City:    "Москва",
+		Halls: []domain.VenueHall{
+			{Name: "Большой зал", PriceFrom: 3000, Capacity: 10, Amenities: []string{"бассейн"}},
+			{Name: "Малый зал", PriceFrom: 1500, Capacity: 4},
+		},
+	}
+	require.NoError(t, repo.Create(ctx, venue))
+
+	require.Len(t, venue.Halls, 2)
+	assert.NotEqual(t, uuid.Nil, venue.Halls[0].ID)
+	assert.Equal(t, int64(1500), venue.PriceFrom) // cheapest hall
+
+	got, err := repo.GetByID(ctx, venue.ID)
+	require.NoError(t, err)
+	require.Len(t, got.Halls, 2)
+	assert.Equal(t, int64(1500), got.PriceFrom)
+	assert.Equal(t, int32(10), got.Capacity) // max hall capacity
+}
+
 func TestIntegration_SlotReservation(t *testing.T) {
 	repo := NewVenueRepo(testPool)
 	ctx := context.Background()

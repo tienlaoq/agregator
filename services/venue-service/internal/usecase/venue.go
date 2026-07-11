@@ -50,20 +50,12 @@ type VenueUseCase struct {
 }
 
 func NewVenueUseCase(repo domain.VenueRepository, redis *goredis.Client) *VenueUseCase {
-	return NewVenueUseCaseWithLogger(repo, redis, zerolog.Nop())
+	return NewVenueUseCaseWithConfig(repo, redis, zerolog.Nop(), Config{})
 }
 
-func NewVenueUseCaseWithLogger(repo domain.VenueRepository, redis *goredis.Client, log zerolog.Logger) *VenueUseCase {
-	return newVenueUseCase(repo, redis, log, Config{})
-}
-
-// NewVenueUseCaseWithConfig creates a VenueUseCase with configurable cache TTLs.
-// Use this in main; tests can continue to use NewVenueUseCase / NewVenueUseCaseWithLogger.
+// NewVenueUseCaseWithConfig creates a VenueUseCase with configurable cache TTLs
+// and logger. Use this in main; tests use NewVenueUseCase (Nop logger).
 func NewVenueUseCaseWithConfig(repo domain.VenueRepository, redis *goredis.Client, log zerolog.Logger, cfg Config) *VenueUseCase {
-	return newVenueUseCase(repo, redis, log, cfg)
-}
-
-func newVenueUseCase(repo domain.VenueRepository, redis *goredis.Client, log zerolog.Logger, cfg Config) *VenueUseCase {
 	if cfg.VenueCacheTTL <= 0 {
 		cfg.VenueCacheTTL = defaultVenueCacheTTL
 	}
@@ -97,6 +89,16 @@ func (uc *VenueUseCase) Create(ctx context.Context, venue *domain.Venue) error {
 		return err
 	}
 	venue.SocialLinks = sl
+	if len(venue.Halls) > maxVenueHalls {
+		return pkgerrors.InvalidArgument("превышен лимит залов")
+	}
+	for i := range venue.Halls {
+		name := strings.TrimSpace(venue.Halls[i].Name)
+		if name == "" {
+			return pkgerrors.InvalidArgument("каждый зал должен иметь название")
+		}
+		venue.Halls[i].Name = name
+	}
 	if err := uc.repo.Create(ctx, venue); err != nil {
 		return err
 	}
@@ -122,19 +124,9 @@ func (uc *VenueUseCase) Update(ctx context.Context, venue *domain.Venue) error {
 		return err
 	}
 	venue.SocialLinks = sl
-	prevStatus := venue.Status
+	// repo.Update atomically sends an active/rejected card back to pending_review.
 	if err := uc.repo.Update(ctx, venue); err != nil {
 		return err
-	}
-	if prevStatus == domain.StatusActive || prevStatus == domain.StatusRejected {
-		if err := uc.repo.ResetToPendingReview(ctx, venue.ID); err != nil {
-			return err
-		}
-		venue.Status = domain.StatusPendingReview
-		venue.ModerationComment = ""
-		venue.IsActive = false
-		venue.ModeratedAt = nil
-		venue.ModeratedBy = nil
 	}
 	uc.invalidateCache(ctx, venue.ID, venue.Slug)
 	return nil
@@ -599,7 +591,13 @@ func (uc *VenueUseCase) SetBookingMode(ctx context.Context, actorID, venueID uui
 	if mode != domain.BookingModeWhole && mode != domain.BookingModePerHall {
 		return pkgerrors.InvalidArgument("неизвестный режим бронирования")
 	}
-	return uc.repo.SetBookingMode(ctx, venueID, mode)
+	if err := uc.repo.SetBookingMode(ctx, venueID, mode); err != nil {
+		if errors.Is(err, repository.ErrBookingModeHasReservations) {
+			return pkgerrors.FailedPrecondition("нельзя сменить режим бронирования: есть предстоящие брони или блокировки")
+		}
+		return err
+	}
+	return nil
 }
 
 const (
@@ -780,7 +778,6 @@ func (uc *VenueUseCase) AddVenuePhoto(ctx context.Context, venueID, ownerID uuid
 	if len(v.Photos) >= maxVenuePhotos {
 		return nil, pkgerrors.InvalidArgument("достигнут лимит фотографий")
 	}
-	prevStatus := v.Status
 	if _, err := uc.repo.AddVenuePhoto(ctx, venueID, ownerID, url); err != nil {
 		if guardErr := venueWriteGuardErr(err); guardErr != nil {
 			return nil, guardErr
@@ -789,11 +786,6 @@ func (uc *VenueUseCase) AddVenuePhoto(ctx context.Context, venueID, ownerID uuid
 			return nil, pkgerrors.InvalidArgument("достигнут лимит фотографий")
 		}
 		return nil, err
-	}
-	if prevStatus == domain.StatusActive || prevStatus == domain.StatusRejected {
-		if err := uc.repo.ResetToPendingReview(ctx, venueID); err != nil {
-			return nil, err
-		}
 	}
 	uc.invalidateCache(ctx, venueID, v.Slug)
 	return uc.repo.GetByID(ctx, venueID)
@@ -810,7 +802,6 @@ func (uc *VenueUseCase) DeleteVenuePhoto(ctx context.Context, venueID, ownerID, 
 	if v.OwnerID != ownerID {
 		return "", pkgerrors.PermissionDenied("нет прав на управление площадкой")
 	}
-	prevStatus := v.Status
 	deletedURL, err = uc.repo.DeleteVenuePhoto(ctx, venueID, ownerID, photoID)
 	if err != nil {
 		if guardErr := venueWriteGuardErr(err); guardErr != nil {
@@ -820,11 +811,6 @@ func (uc *VenueUseCase) DeleteVenuePhoto(ctx context.Context, venueID, ownerID, 
 			return "", pkgerrors.NotFound("фото не найдено")
 		}
 		return "", err
-	}
-	if prevStatus == domain.StatusActive || prevStatus == domain.StatusRejected {
-		if err := uc.repo.ResetToPendingReview(ctx, venueID); err != nil {
-			return deletedURL, err
-		}
 	}
 	uc.invalidateCache(ctx, venueID, v.Slug)
 	return deletedURL, nil
@@ -841,7 +827,6 @@ func (uc *VenueUseCase) SetVenueCoverPhoto(ctx context.Context, venueID, ownerID
 	if v.OwnerID != ownerID {
 		return nil, pkgerrors.PermissionDenied("нет прав на управление площадкой")
 	}
-	prevStatus := v.Status
 	if err := uc.repo.SetVenueCoverPhoto(ctx, venueID, ownerID, photoID); err != nil {
 		if guardErr := venueWriteGuardErr(err); guardErr != nil {
 			return nil, guardErr
@@ -850,11 +835,6 @@ func (uc *VenueUseCase) SetVenueCoverPhoto(ctx context.Context, venueID, ownerID
 			return nil, pkgerrors.NotFound("фото не найдено")
 		}
 		return nil, err
-	}
-	if prevStatus == domain.StatusActive || prevStatus == domain.StatusRejected {
-		if err := uc.repo.ResetToPendingReview(ctx, venueID); err != nil {
-			return nil, err
-		}
 	}
 	uc.invalidateCache(ctx, venueID, v.Slug)
 	return uc.repo.GetByID(ctx, venueID)
@@ -868,7 +848,6 @@ func (uc *VenueUseCase) ReplaceVenueHalls(ctx context.Context, venueID, ownerID 
 	if len(items) > maxVenueHalls {
 		return pkgerrors.InvalidArgument("превышен лимит залов")
 	}
-	prevStatus := v.Status
 	if err := uc.repo.ReplaceVenueHalls(ctx, venueID, ownerID, items); err != nil {
 		if guardErr := venueWriteGuardErr(err); guardErr != nil {
 			return guardErr
@@ -881,11 +860,6 @@ func (uc *VenueUseCase) ReplaceVenueHalls(ctx context.Context, venueID, ownerID 
 		}
 		return err
 	}
-	if prevStatus == domain.StatusActive || prevStatus == domain.StatusRejected {
-		if err := uc.repo.ResetToPendingReview(ctx, venueID); err != nil {
-			return err
-		}
-	}
 	uc.invalidateCache(ctx, venueID, v.Slug)
 	return nil
 }
@@ -895,7 +869,6 @@ func (uc *VenueUseCase) AddVenueHallPhoto(ctx context.Context, venueID, hallID, 
 	if err != nil {
 		return nil, err
 	}
-	prevStatus := v.Status
 	if _, err := uc.repo.AddVenueHallPhoto(ctx, venueID, hallID, url); err != nil {
 		if errors.Is(err, repository.ErrHallPhotosLimit) {
 			return nil, pkgerrors.InvalidArgument("достигнут лимит фотографий зала")
@@ -904,11 +877,6 @@ func (uc *VenueUseCase) AddVenueHallPhoto(ctx context.Context, venueID, hallID, 
 			return nil, pkgerrors.NotFound("зал не найден")
 		}
 		return nil, err
-	}
-	if prevStatus == domain.StatusActive || prevStatus == domain.StatusRejected {
-		if err := uc.repo.ResetToPendingReview(ctx, venueID); err != nil {
-			return nil, err
-		}
 	}
 	uc.invalidateCache(ctx, venueID, v.Slug)
 	return uc.repo.GetByID(ctx, venueID)
@@ -919,7 +887,6 @@ func (uc *VenueUseCase) DeleteVenueHallPhoto(ctx context.Context, venueID, hallI
 	if err != nil {
 		return "", err
 	}
-	prevStatus := v.Status
 	deletedURL, err = uc.repo.DeleteVenueHallPhoto(ctx, venueID, hallID, photoID)
 	if err != nil {
 		if errors.Is(err, repository.ErrPhotoNotFound) {
@@ -930,11 +897,6 @@ func (uc *VenueUseCase) DeleteVenueHallPhoto(ctx context.Context, venueID, hallI
 		}
 		return "", err
 	}
-	if prevStatus == domain.StatusActive || prevStatus == domain.StatusRejected {
-		if err := uc.repo.ResetToPendingReview(ctx, venueID); err != nil {
-			return deletedURL, err
-		}
-	}
 	uc.invalidateCache(ctx, venueID, v.Slug)
 	return deletedURL, nil
 }
@@ -944,7 +906,6 @@ func (uc *VenueUseCase) SetVenueHallCoverPhoto(ctx context.Context, venueID, hal
 	if err != nil {
 		return nil, err
 	}
-	prevStatus := v.Status
 	if err := uc.repo.SetVenueHallCoverPhoto(ctx, venueID, hallID, photoID); err != nil {
 		if errors.Is(err, repository.ErrPhotoNotFound) {
 			return nil, pkgerrors.NotFound("фото не найдено")
@@ -953,11 +914,6 @@ func (uc *VenueUseCase) SetVenueHallCoverPhoto(ctx context.Context, venueID, hal
 			return nil, pkgerrors.NotFound("зал не найден")
 		}
 		return nil, err
-	}
-	if prevStatus == domain.StatusActive || prevStatus == domain.StatusRejected {
-		if err := uc.repo.ResetToPendingReview(ctx, venueID); err != nil {
-			return nil, err
-		}
 	}
 	uc.invalidateCache(ctx, venueID, v.Slug)
 	return uc.repo.GetByID(ctx, venueID)

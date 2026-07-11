@@ -398,27 +398,33 @@ func (uc *MasterUseCase) UpdateMyProfile(ctx context.Context, userID uuid.UUID, 
 		return nil, pkgerrors.InvalidArgument(err.Error())
 	}
 
-	if err := uc.repo.UpdateProfile(ctx, m); err != nil {
-		return nil, err
-	}
-
+	// Validate the replaceable sub-payloads BEFORE the first write. Both are pure
+	// functions of the input, so running them here means an invalid services or
+	// credentials list is rejected without UpdateProfile having already persisted
+	// the scalar fields and flipped status active → pending_review.
+	// validateMasterCredentials also returns the normalised items to persist.
+	var normalizedCreds []domain.MasterCredentialUpsert
 	if in.ApplyServicesReplace {
 		if err := validateMasterServices(in.ServicesReplace); err != nil {
 			return nil, err
 		}
-		if _, err := uc.repo.ReplaceServices(ctx, m.ID, in.ServicesReplace); err != nil {
+	}
+	if in.ApplyCredentialsReplace {
+		var err error
+		normalizedCreds, err = validateMasterCredentials(in.CredentialsReplace)
+		if err != nil {
 			return nil, err
 		}
 	}
 
-	if in.ApplyCredentialsReplace {
-		normalized, err := validateMasterCredentials(in.CredentialsReplace)
-		if err != nil {
-			return nil, err
-		}
-		if _, err := uc.repo.ReplaceCredentials(ctx, m.ID, normalized); err != nil {
-			return nil, err
-		}
+	// Single transaction: the master row plus any services/credentials replace
+	// commit together or not at all, so a failure mid-save can't leave the profile
+	// flipped to pending_review with stale associations.
+	if err := uc.repo.UpdateProfileWithAssociations(ctx, m,
+		in.ApplyServicesReplace, in.ServicesReplace,
+		in.ApplyCredentialsReplace, normalizedCreds,
+	); err != nil {
+		return nil, err
 	}
 
 	// Re-read the full profile so the response is consistent: Photos may have

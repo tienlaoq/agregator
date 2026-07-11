@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useGallery } from "@/hooks/use-gallery";
 import Image from "next/image";
 import Link from "next/link";
@@ -59,6 +59,7 @@ import {
   Award,
   ShieldCheck,
   Navigation,
+  Star,
 } from "lucide-react";
 
 function sortMasterPhotosPublic(photos?: MasterPhoto[]): MasterPhoto[] {
@@ -94,6 +95,10 @@ export function MasterPublicPageClient({
   const [guests] = useState(1);
   const [comment, setComment] = useState("");
   const [msg, setMsg] = useState("");
+  const [activeTab, setActiveTab] = useState("services");
+  // Пока идёт программный скролл по клику на вкладку — гасим scroll-spy,
+  // чтобы промежуточные секции не перебивали выбранную.
+  const suppressSpy = useRef(false);
   // Gallery state управляется через useGallery ниже
   const [reviews, setReviews] = useState<Review[]>([]);
   const ssrMaster = initialMaster && initialMaster.slug === slug ? initialMaster : undefined;
@@ -121,6 +126,24 @@ export function MasterPublicPageClient({
       .catch(() => {
         setReviews([]);
       });
+  }, [master?.id]);
+
+  // Подсветка активного раздела в липких вкладках (scroll-spy).
+  useEffect(() => {
+    if (!master?.id) return;
+    const ids = ["services", "credentials", "travel", "reviews", "about"];
+    const obs = new IntersectionObserver(
+      (entries) => {
+        if (suppressSpy.current) return;
+        for (const e of entries) if (e.isIntersecting) setActiveTab(e.target.id);
+      },
+      { rootMargin: "-45% 0px -50% 0px" },
+    );
+    for (const id of ids) {
+      const el = document.getElementById(id);
+      if (el) obs.observe(el);
+    }
+    return () => obs.disconnect();
   }, [master?.id]);
 
   // useCallback здесь был обязан правилам React Compiler удалить (он сам
@@ -374,6 +397,41 @@ export function MasterPublicPageClient({
     );
   }
 
+  const avgRating =
+    reviews.length > 0 ? reviews.reduce((s, r) => s + r.rating, 0) / reviews.length : 0;
+  const workFormatLabel =
+    master.work_format === "mobile"
+      ? "Выезд к клиенту"
+      : master.work_format === "venue"
+        ? "В бане / у заведения"
+        : "И то и другое";
+  const hasCredentials = Boolean(master.credentials && master.credentials.length > 0);
+  const hasServices = Boolean(master.services && master.services.length > 0);
+  const hasTravelZone = master.travel_radius_km > 0 &&
+    (master.work_format === "mobile" || master.work_format === "both");
+  const hasAbout =
+    Boolean(master.bio?.trim()) ||
+    master.experience_years > 0 ||
+    (hasTravelZone) ||
+    Boolean(master.phone) ||
+    Boolean(master.specializations?.length);
+  const tabs = [
+    { id: "services", label: "Услуги", show: hasServices },
+    { id: "credentials", label: "Сертификаты", show: hasCredentials },
+    { id: "travel", label: "Зона выезда", show: showPublicTravelZone },
+    { id: "reviews", label: "Отзывы", show: true },
+    { id: "about", label: "О себе", show: hasAbout },
+  ].filter((t) => t.show);
+  const currentTab = tabs.some((t) => t.id === activeTab) ? activeTab : tabs[0]?.id;
+  const scrollToSection = (id: string) => {
+    suppressSpy.current = true;
+    setActiveTab(id);
+    document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
+    window.setTimeout(() => {
+      suppressSpy.current = false;
+    }, 700);
+  };
+
   return (
     <section className="bg-background py-10 md:py-16">
       <div className="container mx-auto max-w-6xl px-4">
@@ -385,137 +443,175 @@ export function MasterPublicPageClient({
           Назад к каталогу
         </Link>
 
+        {/* Галерея — мозаика во всю ширину (клик открывает лайтбокс) */}
+        {photoGallery.current ? (
+          <div className="mb-8">
+            {/* мобайл: одно фото-баннер */}
+            <button
+              type="button"
+              onClick={() => photoGallery.openAt(0)}
+              aria-label="Открыть фотографии"
+              className="group relative block aspect-[4/3] w-full cursor-zoom-in overflow-hidden rounded-2xl bg-muted md:hidden"
+            >
+              <FramedImage src={displayPhotos[0].src} alt="" sizes="100vw" priority unoptimized />
+              {displayPhotos.length > 1 ? (
+                <span className="absolute bottom-3 right-3 inline-flex items-center gap-1.5 rounded-full bg-black/60 px-3 py-1.5 text-xs font-medium text-white">
+                  <ImageIcon className="h-3.5 w-3.5" />
+                  {displayPhotos.length} фото
+                </span>
+              ) : null}
+            </button>
+
+            {/* десктоп: герой + до 4 миниатюр */}
+            <div className="hidden h-[400px] grid-cols-4 grid-rows-2 gap-1.5 overflow-hidden rounded-2xl md:grid">
+              <button
+                type="button"
+                onClick={() => photoGallery.openAt(0)}
+                aria-label="Открыть фото 1"
+                className="group relative col-span-2 row-span-2 cursor-zoom-in overflow-hidden bg-muted"
+              >
+                <FramedImage src={displayPhotos[0].src} alt="" sizes="66vw" priority unoptimized />
+              </button>
+              {displayPhotos.slice(1, 5).map((p, i) => {
+                const idx = i + 1;
+                const extra = displayPhotos.length - 5;
+                return (
+                  <button
+                    key={p.id}
+                    type="button"
+                    onClick={() => photoGallery.openAt(idx)}
+                    aria-label={`Открыть фото ${idx + 1}`}
+                    className="group relative cursor-zoom-in overflow-hidden bg-muted"
+                  >
+                    <FramedImage src={p.src} alt="" sizes="33vw" unoptimized />
+                    {i === 3 && extra > 0 ? (
+                      <div className="absolute inset-0 flex items-center justify-center bg-black/55 text-xl font-semibold text-white">
+                        +{extra}
+                      </div>
+                    ) : null}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        ) : (
+          <div className="mb-8 flex aspect-[16/7] items-center justify-center rounded-2xl bg-muted">
+            <div className="flex flex-col items-center gap-2 text-muted-foreground/40">
+              <ImageIcon className="h-16 w-16" />
+              <span className="text-sm">Фото ещё не добавлены</span>
+            </div>
+          </div>
+        )}
+
+        {/* Липкие вкладки-разделы */}
+        <div className="sticky top-16 z-30 -mx-4 mb-8 flex gap-1.5 overflow-x-auto border-b border-border bg-background/95 px-4 py-3 backdrop-blur [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+          {tabs.map((t) => (
+            <button
+              key={t.id}
+              type="button"
+              onClick={() => scrollToSection(t.id)}
+              className={`shrink-0 rounded-full px-4 py-1.5 text-sm transition-colors ${
+                currentTab === t.id
+                  ? "border border-border bg-card font-medium text-foreground"
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
+
         <div className="grid gap-8 lg:grid-cols-3">
           <div className="lg:col-span-2">
+            {/* Шапка */}
             <div className="mb-8">
-              {photoGallery.current ? (
-                <button
-                  type="button"
-                  className="relative aspect-[16/9] w-full overflow-hidden rounded-xl border border-border bg-muted"
-                  onClick={() => photoGallery.openAt(photoGallery.index)}
-                  aria-label="Открыть фото в полном размере"
-                >
-                  <FramedImage
-                    src={photoGallery.current.src}
-                    alt=""
-                    sizes="(max-width: 1024px) 100vw, 66vw"
-                    priority
-                    unoptimized
-                  />
-                </button>
-              ) : (
-                <div className="flex aspect-[16/9] items-center justify-center rounded-xl border border-border bg-muted">
-                  <div className="flex flex-col items-center gap-2 text-muted-foreground/40">
-                    <ImageIcon className="h-16 w-16" />
-                    <span className="text-sm">Фото ещё не добавлены</span>
-                  </div>
-                </div>
-              )}
-              {photoGallery.count > 1 ? (
-                <div className="mt-3 flex gap-2 overflow-x-auto pb-1 pt-0.5 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-                  {displayPhotos.map((p, idx) => (
-                    <button
-                      type="button"
-                      key={p.id}
-                      onClick={() => photoGallery.openAt(idx)}
-                      aria-label={`Показать фото ${idx + 1}`}
-                      className={`relative h-16 w-16 shrink-0 overflow-hidden rounded-md border bg-muted ${
-                        idx === photoGallery.index
-                          ? "border-primary ring-2 ring-primary/30"
-                          : "border-border"
-                      }`}
-                    >
-                      <Image
-                        src={p.src}
-                        alt=""
-                        fill
-                        className="object-cover"
-                        sizes="64px"
-                        unoptimized
-                      />
-                    </button>
-                  ))}
-                </div>
-              ) : null}
-            </div>
-
-            <div className="mb-8">
-              <div className="mb-4 flex flex-wrap items-center gap-3">
-                <Badge className="border-primary/20 bg-primary/10 text-primary">
-                  {master.work_format === "mobile"
-                    ? "Выезд к клиенту"
-                    : master.work_format === "venue"
-                      ? "В бане / у заведения"
-                      : "И то и другое"}
-                </Badge>
+              <div className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
+                {avgRating > 0 && (
+                  <span className="inline-flex items-center gap-1.5 text-foreground">
+                    <Star className="h-4 w-4 fill-amber-400 text-amber-400" />
+                    <span className="font-medium">{avgRating.toFixed(1)}</span>
+                    <span className="text-muted-foreground">({reviews.length} отзывов)</span>
+                  </span>
+                )}
                 {master.status === "active" && (
-                  <Badge className="gap-1.5 border-emerald-200 bg-emerald-50 text-emerald-700">
-                    <ShieldCheck className="h-3.5 w-3.5" />
-                    Проверено
-                  </Badge>
+                  <>
+                    {avgRating > 0 && <span className="text-border" aria-hidden>·</span>}
+                    <span className="inline-flex items-center gap-1.5 text-emerald-700">
+                      <ShieldCheck className="h-4 w-4" />
+                      Проверено
+                    </span>
+                  </>
                 )}
               </div>
-              <h1 className="mb-4 text-3xl font-bold text-foreground md:text-4xl">{master.display_name}</h1>
-              <div className="flex flex-col gap-2 text-muted-foreground">
-                <div className="flex items-center gap-2">
-                  <MapPin className="h-5 w-5 shrink-0" />
-                  {master.city}
-                </div>
-                {master.phone && (
-                  <div className="flex items-center gap-2">
-                    <Phone className="h-5 w-5 shrink-0" />
-                    <a href={`tel:${master.phone}`} className="hover:underline">
-                      {master.phone}
-                    </a>
-                  </div>
-                )}
+              <h1 className="mb-2 text-3xl font-bold text-foreground md:text-4xl">{master.display_name}</h1>
+              <div className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-sm text-muted-foreground">
+                <MapPin className="h-4 w-4 shrink-0" />
+                <span>{master.city}</span>
+                <span aria-hidden>·</span>
+                <span>{workFormatLabel}</span>
               </div>
-
-              {(master.experience_years > 0 ||
-                ((master.work_format === "mobile" || master.work_format === "both") &&
-                  master.travel_radius_km > 0)) && (
-                <div className="mt-6 flex flex-wrap gap-3">
-                  {master.experience_years > 0 && (
-                    <div className="flex min-w-[8.5rem] items-center gap-2.5 rounded-xl border border-border bg-card px-3.5 py-2.5">
-                      <Award className="h-5 w-5 shrink-0 text-primary" />
-                      <div className="leading-tight">
-                        <div className="text-xs text-muted-foreground">Опыт</div>
-                        <div className="text-sm font-medium text-foreground">{master.experience_years} лет</div>
-                      </div>
-                    </div>
-                  )}
-                  {(master.work_format === "mobile" || master.work_format === "both") &&
-                    master.travel_radius_km > 0 && (
-                      <div className="flex min-w-[8.5rem] items-center gap-2.5 rounded-xl border border-border bg-card px-3.5 py-2.5">
-                        <Navigation className="h-5 w-5 shrink-0 text-primary" />
-                        <div className="leading-tight">
-                          <div className="text-xs text-muted-foreground">Выезд</div>
-                          <div className="text-sm font-medium text-foreground">до {master.travel_radius_km} км</div>
-                        </div>
-                      </div>
-                    )}
-                </div>
-              )}
             </div>
 
-            {master.bio?.trim() ? (
-              <div className="mb-8">
-                <h2 className="mb-4 text-xl font-semibold text-foreground">Описание</h2>
-                <p className="whitespace-pre-wrap leading-relaxed text-muted-foreground">{master.bio}</p>
-                {master.specializations?.length ? (
-                  <div className="mt-4 flex flex-wrap gap-2">
-                    {master.specializations.map((s) => (
-                      <Badge key={s} variant="outline">
-                        {s}
-                      </Badge>
-                    ))}
-                  </div>
-                ) : null}
+            {/* Услуги */}
+            {hasServices ? (
+              <div id="services" className="mb-10 scroll-mt-32">
+                <h2 className="mb-1 text-xl font-semibold text-foreground">Услуги и цены</h2>
+                <p className="mb-3 text-sm text-muted-foreground">
+                  Выберите услуги для заявки — стоимость справа подстроится. Можно выбрать несколько.
+                </p>
+                <div className="divide-y divide-border border-y border-border">
+                  {master.services!.map((svc) => {
+                    const selected = selectedServiceIds.includes(svc.id);
+                    const toggle = () =>
+                      setSelectedServiceIds((prev) =>
+                        prev.includes(svc.id) ? prev.filter((x) => x !== svc.id) : [...prev, svc.id],
+                      );
+                    return (
+                      <div
+                        key={svc.id}
+                        role="button"
+                        tabIndex={0}
+                        aria-pressed={selected}
+                        onClick={toggle}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" || e.key === " ") {
+                            e.preventDefault();
+                            toggle();
+                          }
+                        }}
+                        className={`flex cursor-pointer items-center gap-4 py-4 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
+                          selected ? "bg-primary/5" : ""
+                        }`}
+                      >
+                        <div className="min-w-0 flex-1">
+                          <p className="font-medium text-card-foreground">{svc.name}</p>
+                          {svc.description ? (
+                            <p className="mt-0.5 text-sm text-muted-foreground">{svc.description}</p>
+                          ) : null}
+                          <p className="mt-1.5 text-sm text-muted-foreground">{svc.duration_min} мин</p>
+                          <p className="mt-1 text-sm font-medium text-foreground">
+                            {Number(svc.price) > 0 ? `${kopecksToRub(Number(svc.price))} ₽` : "Почасово"}
+                          </p>
+                        </div>
+                        <span
+                          className={`inline-flex shrink-0 items-center gap-1.5 rounded-full px-4 py-2 text-sm font-medium transition-colors ${
+                            selected
+                              ? "bg-primary text-primary-foreground"
+                              : "border border-input bg-background text-foreground"
+                          }`}
+                        >
+                          {selected && <Check className="h-4 w-4" />}
+                          {selected ? "Выбрано" : "Выбрать"}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
             ) : null}
 
             {master.credentials && master.credentials.length > 0 ? (
-              <div className="mb-8">
+              <div id="credentials" className="mb-10 scroll-mt-32">
                 <h2 className="mb-4 text-xl font-semibold text-foreground">
                   Сертификаты и награды
                 </h2>
@@ -542,70 +638,8 @@ export function MasterPublicPageClient({
               </div>
             ) : null}
 
-            {master.services && master.services.length > 0 ? (
-              <div className="mb-8">
-                <h2 className="mb-2 text-xl font-semibold text-foreground">Услуги и цены</h2>
-                <p className="mb-4 text-sm text-muted-foreground">
-                  Нажмите на карточку, чтобы добавить услугу в заявку или убрать её. Можно выбрать несколько услуг одновременно.
-                </p>
-                <div className="space-y-3">
-                  {master.services.map((svc) => {
-                    const selected = selectedServiceIds.includes(svc.id);
-                    return (
-                    <Card
-                      key={svc.id}
-                      role="button"
-                      tabIndex={0}
-                      aria-pressed={selected}
-                      onClick={() =>
-                        setSelectedServiceIds((prev) =>
-                          prev.includes(svc.id) ? prev.filter((x) => x !== svc.id) : [...prev, svc.id],
-                        )
-                      }
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter" || e.key === " ") {
-                          e.preventDefault();
-                          setSelectedServiceIds((prev) =>
-                            prev.includes(svc.id) ? prev.filter((x) => x !== svc.id) : [...prev, svc.id],
-                          );
-                        }
-                      }}
-                      className={`cursor-pointer border-2 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
-                        selected ? "border-primary bg-primary/5" : "border-border hover:border-primary/40"
-                      }`}
-                    >
-                      <CardContent className="relative flex items-center justify-between gap-4 p-4 pr-14">
-                        {selected ? (
-                          <div
-                            className="absolute right-3 top-1/2 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded-full bg-primary text-primary-foreground"
-                            aria-hidden
-                          >
-                            <Check className="h-4 w-4" />
-                          </div>
-                        ) : null}
-                        <div className="min-w-0">
-                          <p className="font-medium text-card-foreground">{svc.name}</p>
-                          {svc.description ? (
-                            <p className="text-sm text-muted-foreground">{svc.description}</p>
-                          ) : null}
-                          <p className="mt-1 text-xs text-muted-foreground">{svc.duration_min} мин</p>
-                        </div>
-                        {Number(svc.price) > 0 ? (
-                          <span className="shrink-0 font-semibold text-primary">
-                            {kopecksToRub(Number(svc.price))} ₽
-                          </span>
-                        ) : (
-                          <span className="shrink-0 text-sm text-muted-foreground">Почасово</span>
-                        )}
-                      </CardContent>
-                    </Card>
-                  )})}
-                </div>
-              </div>
-            ) : null}
-
             {showPublicTravelZone && master ? (
-              <div className="mb-8">
+              <div id="travel" className="mb-10 scroll-mt-32">
                 <h2 className="mb-2 text-xl font-semibold text-foreground">Зона выезда</h2>
                 <p className="mb-4 text-sm text-muted-foreground">
                   На карте — ориентир по прямой: до {master.travel_radius_km} км от точки отсчёта.
@@ -625,7 +659,7 @@ export function MasterPublicPageClient({
               </div>
             ) : null}
 
-            <div>
+            <div id="reviews" className="mb-10 scroll-mt-32">
               <h2 className="mb-6 text-xl font-semibold text-foreground">
                 Отзывы {reviews.length > 0 && `(${reviews.length})`}
               </h2>
@@ -636,10 +670,59 @@ export function MasterPublicPageClient({
                 onReviewAdded={reloadReviews}
               />
             </div>
+
+            {/* О себе */}
+            {hasAbout && (
+              <div id="about" className="scroll-mt-32">
+                <h2 className="mb-4 text-xl font-semibold text-foreground">О себе</h2>
+                {master.bio?.trim() ? (
+                  <p className="mb-5 whitespace-pre-wrap leading-relaxed text-muted-foreground">{master.bio}</p>
+                ) : null}
+                {master.specializations?.length ? (
+                  <div className="mb-5 flex flex-wrap gap-2">
+                    {master.specializations.map((s) => (
+                      <Badge key={s} variant="outline">
+                        {s}
+                      </Badge>
+                    ))}
+                  </div>
+                ) : null}
+                {(master.experience_years > 0 || hasTravelZone) && (
+                  <div className="mb-5 flex flex-wrap gap-3">
+                    {master.experience_years > 0 && (
+                      <div className="flex min-w-[8.5rem] items-center gap-2.5 rounded-xl border border-border bg-card px-3.5 py-2.5">
+                        <Award className="h-5 w-5 shrink-0 text-primary" />
+                        <div className="leading-tight">
+                          <div className="text-xs text-muted-foreground">Опыт</div>
+                          <div className="text-sm font-medium text-foreground">{master.experience_years} лет</div>
+                        </div>
+                      </div>
+                    )}
+                    {hasTravelZone && (
+                      <div className="flex min-w-[8.5rem] items-center gap-2.5 rounded-xl border border-border bg-card px-3.5 py-2.5">
+                        <Navigation className="h-5 w-5 shrink-0 text-primary" />
+                        <div className="leading-tight">
+                          <div className="text-xs text-muted-foreground">Выезд</div>
+                          <div className="text-sm font-medium text-foreground">до {master.travel_radius_km} км</div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
+                {master.phone && (
+                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                    <Phone className="h-4 w-4 shrink-0" />
+                    <a href={`tel:${master.phone}`} className="hover:underline">
+                      {master.phone}
+                    </a>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
 
           <div className="lg:col-span-1">
-            <Card className="sticky top-24 border-border">
+            <Card className="sticky top-24 rounded-2xl border-border">
               <CardHeader>
                 <div className="flex items-baseline justify-between gap-2">
                   <CardTitle className="text-xl text-card-foreground">Забронировать</CardTitle>
@@ -811,7 +894,7 @@ export function MasterPublicPageClient({
                     </p>
                   )}
                   <Button
-                    className="w-full"
+                    className="w-full rounded-full"
                     size="lg"
                     disabled={!user || !date || !time || !slotValid || bookMut.isPending}
                     onClick={onBook}
