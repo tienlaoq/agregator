@@ -175,8 +175,8 @@ export function VenuePublicPageClient({
   const [error, setError] = useState("")
   const [activeTab, setActiveTab] = useState("services")
   // Пока идёт программный скролл по клику на вкладку — гасим scroll-spy,
-  // чтобы промежуточные секции не перебивали выбранную (timestamp, без таймеров).
-  const suppressSpyUntil = useRef(0)
+  // чтобы промежуточные секции не перебивали выбранную.
+  const suppressSpy = useRef(false)
 
   useEffect(() => {
     if (!slug) return
@@ -238,7 +238,7 @@ export function VenuePublicPageClient({
     const ids = ["services", "halls", "reviews", "about"]
     const obs = new IntersectionObserver(
       (entries) => {
-        if (Date.now() < suppressSpyUntil.current) return
+        if (suppressSpy.current) return
         for (const e of entries) {
           if (e.isIntersecting) setActiveTab(e.target.id)
         }
@@ -348,9 +348,12 @@ export function VenuePublicPageClient({
   const currentTab = tabs.some((t) => t.id === activeTab) ? activeTab : tabs[0]?.id
 
   const scrollToSection = (id: string) => {
-    suppressSpyUntil.current = Date.now() + 700
+    suppressSpy.current = true
     setActiveTab(id)
     document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" })
+    window.setTimeout(() => {
+      suppressSpy.current = false
+    }, 700)
   }
 
   return (

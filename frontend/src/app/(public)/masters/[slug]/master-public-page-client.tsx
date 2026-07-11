@@ -97,8 +97,8 @@ export function MasterPublicPageClient({
   const [msg, setMsg] = useState("");
   const [activeTab, setActiveTab] = useState("services");
   // Пока идёт программный скролл по клику на вкладку — гасим scroll-spy,
-  // чтобы промежуточные секции не перебивали выбранную (timestamp, без таймеров).
-  const suppressSpyUntil = useRef(0);
+  // чтобы промежуточные секции не перебивали выбранную.
+  const suppressSpy = useRef(false);
   // Gallery state управляется через useGallery ниже
   const [reviews, setReviews] = useState<Review[]>([]);
   const ssrMaster = initialMaster && initialMaster.slug === slug ? initialMaster : undefined;
@@ -134,7 +134,7 @@ export function MasterPublicPageClient({
     const ids = ["services", "credentials", "travel", "reviews", "about"];
     const obs = new IntersectionObserver(
       (entries) => {
-        if (Date.now() < suppressSpyUntil.current) return;
+        if (suppressSpy.current) return;
         for (const e of entries) if (e.isIntersecting) setActiveTab(e.target.id);
       },
       { rootMargin: "-45% 0px -50% 0px" },
@@ -424,9 +424,12 @@ export function MasterPublicPageClient({
   ].filter((t) => t.show);
   const currentTab = tabs.some((t) => t.id === activeTab) ? activeTab : tabs[0]?.id;
   const scrollToSection = (id: string) => {
-    suppressSpyUntil.current = Date.now() + 700;
+    suppressSpy.current = true;
     setActiveTab(id);
     document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
+    window.setTimeout(() => {
+      suppressSpy.current = false;
+    }, 700);
   };
 
   return (
