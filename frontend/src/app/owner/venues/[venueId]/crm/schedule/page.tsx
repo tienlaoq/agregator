@@ -161,8 +161,17 @@ export default function OwnerVenueSchedulePage() {
   const [blockFrom, setBlockFrom] = useState("10:00");
   const [blockTo, setBlockTo] = useState("12:00");
   const [blockNote, setBlockNote] = useState("");
-  // "" = whole venue (all halls) in per_hall mode; a hall id targets one hall.
+  // In per_hall mode a hall must be chosen (the backend rejects a hall-less
+  // block); default to the first hall. Ignored in whole mode.
   const [blockHall, setBlockHall] = useState("");
+  // Default to the first hall in per_hall mode. Adjusting during render is
+  // React's documented alternative to a setState-in-effect.
+  if (bookingMode === "per_hall") {
+    const hs = venue?.halls ?? [];
+    if (hs.length > 0 && !hs.some((h) => h.id === blockHall)) {
+      setBlockHall(hs[0].id);
+    }
+  }
 
   const invalidateSchedule = () =>
     queryClient.invalidateQueries({ queryKey: ["venue-schedule", venueId, date] });
@@ -403,18 +412,14 @@ export default function OwnerVenueSchedulePage() {
                     className="w-[112px]"
                   />
                 </div>
-                {bookingMode === "per_hall" ? (
+                {bookingMode === "per_hall" && halls.length > 0 ? (
                   <div className="space-y-1">
                     <Label className="text-xs">Зал</Label>
-                    <Select
-                      value={blockHall || "all"}
-                      onValueChange={(v) => setBlockHall(v === "all" ? "" : v)}
-                    >
+                    <Select value={blockHall} onValueChange={setBlockHall}>
                       <SelectTrigger className="w-[180px]">
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="all">Все залы</SelectItem>
                         {(venue.halls ?? []).map((h) => (
                           <SelectItem key={h.id} value={h.id}>
                             {h.name}
@@ -436,7 +441,10 @@ export default function OwnerVenueSchedulePage() {
                   type="button"
                   size="sm"
                   onClick={() => createBlockMutation.mutate()}
-                  disabled={createBlockMutation.isPending}
+                  disabled={
+                    createBlockMutation.isPending ||
+                    (bookingMode === "per_hall" && halls.length > 0 && !blockHall)
+                  }
                 >
                   {createBlockMutation.isPending ? (
                     <Loader2 className="h-4 w-4 animate-spin" />

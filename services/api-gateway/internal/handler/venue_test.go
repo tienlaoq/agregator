@@ -187,6 +187,14 @@ func (m *mockVenueClient) SetVenueHallCoverPhoto(ctx context.Context, in *venuev
 	return nil, status.Error(codes.Unimplemented, "SetVenueHallCoverPhoto")
 }
 
+func (m *mockVenueClient) AddVenueVideo(ctx context.Context, in *venuev1.AddVenueVideoRequest, opts ...grpc.CallOption) (*venuev1.VenueResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "AddVenueVideo")
+}
+
+func (m *mockVenueClient) DeleteVenueVideo(ctx context.Context, in *venuev1.DeleteVenueVideoRequest, opts ...grpc.CallOption) (*venuev1.DeleteVenueVideoResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "DeleteVenueVideo")
+}
+
 // CRM RPCs (GetVenueManagementAccess, ListVenueStaff, AddVenueStaff,
 // RemoveVenueStaff, ListVenueCRMTasks, CreateVenueCRMTask,
 // CompleteVenueCRMTask) were removed from venue.proto and live in crm-service.

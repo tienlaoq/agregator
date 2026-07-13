@@ -26,6 +26,7 @@ import { Separator } from "@/components/ui/separator";
 import {
   deleteVenueHallPhoto,
   deleteVenuePhoto,
+  deleteVenueVideo,
   formatApiErrorMessage,
   getOwnerVenues,
   setVenueCoverPhoto,
@@ -34,6 +35,7 @@ import {
   updateVenue,
   uploadVenueHallPhoto,
   uploadVenuePhoto,
+  uploadVenueVideo,
   venueMediaUrl,
 } from "@/lib/api";
 import { useAuthStore } from "@/store/auth";
@@ -229,8 +231,9 @@ function draftVerificationOkForSubmit(
 }
 
 function venueHallsToForm(v: Venue): VenueHallFormLine[] {
+  // Заведение может быть вовсе без залов (whole-режим) — тогда секция стартует
+  // пустой с кнопкой «Добавить зал», а не с форс-строкой «Зал 1».
   const list = v.halls && v.halls.length > 0 ? v.halls : [];
-  if (list.length === 0) return [newVenueHallLine()];
   return list.map((h) => ({
     clientKey: h.id,
     id: h.id,
@@ -254,6 +257,7 @@ function venueToForm(v: Venue): UpdateVenueRequest {
     longitude:
       v.longitude != null && !Number.isNaN(v.longitude) ? v.longitude : 37.6173,
     working_hours: v.working_hours?.trim() || "{}",
+    price_from: v.price_from ?? 0,
     halls: venueHallsToForm(v),
     services: venueServicesToFormLines(v.services ?? []),
     legal_entity_name: v.legal_entity_name ?? "",
@@ -268,6 +272,7 @@ function venueToForm(v: Venue): UpdateVenueRequest {
 function serializeForm(f: UpdateVenueRequest): string {
   return JSON.stringify({
     ...f,
+    price_from: f.price_from,
     halls: f.halls.map((h) => ({
       k: h.clientKey,
       id: h.id ?? "",
@@ -373,6 +378,7 @@ export default function EditOwnerVenuePage() {
   );
   const [error, setError] = useState("");
   const [photoError, setPhotoError] = useState("");
+  const [videoError, setVideoError] = useState("");
   const submittingRef = useRef(false);
   const baselineSerializedRef = useRef("");
 
@@ -505,7 +511,7 @@ export default function EditOwnerVenuePage() {
 
   const removeHall = (index: number) => {
     if (!form) return;
-    if (form.halls.length <= 1) return;
+    if (form.halls.length === 0) return;
     updateField(
       "halls",
       form.halls.filter((_, i) => i !== index),
@@ -586,6 +592,35 @@ export default function EditOwnerVenuePage() {
       setPhotoError(
         formatApiErrorMessage(e, "Не удалось назначить обложку."),
       ),
+  });
+
+  const uploadVideoMu = useMutation({
+    mutationFn: (file: File) => uploadVenueVideo(venueId as string, file),
+    onSuccess: (updated) => {
+      setVideoError("");
+      patchOwnerVenueInCache(queryClient, updated);
+      void queryClient.invalidateQueries({ queryKey: ["owner-venues"] });
+    },
+    onError: (e: unknown) => {
+      setVideoError(
+        formatApiErrorMessage(
+          e,
+          "Не удалось загрузить видео. Допустимы MP4 и WebM, до 50 МБ, не более 6 роликов.",
+        ),
+      );
+    },
+  });
+
+  const deleteVideoMu = useMutation({
+    mutationFn: (videoId: string) =>
+      deleteVenueVideo(venueId as string, videoId),
+    onSuccess: (updated) => {
+      setVideoError("");
+      patchOwnerVenueInCache(queryClient, updated);
+      void queryClient.invalidateQueries({ queryKey: ["owner-venues"] });
+    },
+    onError: (e: unknown) =>
+      setVideoError(formatApiErrorMessage(e, "Не удалось удалить видео.")),
   });
 
   const mergeHallsPhotosFromVenue = (updated: Venue) => {
@@ -685,8 +720,11 @@ export default function EditOwnerVenuePage() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!form || submittingRef.current || !validId) return;
-    if (!form.halls.some((h) => h.name.trim())) {
-      setError("Укажите название хотя бы для одного зала.");
+    // Залы опциональны (заведение может быть без залов). Но если строки залов
+    // добавлены — хотя бы одна должна быть названа, иначе все безымянные молча
+    // отфильтруются при сохранении.
+    if (form.halls.length > 0 && !form.halls.some((h) => h.name.trim())) {
+      setError("Укажите название хотя бы для одного зала или удалите пустые.");
       return;
     }
     submittingRef.current = true;
@@ -773,15 +811,32 @@ export default function EditOwnerVenuePage() {
   const maxVenuePhotos = 24;
   const canAddPhotos = photoCount < maxVenuePhotos;
 
+  const sortedVideos = [...(venue.videos ?? [])].sort(
+    (a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0),
+  );
+  const videoCount = sortedVideos.length;
+  const maxVenueVideos = 6;
+  const canAddVideos = videoCount < maxVenueVideos;
+
   const draftHasPhotos = photoCount > 0;
-  const draftHallsPriced = form.halls.some(
+  // Зеркалит серверную ValidateVenueDraftReadyForReview: публикация требует
+  // хотя бы один зал с названием И ценой. Базовая цена заведения (whole-режим)
+  // сервером НЕ принимается — раньше её зачёт здесь давал ложные 4/4 и ошибку
+  // «укажите название и цену за час хотя бы для одного зала» при отправке.
+  const draftPriced = form.halls.some(
     (h) => h.name.trim() !== "" && Number(h.price_from) > 0,
   );
+  const priceChecklistLabel =
+    form.halls.length === 0
+      ? "Указана цена за час"
+      : form.halls.length === 1
+        ? "Указана цена за час у зала"
+        : "Указана цена за час у залов";
   const draftDescOk = [...(form.description?.trim() ?? "")].length >= 40;
   const draftVerificationOk = draftVerificationOkForSubmit(form);
   const draftReadyForReview =
     draftHasPhotos &&
-    draftHallsPriced &&
+    draftPriced &&
     draftDescOk &&
     draftVerificationOk;
 
@@ -789,9 +844,9 @@ export default function EditOwnerVenuePage() {
   // мере заполнения. Показываем липким сайдбаром справа, только для черновика.
   const showVenueChecklist = venue.status === "draft";
   const venueChecklist = [
-    { label: "Фото — хотя бы одно", done: draftHasPhotos },
-    { label: "Цена за час по залам", done: draftHallsPriced },
-    { label: "Описание — от ~2–3 предложений", done: draftDescOk },
+    { label: "Хотя бы одно фото", done: draftHasPhotos },
+    { label: priceChecklistLabel, done: draftPriced },
+    { label: "Описание — 2–3 предложения", done: draftDescOk },
     {
       label: "Данные для модерации: юрлицо/ИП, ИНН, ОГРН, ссылка на карты",
       done: draftVerificationOk,
@@ -1090,8 +1145,6 @@ export default function EditOwnerVenuePage() {
               </CardContent>
             </Card>
 
-            <OwnerSlotBlocksSection venueId={venueId} />
-
             <Card className="border-border">
               <CardHeader className="pb-4">
                 <CardTitle className="text-lg">Залы</CardTitle>
@@ -1103,6 +1156,28 @@ export default function EditOwnerVenuePage() {
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-8">
+                {form.halls.length === 0 ? (
+                  <div className="space-y-2">
+                    <Label htmlFor="venue-price-from">Цена за час (₽)</Label>
+                    <Input
+                      id="venue-price-from"
+                      type="number"
+                      inputMode="numeric"
+                      min={0}
+                      value={form.price_from || ""}
+                      onChange={(e) =>
+                        updateField("price_from", Number(e.target.value))
+                      }
+                      placeholder="напр. 2000"
+                      className="max-w-xs"
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Базовая цена заведения — используется, пока не добавлены
+                      залы. Как только появится хотя бы один зал, цена карточки
+                      берётся из залов (минимальная).
+                    </p>
+                  </div>
+                ) : null}
                 {photoError ? (
                   <p className="text-sm text-destructive" role="alert">
                     {photoError}
@@ -1126,18 +1201,16 @@ export default function EditOwnerVenuePage() {
                         <h3 className="text-base font-semibold text-foreground">
                           Зал {hallIndex + 1}
                         </h3>
-                        {form.halls.length > 1 ? (
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="sm"
-                            className="gap-1 text-destructive hover:text-destructive"
-                            onClick={() => removeHall(hallIndex)}
-                          >
-                            <Trash2 className="h-4 w-4" />
-                            Удалить зал
-                          </Button>
-                        ) : null}
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          className="gap-1 text-destructive hover:text-destructive"
+                          onClick={() => removeHall(hallIndex)}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                          Удалить зал
+                        </Button>
                       </div>
                       <div className="grid gap-4 sm:grid-cols-2">
                         <div className="space-y-2 sm:col-span-2">
@@ -1438,6 +1511,8 @@ export default function EditOwnerVenuePage() {
               </CardContent>
             </Card>
 
+            <OwnerSlotBlocksSection venueId={venueId} halls={venue.halls ?? []} />
+
             <VenueServicesFields
               value={form.services}
               onChange={(next) => updateField("services", next)}
@@ -1580,6 +1655,99 @@ export default function EditOwnerVenuePage() {
                 {photoCount >= maxVenuePhotos ? (
                   <p className="mt-2 text-sm text-muted-foreground">
                     Достигнут лимит {maxVenuePhotos} фото. Удалите лишние, чтобы
+                    загрузить новые.
+                  </p>
+                ) : null}
+              </CardContent>
+            </Card>
+
+            <Card className="border-border">
+              <CardHeader className="pb-4">
+                <CardTitle className="text-lg">Видео</CardTitle>
+                <CardDescription>
+                  Короткие ролики о заведении. MP4 или WebM, до 50 МБ каждый,
+                  максимум {maxVenueVideos}. Загрузка видео может отправить
+                  карточку на повторную модерацию.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                {videoError ? (
+                  <p className="mb-3 text-sm text-destructive" role="alert">
+                    {videoError}
+                  </p>
+                ) : null}
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                  {sortedVideos.map((v) => (
+                    <div
+                      key={v.id}
+                      className="group relative overflow-hidden rounded-lg border border-border"
+                    >
+                      <video
+                        src={venueMediaUrl(v.url)}
+                        controls
+                        preload="metadata"
+                        className="aspect-video w-full bg-black object-contain"
+                      />
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="destructive"
+                        className="absolute right-2 top-2 h-8 px-2 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100"
+                        disabled={deleteVideoMu.isPending}
+                        onClick={() => {
+                          if (
+                            window.confirm(
+                              "Удалить это видео? Его нельзя будет восстановить.",
+                            )
+                          ) {
+                            deleteVideoMu.mutate(v.id);
+                          }
+                        }}
+                        aria-label="Удалить видео"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
+                    </div>
+                  ))}
+                  <label
+                    className={
+                      canAddVideos && !uploadVideoMu.isPending
+                        ? "flex aspect-video cursor-pointer flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed border-border bg-muted/30 text-muted-foreground transition-colors hover:border-primary hover:bg-muted/50 hover:text-primary"
+                        : "flex aspect-video cursor-not-allowed flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed border-border bg-muted/20 text-muted-foreground opacity-60"
+                    }
+                  >
+                    <Upload className="h-8 w-8" />
+                    <span className="px-2 text-center text-xs">
+                      {uploadVideoMu.isPending
+                        ? "Загрузка…"
+                        : canAddVideos
+                          ? "Загрузить видео"
+                          : "Лимит видео"}
+                    </span>
+                    <input
+                      type="file"
+                      accept="video/mp4,video/webm"
+                      className="hidden"
+                      multiple
+                      disabled={!canAddVideos || uploadVideoMu.isPending}
+                      onChange={async (e) => {
+                        const { files } = e.target;
+                        if (!files?.length) return;
+                        for (const f of Array.from(files)) {
+                          try {
+                            await uploadVideoMu.mutateAsync(f);
+                          } catch {
+                            break;
+                          }
+                        }
+                        e.target.value = "";
+                      }}
+                    />
+                  </label>
+                </div>
+                {videoCount >= maxVenueVideos ? (
+                  <p className="mt-2 text-sm text-muted-foreground">
+                    Достигнут лимит {maxVenueVideos} видео. Удалите лишние, чтобы
                     загрузить новые.
                   </p>
                 ) : null}

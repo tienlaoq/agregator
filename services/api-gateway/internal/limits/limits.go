@@ -80,6 +80,11 @@ var (
 	// master).  The multipart reader is given PhotoMaxBytes+1024 to account for
 	// boundary overhead.
 	PhotoMaxBytes = int64(intLimit("PHOTO_MAX_BYTES", 5<<20)) // 5 MiB
+
+	// VideoMaxBytes is the maximum size of a single uploaded video (venue or
+	// master). Videos are streamed to storage, but the request body is still
+	// capped to protect the gateway from unbounded uploads.
+	VideoMaxBytes = int64(intLimit("VIDEO_MAX_BYTES", 50<<20)) // 50 MiB
 )
 
 // ── Support tickets ───────────────────────────────────────────────────────────

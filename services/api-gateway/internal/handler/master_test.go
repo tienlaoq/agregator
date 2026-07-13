@@ -107,6 +107,12 @@ func (m *mockMasterClient) DeleteMasterPhoto(context.Context, *masterv1.DeleteMa
 func (m *mockMasterClient) SetMasterCoverPhoto(context.Context, *masterv1.SetMasterCoverPhotoRequest, ...grpc.CallOption) (*masterv1.MasterResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "SetMasterCoverPhoto")
 }
+func (m *mockMasterClient) AddMasterVideo(context.Context, *masterv1.AddMasterVideoRequest, ...grpc.CallOption) (*masterv1.MasterResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "AddMasterVideo")
+}
+func (m *mockMasterClient) DeleteMasterVideo(context.Context, *masterv1.DeleteMasterVideoRequest, ...grpc.CallOption) (*masterv1.DeleteMasterVideoResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "DeleteMasterVideo")
+}
 
 func (m *mockMasterClient) GetMasterBookingsBatch(_ context.Context, in *masterv1.GetMasterBookingsBatchRequest, _ ...grpc.CallOption) (*masterv1.GetMasterBookingsBatchResponse, error) {
 	return &masterv1.GetMasterBookingsBatchResponse{Bookings: make(map[string]*masterv1.MasterBooking)}, nil

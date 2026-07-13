@@ -372,6 +372,30 @@ ORDER BY master_id, sort_order ASC, id ASC`, ids)
 	return out, rows.Err()
 }
 
+func (r *MasterRepo) batchLoadVideos(ctx context.Context, ids []uuid.UUID) (map[uuid.UUID][]domain.MasterVideo, error) {
+	out := make(map[uuid.UUID][]domain.MasterVideo, len(ids))
+	if len(ids) == 0 {
+		return out, nil
+	}
+	rows, err := r.pool.Query(ctx, `
+SELECT id, master_id, url, sort_order
+FROM master_videos
+WHERE master_id = ANY($1::uuid[])
+ORDER BY master_id, sort_order ASC, id ASC`, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var v domain.MasterVideo
+		if err := rows.Scan(&v.ID, &v.MasterID, &v.URL, &v.SortOrder); err != nil {
+			return nil, err
+		}
+		out[v.MasterID] = append(out[v.MasterID], v)
+	}
+	return out, rows.Err()
+}
+
 // batchLoadCredentials fetches certificates/awards for a set of masters in a
 // single query and returns them grouped by master ID, ordered by sort_order ASC
 // then id so callers do not need to re-sort.
@@ -423,6 +447,10 @@ func (r *MasterRepo) attachAssociations(ctx context.Context, list []domain.Maste
 	if err != nil {
 		return err
 	}
+	vidMap, err := r.batchLoadVideos(ctx, ids)
+	if err != nil {
+		return err
+	}
 	// Index-based loop is intentional: list is a []domain.Master value slice
 	// (not a pointer slice), so `for _, m := range list { m.Services = ... }`
 	// would mutate a copy and the caller would see no change. list[i].Field = …
@@ -431,6 +459,7 @@ func (r *MasterRepo) attachAssociations(ctx context.Context, list []domain.Maste
 		list[i].Services = svcsMap[list[i].ID]    // nil if master has no services
 		list[i].Photos = phMap[list[i].ID]        // nil if master has no photos
 		list[i].Credentials = credMap[list[i].ID] // nil if master has no credentials
+		list[i].Videos = vidMap[list[i].ID]       // nil if master has no videos
 	}
 	return nil
 }
@@ -1032,10 +1061,14 @@ func (r *MasterRepo) AddMasterPhoto(ctx context.Context, masterID uuid.UUID, url
 	}
 	defer tx.Rollback(ctx)
 
-	// COUNT and limit check share the same transaction so concurrent uploads
-	// cannot both read cnt < MaxMasterPhotos and both succeed — the second will
-	// block on the row-level lock acquired by the first INSERT, then re-read
-	// the updated count and return ErrPhotoLimitReached.
+	// Lock the master row so concurrent adds for the same master serialize.
+	// The uq_master_photos_one_cover index only guards the first photo
+	// (is_cover=true); for subsequent photos (is_cover=false) nothing else
+	// serializes writers, so without this lock two transactions could both read
+	// cnt < MaxMasterPhotos and both insert, exceeding the limit.
+	if _, err := tx.Exec(ctx, `SELECT id FROM masters WHERE id = $1 FOR UPDATE`, masterID); err != nil {
+		return nil, err
+	}
 	var cnt int32
 	if err := tx.QueryRow(ctx, `SELECT COUNT(*) FROM master_photos WHERE master_id = $1`, masterID).Scan(&cnt); err != nil {
 		return nil, err
@@ -1095,6 +1128,60 @@ SELECT id FROM master_photos WHERE master_id = $1 ORDER BY sort_order ASC, id AS
 		}
 	}
 	if err := tx.Commit(ctx); err != nil {
+		return "", err
+	}
+	return url, nil
+}
+
+func (r *MasterRepo) AddMasterVideo(ctx context.Context, masterID uuid.UUID, url string) (*domain.MasterVideo, error) {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+
+	// Lock the master row so concurrent adds for the same master serialize:
+	// unlike master_photos (which has the uq_master_photos_one_cover index to
+	// lean on), master_videos has no unique constraint, so without this lock
+	// two transactions could both read cnt < MaxMasterVideos and both insert,
+	// exceeding the limit.
+	if _, err := tx.Exec(ctx, `SELECT id FROM masters WHERE id = $1 FOR UPDATE`, masterID); err != nil {
+		return nil, err
+	}
+	var cnt int32
+	if err := tx.QueryRow(ctx, `SELECT COUNT(*) FROM master_videos WHERE master_id = $1`, masterID).Scan(&cnt); err != nil {
+		return nil, err
+	}
+	if cnt >= domain.MaxMasterVideos {
+		return nil, domain.ErrVideoLimitReached
+	}
+	var maxSO int32
+	if err := tx.QueryRow(ctx, `SELECT COALESCE(MAX(sort_order), -1) FROM master_videos WHERE master_id = $1`, masterID).Scan(&maxSO); err != nil {
+		return nil, err
+	}
+	sortOrder := maxSO + 1
+	id := uuid.New()
+	_, err = tx.Exec(ctx, `
+INSERT INTO master_videos (id, master_id, url, sort_order) VALUES ($1,$2,$3,$4)`,
+		id, masterID, url, sortOrder)
+	if err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+	return &domain.MasterVideo{ID: id, MasterID: masterID, URL: url, SortOrder: sortOrder}, nil
+}
+
+func (r *MasterRepo) DeleteMasterVideo(ctx context.Context, masterID, videoID uuid.UUID) (string, error) {
+	var url string
+	err := r.pool.QueryRow(ctx, `
+DELETE FROM master_videos WHERE id = $1 AND master_id = $2 RETURNING url`,
+		videoID, masterID).Scan(&url)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", domain.ErrNotFound
+		}
 		return "", err
 	}
 	return url, nil

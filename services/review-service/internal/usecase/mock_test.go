@@ -332,6 +332,12 @@ func (m *mockMasterClient) DeleteMasterPhoto(ctx context.Context, in *masterv1.D
 func (m *mockMasterClient) SetMasterCoverPhoto(ctx context.Context, in *masterv1.SetMasterCoverPhotoRequest, opts ...grpc.CallOption) (*masterv1.MasterResponse, error) {
 	return nil, nil
 }
+func (m *mockMasterClient) AddMasterVideo(ctx context.Context, in *masterv1.AddMasterVideoRequest, opts ...grpc.CallOption) (*masterv1.MasterResponse, error) {
+	return nil, nil
+}
+func (m *mockMasterClient) DeleteMasterVideo(ctx context.Context, in *masterv1.DeleteMasterVideoRequest, opts ...grpc.CallOption) (*masterv1.DeleteMasterVideoResponse, error) {
+	return nil, nil
+}
 func (m *mockMasterClient) SuspendMasterByUser(ctx context.Context, in *masterv1.SuspendMasterByUserRequest, opts ...grpc.CallOption) (*masterv1.SuspendMasterByUserResponse, error) {
 	return nil, nil
 }

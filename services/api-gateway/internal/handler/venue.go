@@ -1050,6 +1050,14 @@ func venueToJSON(v *venuev1.VenueResponse, includeVerification bool) map[string]
 			"is_cover":   p.GetIsCover(),
 		}
 	}
+	videos := make([]map[string]any, len(v.GetVideos()))
+	for i, vid := range v.GetVideos() {
+		videos[i] = map[string]any{
+			"id":         vid.GetId(),
+			"url":        vid.GetUrl(),
+			"sort_order": vid.GetSortOrder(),
+		}
+	}
 	halls := make([]map[string]any, len(v.GetHalls()))
 	for i, hall := range v.GetHalls() {
 		hPhotos := make([]map[string]any, len(hall.GetPhotos()))
@@ -1103,6 +1111,7 @@ func venueToJSON(v *venuev1.VenueResponse, includeVerification bool) map[string]
 		"moderated_by":       v.GetModeratedBy(),
 		"services":           services,
 		"photos":             photos,
+		"videos":             videos,
 		"halls":              halls,
 		"created_at":         createdAt,
 		"social_links":       socialLinksMapForJSON(v.GetSocialLinks()),

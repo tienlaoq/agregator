@@ -40,6 +40,8 @@ type mockVenueRepo struct {
 	ListVenueScheduleFn       func(ctx context.Context, venueID uuid.UUID, dateFrom, dateTo string) ([]domain.ScheduleEntry, error)
 	AddVenuePhotoFn           func(ctx context.Context, venueID, ownerID uuid.UUID, url string) (*domain.VenuePhoto, error)
 	DeleteVenuePhotoFn        func(ctx context.Context, venueID, ownerID, photoID uuid.UUID) (string, error)
+	AddVenueVideoFn           func(ctx context.Context, venueID, ownerID uuid.UUID, url string) (*domain.VenueVideo, error)
+	DeleteVenueVideoFn        func(ctx context.Context, venueID, ownerID, videoID uuid.UUID) (string, error)
 	SetVenueCoverPhotoFn      func(ctx context.Context, venueID, ownerID, photoID uuid.UUID) error
 	ReplaceVenueHallsFn       func(ctx context.Context, venueID, ownerID uuid.UUID, items []domain.VenueHallUpsert) error
 	AddVenueHallPhotoFn       func(ctx context.Context, venueID, hallID uuid.UUID, url string) (*domain.VenueHallPhoto, error)
@@ -261,6 +263,20 @@ func (m *mockVenueRepo) AddVenuePhoto(ctx context.Context, venueID, ownerID uuid
 func (m *mockVenueRepo) DeleteVenuePhoto(ctx context.Context, venueID, ownerID, photoID uuid.UUID) (string, error) {
 	if m.DeleteVenuePhotoFn != nil {
 		return m.DeleteVenuePhotoFn(ctx, venueID, ownerID, photoID)
+	}
+	return "", nil
+}
+
+func (m *mockVenueRepo) AddVenueVideo(ctx context.Context, venueID, ownerID uuid.UUID, url string) (*domain.VenueVideo, error) {
+	if m.AddVenueVideoFn != nil {
+		return m.AddVenueVideoFn(ctx, venueID, ownerID, url)
+	}
+	return &domain.VenueVideo{VenueID: venueID, URL: url}, nil
+}
+
+func (m *mockVenueRepo) DeleteVenueVideo(ctx context.Context, venueID, ownerID, videoID uuid.UUID) (string, error) {
+	if m.DeleteVenueVideoFn != nil {
+		return m.DeleteVenueVideoFn(ctx, venueID, ownerID, videoID)
 	}
 	return "", nil
 }

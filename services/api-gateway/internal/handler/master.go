@@ -90,6 +90,14 @@ func masterProtoToJSON(m *masterv1.Master) map[string]any {
 			"is_cover":   p.GetIsCover(),
 		})
 	}
+	videos := make([]map[string]any, 0, len(m.GetVideos()))
+	for _, v := range m.GetVideos() {
+		videos = append(videos, map[string]any{
+			"id":         v.GetId(),
+			"url":        v.GetUrl(),
+			"sort_order": v.GetSortOrder(),
+		})
+	}
 	creds := make([]map[string]any, 0, len(m.GetCredentials()))
 	for _, c := range m.GetCredentials() {
 		creds = append(creds, map[string]any{
@@ -131,6 +139,7 @@ func masterProtoToJSON(m *masterv1.Master) map[string]any {
 		"moderation_comment":           m.GetModerationComment(),
 		"services":                     svcs,
 		"photos":                       photos,
+		"videos":                       videos,
 		"credentials":                  creds,
 	}
 	if m.GetCreatedAt() != nil {

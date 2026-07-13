@@ -630,7 +630,7 @@ export async function createOwnerSlotBlock(
     time_from: string;
     time_to: string;
     note?: string;
-    /** per_hall mode: specific halls, or empty = whole venue (every hall) */
+    /** per_hall mode: required, targets specific halls. Omit in whole mode. */
     hall_ids?: string[];
   },
 ): Promise<{ blocks: ManualSlotBlock[] }> {
@@ -1074,6 +1074,27 @@ export async function setVenueCoverPhoto(
   });
 }
 
+export async function uploadVenueVideo(
+  venueId: string,
+  file: File,
+): Promise<Venue> {
+  const form = new FormData();
+  form.append("video", file);
+  return fetchAPI<Venue>(`/api/v1/venues/${venueId}/videos`, {
+    method: "POST",
+    body: form,
+  });
+}
+
+export async function deleteVenueVideo(
+  venueId: string,
+  videoId: string,
+): Promise<Venue> {
+  return fetchAPI<Venue>(`/api/v1/venues/${venueId}/videos/${videoId}`, {
+    method: "DELETE",
+  });
+}
+
 export async function uploadVenueHallPhoto(
   venueId: string,
   hallId: string,
@@ -1245,6 +1266,24 @@ export async function setMasterCoverPhoto(
   return fetchAPI<MasterProfile>(
     `/api/v1/owner/master/profile/photos/${encodeURIComponent(photoId)}/cover`,
     { method: "POST" },
+  );
+}
+
+export async function uploadMasterVideo(file: File): Promise<MasterProfile> {
+  const form = new FormData();
+  form.append("video", file);
+  return fetchAPI<MasterProfile>("/api/v1/owner/master/profile/videos", {
+    method: "POST",
+    body: form,
+  });
+}
+
+export async function deleteMasterVideo(
+  videoId: string,
+): Promise<{ deleted_url: string }> {
+  return fetchAPI<{ deleted_url: string }>(
+    `/api/v1/owner/master/profile/videos/${encodeURIComponent(videoId)}`,
+    { method: "DELETE" },
   );
 }
 

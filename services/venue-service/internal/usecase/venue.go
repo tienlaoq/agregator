@@ -531,7 +531,14 @@ func (uc *VenueUseCase) UpdateRating(ctx context.Context, venueID uuid.UUID, avg
 // effectiveHalls resolves which halls a reservation or availability check
 // applies to: the requested halls in per-hall mode, or none (whole-venue) in
 // whole mode. Concentrates the mode gate so reserve and check stay consistent.
-func (uc *VenueUseCase) effectiveHalls(ctx context.Context, venueID uuid.UUID, hallIDs []uuid.UUID) ([]uuid.UUID, error) {
+//
+// requireHall guards the reservation path: in per-hall mode a booking with no
+// hall selected would write a whole-venue (hall_id NULL) row keyed on venue_id,
+// which never collides with per-hall rows keyed on hall_id — so it would not
+// fence the individual halls. We reject that whenever the venue actually has
+// halls to pick from. Availability checks pass requireHall=false (a hall-less
+// check just asks about the whole venue).
+func (uc *VenueUseCase) effectiveHalls(ctx context.Context, venueID uuid.UUID, hallIDs []uuid.UUID, requireHall bool) ([]uuid.UUID, error) {
 	mode, err := uc.repo.BookingMode(ctx, venueID)
 	if err != nil {
 		return nil, err
@@ -539,11 +546,20 @@ func (uc *VenueUseCase) effectiveHalls(ctx context.Context, venueID uuid.UUID, h
 	if mode != domain.BookingModePerHall {
 		return nil, nil
 	}
+	if requireHall && len(hallIDs) == 0 {
+		existing, err := uc.repo.HallIDs(ctx, venueID)
+		if err != nil {
+			return nil, err
+		}
+		if len(existing) > 0 {
+			return nil, pkgerrors.InvalidArgument("в этом заведении нужно выбрать зал для брони")
+		}
+	}
 	return hallIDs, nil
 }
 
 func (uc *VenueUseCase) CheckSlot(ctx context.Context, venueID uuid.UUID, hallIDs []uuid.UUID, date, timeFrom, timeTo string) (bool, error) {
-	halls, err := uc.effectiveHalls(ctx, venueID, hallIDs)
+	halls, err := uc.effectiveHalls(ctx, venueID, hallIDs, false)
 	if err != nil {
 		return false, err
 	}
@@ -551,7 +567,7 @@ func (uc *VenueUseCase) CheckSlot(ctx context.Context, venueID uuid.UUID, hallID
 }
 
 func (uc *VenueUseCase) BatchCheckSlots(ctx context.Context, venueID uuid.UUID, hallIDs []uuid.UUID, date string, slots [][2]string) ([]bool, error) {
-	halls, err := uc.effectiveHalls(ctx, venueID, hallIDs)
+	halls, err := uc.effectiveHalls(ctx, venueID, hallIDs, false)
 	if err != nil {
 		return nil, err
 	}
@@ -564,7 +580,7 @@ func (uc *VenueUseCase) BatchCheckSlots(ctx context.Context, venueID uuid.UUID, 
 // to a whole-venue reservation whenever no halls apply is deliberately
 // conservative — it never under-reserves.
 func (uc *VenueUseCase) ReserveSlot(ctx context.Context, venueID, bookingID uuid.UUID, date, timeFrom, timeTo string, hallIDs []uuid.UUID) error {
-	halls, err := uc.effectiveHalls(ctx, venueID, hallIDs)
+	halls, err := uc.effectiveHalls(ctx, venueID, hallIDs, true)
 	if err != nil {
 		return err
 	}
@@ -602,6 +618,7 @@ func (uc *VenueUseCase) SetBookingMode(ctx context.Context, actorID, venueID uui
 
 const (
 	maxVenuePhotos          = domain.MaxVenuePhotos
+	maxVenueVideos          = domain.MaxVenueVideos
 	maxVenueHalls           = 15
 	maxManualBlockNoteRunes = 500
 	maxManualBlockRangeDays = 120
@@ -640,9 +657,9 @@ func validateSlotDateAndTimes(date, timeFrom, timeTo string) error {
 }
 
 // CreateManualSlotBlock reserves a time interval without an aggregator booking
-// (external booking). In per-hall mode the block targets specific halls — the
-// requested ones, or every hall when none are given ("block the whole venue");
-// in whole mode it blocks the venue as a single interval.
+// (external booking). In per-hall mode the block targets the requested halls and
+// at least one must be given; in whole mode it blocks the venue as a single
+// interval.
 func (uc *VenueUseCase) CreateManualSlotBlock(ctx context.Context, ownerID, venueID uuid.UUID, hallIDs []uuid.UUID, date, timeFrom, timeTo, note string) ([]domain.ManualSlotBlock, error) {
 	if err := uc.ensureVenueMember(ctx, venueID, ownerID); err != nil {
 		return nil, err
@@ -670,8 +687,11 @@ func (uc *VenueUseCase) CreateManualSlotBlock(ctx context.Context, ownerID, venu
 }
 
 // resolveBlockHalls picks the halls a manual block targets: none (whole-venue)
-// in whole mode; the requested halls (validated to belong to the venue), or
-// every hall when none are given, in per-hall mode.
+// in whole mode; in per-hall mode the requested halls (validated to belong to
+// the venue), with an explicit hall required — a hall-less block would write a
+// venue-keyed row that never fences the per-hall rows, mirroring the booking
+// guard in effectiveHalls. A per-hall venue with no halls at all falls back to
+// a whole-venue block (there are no per-hall rows to fence).
 func (uc *VenueUseCase) resolveBlockHalls(ctx context.Context, venueID uuid.UUID, hallIDs []uuid.UUID) ([]uuid.UUID, error) {
 	mode, err := uc.repo.BookingMode(ctx, venueID)
 	if err != nil {
@@ -685,10 +705,13 @@ func (uc *VenueUseCase) resolveBlockHalls(ctx context.Context, venueID uuid.UUID
 		return nil, err
 	}
 	if len(venueHalls) == 0 {
-		return nil, pkgerrors.InvalidArgument("у заведения нет залов")
+		// per_hall, но залов ещё нет (не заведены или все удалены): ведём себя
+		// как whole — одна venue-wide строка, как fallback брони в effectiveHalls.
+		// Коллизии нет: без залов per-hall строк не существует.
+		return nil, nil
 	}
 	if len(hallIDs) == 0 {
-		return venueHalls, nil
+		return nil, pkgerrors.InvalidArgument("в этом заведении нужно выбрать зал для блокировки")
 	}
 	known := make(map[uuid.UUID]struct{}, len(venueHalls))
 	for _, h := range venueHalls {
@@ -809,6 +832,58 @@ func (uc *VenueUseCase) DeleteVenuePhoto(ctx context.Context, venueID, ownerID, 
 		}
 		if errors.Is(err, repository.ErrPhotoNotFound) {
 			return "", pkgerrors.NotFound("фото не найдено")
+		}
+		return "", err
+	}
+	uc.invalidateCache(ctx, venueID, v.Slug)
+	return deletedURL, nil
+}
+
+func (uc *VenueUseCase) AddVenueVideo(ctx context.Context, venueID, ownerID uuid.UUID, url string) (*domain.Venue, error) {
+	v, err := uc.repo.GetByID(ctx, venueID)
+	if err != nil {
+		return nil, err
+	}
+	if v == nil {
+		return nil, pkgerrors.NotFound("площадка не найдена")
+	}
+	if v.OwnerID != ownerID {
+		return nil, pkgerrors.PermissionDenied("нет прав на управление площадкой")
+	}
+	if len(v.Videos) >= maxVenueVideos {
+		return nil, pkgerrors.InvalidArgument("достигнут лимит видео")
+	}
+	if _, err := uc.repo.AddVenueVideo(ctx, venueID, ownerID, url); err != nil {
+		if guardErr := venueWriteGuardErr(err); guardErr != nil {
+			return nil, guardErr
+		}
+		if errors.Is(err, repository.ErrVenueVideosLimit) {
+			return nil, pkgerrors.InvalidArgument("достигнут лимит видео")
+		}
+		return nil, err
+	}
+	uc.invalidateCache(ctx, venueID, v.Slug)
+	return uc.repo.GetByID(ctx, venueID)
+}
+
+func (uc *VenueUseCase) DeleteVenueVideo(ctx context.Context, venueID, ownerID, videoID uuid.UUID) (deletedURL string, err error) {
+	v, err := uc.repo.GetByID(ctx, venueID)
+	if err != nil {
+		return "", err
+	}
+	if v == nil {
+		return "", pkgerrors.NotFound("площадка не найдена")
+	}
+	if v.OwnerID != ownerID {
+		return "", pkgerrors.PermissionDenied("нет прав на управление площадкой")
+	}
+	deletedURL, err = uc.repo.DeleteVenueVideo(ctx, venueID, ownerID, videoID)
+	if err != nil {
+		if guardErr := venueWriteGuardErr(err); guardErr != nil {
+			return "", guardErr
+		}
+		if errors.Is(err, repository.ErrVideoNotFound) {
+			return "", pkgerrors.NotFound("видео не найдено")
 		}
 		return "", err
 	}

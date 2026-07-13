@@ -358,6 +358,28 @@ func (r *fakeRepo) DeleteMasterPhoto(_ context.Context, masterID, photoID uuid.U
 	}
 	return "", domain.ErrNotFound
 }
+func (r *fakeRepo) AddMasterVideo(_ context.Context, masterID uuid.UUID, url string) (*domain.MasterVideo, error) {
+	m, ok := r.masters[masterID]
+	if !ok {
+		return nil, domain.ErrNotFound
+	}
+	v := domain.MasterVideo{ID: uuid.New(), MasterID: masterID, URL: url, SortOrder: int32(len(m.Videos))}
+	m.Videos = append(m.Videos, v)
+	return &v, nil
+}
+func (r *fakeRepo) DeleteMasterVideo(_ context.Context, masterID, videoID uuid.UUID) (string, error) {
+	m, ok := r.masters[masterID]
+	if !ok {
+		return "", domain.ErrNotFound
+	}
+	for i, v := range m.Videos {
+		if v.ID == videoID {
+			m.Videos = append(m.Videos[:i], m.Videos[i+1:]...)
+			return v.URL, nil
+		}
+	}
+	return "", domain.ErrNotFound
+}
 func (r *fakeRepo) SetMasterCoverPhoto(_ context.Context, masterID, photoID uuid.UUID) error {
 	m, ok := r.masters[masterID]
 	if !ok {

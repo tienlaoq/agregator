@@ -57,7 +57,8 @@ func Registry() *prometheus.Registry {
 
 type statusRecorder struct {
 	http.ResponseWriter
-	status int
+	status   int
+	hijacked bool
 }
 
 func (w *statusRecorder) WriteHeader(code int) {
@@ -73,6 +74,7 @@ func (w *statusRecorder) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 	if !ok {
 		return nil, nil, errors.New("metrics: underlying ResponseWriter does not implement http.Hijacker")
 	}
+	w.hijacked = true
 	return h.Hijack()
 }
 
@@ -113,7 +115,13 @@ func HTTPMiddleware(next http.Handler) http.Handler {
 		sc := statusClass(sr.status)
 		route := routeLabel(r)
 		httpRequests.WithLabelValues(r.Method, sc, route).Inc()
-		httpDuration.WithLabelValues(r.Method, sc, route).Observe(time.Since(start).Seconds())
+		// Hijacked connections (WebSocket upgrades) live for the whole session,
+		// so their wall-clock duration is not a request latency — recording it
+		// would dump minutes/hours into the +Inf bucket and skew the p95 SLO.
+		// Count the request, skip the duration.
+		if !sr.hijacked {
+			httpDuration.WithLabelValues(r.Method, sc, route).Observe(time.Since(start).Seconds())
+		}
 	})
 }
 

@@ -18,6 +18,7 @@ const (
 	VenueTypeHammam = "hammam"
 
 	MaxVenuePhotos = 24
+	MaxVenueVideos = 6
 
 	PayoutLegalFormEmpty        = ""
 	PayoutLegalFormIP           = "ip"
@@ -63,6 +64,7 @@ type Venue struct {
 	// migration 016).  Partner payout rails now live in payment-service.
 	Services  []VenueService
 	Photos    []VenuePhoto
+	Videos    []VenueVideo
 	Halls     []VenueHall
 	CreatedAt time.Time
 	UpdatedAt time.Time
@@ -94,6 +96,13 @@ type VenuePhoto struct {
 	URL       string
 	SortOrder int32
 	IsCover   bool
+}
+
+type VenueVideo struct {
+	ID        uuid.UUID
+	VenueID   uuid.UUID
+	URL       string
+	SortOrder int32
 }
 
 // VenueHall is a rentable space inside a venue (Russian: зал).

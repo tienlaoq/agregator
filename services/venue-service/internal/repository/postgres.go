@@ -29,6 +29,9 @@ var ErrVenueOwnershipMismatch = errors.New("venue ownership mismatch")
 // ErrPhotoNotFound is returned when a venue or hall photo row does not exist.
 var ErrPhotoNotFound = errors.New("photo not found")
 
+// ErrVideoNotFound is returned when a venue video row does not exist.
+var ErrVideoNotFound = errors.New("video not found")
+
 // ErrHallNotFound is returned when a venue hall row does not exist.
 var ErrHallNotFound = errors.New("hall not found")
 
@@ -43,6 +46,9 @@ var ErrVenuePhotosLimit = errors.New("venue photos limit reached")
 
 // ErrHallPhotosLimit is returned when adding a hall photo would exceed the per-hall limit.
 var ErrHallPhotosLimit = errors.New("hall photos limit reached")
+
+// ErrVenueVideosLimit is returned when adding a venue video would exceed MaxVenueVideos.
+var ErrVenueVideosLimit = errors.New("venue videos limit reached")
 
 // ErrBookingModeHasReservations is returned when a booking-mode switch is
 // refused because the venue still has upcoming reserved slots keyed to the
@@ -350,6 +356,26 @@ func (r *venueRepo) getPhotos(ctx context.Context, venueID uuid.UUID) ([]domain.
 	return photos, rows.Err()
 }
 
+func (r *venueRepo) getVideos(ctx context.Context, venueID uuid.UUID) ([]domain.VenueVideo, error) {
+	rows, err := r.pool.Query(ctx, `
+		SELECT id, venue_id, url, sort_order
+		FROM venue_videos WHERE venue_id = $1 ORDER BY sort_order`, venueID)
+	if err != nil {
+		return nil, fmt.Errorf("get venue_videos: %w", err)
+	}
+	defer rows.Close()
+
+	var videos []domain.VenueVideo
+	for rows.Next() {
+		var v domain.VenueVideo
+		if err := rows.Scan(&v.ID, &v.VenueID, &v.URL, &v.SortOrder); err != nil {
+			return nil, fmt.Errorf("scan venue_video: %w", err)
+		}
+		videos = append(videos, v)
+	}
+	return videos, rows.Err()
+}
+
 // PopularCities returns active-venue counts per non-empty city, most first.
 func (r *venueRepo) PopularCities(ctx context.Context, limit int32) ([]domain.CityCount, error) {
 	if limit <= 0 {
@@ -390,6 +416,11 @@ func (r *venueRepo) attachVenueDetails(ctx context.Context, v *domain.Venue) err
 		return fmt.Errorf("attach venue photos: %w", err)
 	}
 	v.Photos = photos
+	videos, err := r.getVideos(ctx, v.ID)
+	if err != nil {
+		return fmt.Errorf("attach venue videos: %w", err)
+	}
+	v.Videos = videos
 	halls, err := r.getHallsWithPhotos(ctx, v.ID)
 	if err != nil {
 		return fmt.Errorf("attach venue halls: %w", err)
@@ -1043,6 +1074,83 @@ func (r *venueRepo) DeleteVenuePhoto(ctx context.Context, venueID, ownerID, phot
 	return deletedURL, nil
 }
 
+func (r *venueRepo) AddVenueVideo(ctx context.Context, venueID, ownerID uuid.UUID, url string) (*domain.VenueVideo, error) {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	if err := lockVenueForOwner(ctx, tx, venueID, ownerID); err != nil {
+		return nil, err
+	}
+
+	var n int
+	if err := tx.QueryRow(ctx, `SELECT COUNT(*) FROM venue_videos WHERE venue_id = $1`, venueID).Scan(&n); err != nil {
+		return nil, fmt.Errorf("count videos: %w", err)
+	}
+	if n >= domain.MaxVenueVideos {
+		return nil, ErrVenueVideosLimit
+	}
+
+	var sortOrder int32
+	if err := tx.QueryRow(ctx, `
+		SELECT COALESCE(MAX(sort_order), -1) + 1 FROM venue_videos WHERE venue_id = $1`, venueID,
+	).Scan(&sortOrder); err != nil {
+		return nil, fmt.Errorf("next sort_order: %w", err)
+	}
+
+	var v domain.VenueVideo
+	err = tx.QueryRow(ctx, `
+		INSERT INTO venue_videos (venue_id, url, sort_order)
+		VALUES ($1, $2, $3)
+		RETURNING id, venue_id, url, sort_order`,
+		venueID, url, sortOrder,
+	).Scan(&v.ID, &v.VenueID, &v.URL, &v.SortOrder)
+	if err != nil {
+		return nil, fmt.Errorf("insert venue_video: %w", err)
+	}
+	if err := resetToPendingReviewTx(ctx, tx, venueID); err != nil {
+		return nil, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("commit: %w", err)
+	}
+	return &v, nil
+}
+
+func (r *venueRepo) DeleteVenueVideo(ctx context.Context, venueID, ownerID, videoID uuid.UUID) (string, error) {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return "", fmt.Errorf("begin tx: %w", err)
+	}
+	defer tx.Rollback(ctx)
+
+	if err := lockVenueForOwner(ctx, tx, venueID, ownerID); err != nil {
+		return "", err
+	}
+
+	var deletedURL string
+	err = tx.QueryRow(ctx, `
+		DELETE FROM venue_videos WHERE id = $1 AND venue_id = $2 RETURNING url`,
+		videoID, venueID,
+	).Scan(&deletedURL)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", ErrVideoNotFound
+		}
+		return "", fmt.Errorf("delete venue_video: %w", err)
+	}
+
+	if err := resetToPendingReviewTx(ctx, tx, venueID); err != nil {
+		return "", err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return "", fmt.Errorf("commit: %w", err)
+	}
+	return deletedURL, nil
+}
+
 func (r *venueRepo) SetVenueCoverPhoto(ctx context.Context, venueID, ownerID, photoID uuid.UUID) error {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
@@ -1190,10 +1298,17 @@ func (r *venueRepo) ReplaceVenueHalls(ctx context.Context, venueID, ownerID uuid
 	if err := hrows.Err(); err != nil {
 		return err
 	}
-	pf, cap, am := derivedVenueFieldsFromHalls(hallRows)
+	// capacity/amenities are always hall-derived — with zero halls they reset to
+	// 0/empty (derivedVenueFieldsFromHalls([]) == 0,0,nil). price_from is different:
+	// in whole mode (no halls) it lives at the venue level, set by Update() from
+	// the form, so halls only override it when they exist — otherwise we'd wipe it.
+	pf, capacity, am := derivedVenueFieldsFromHalls(hallRows)
 	if _, err := tx.Exec(ctx, `
-		UPDATE venues SET price_from = $2, capacity = $3, amenities = $4, updated_at = now() WHERE id = $1`,
-		venueID, pf, cap, am,
+		UPDATE venues SET
+			price_from = CASE WHEN $5 THEN $2 ELSE price_from END,
+			capacity = $3, amenities = $4, updated_at = now()
+		WHERE id = $1`,
+		venueID, pf, capacity, am, len(hallRows) > 0,
 	); err != nil {
 		return fmt.Errorf("update venue derived from halls: %w", err)
 	}

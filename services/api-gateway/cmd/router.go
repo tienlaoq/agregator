@@ -330,6 +330,8 @@ func buildRouter(ctx context.Context, log zerolog.Logger, cfg Config, d *deps) (
 				r.With(ownerOrMaster).Post("/venues/{id}/halls/{hallId}/photos", venueHandler.UploadVenueHallPhoto)
 				r.With(ownerOrMaster).Delete("/venues/{id}/halls/{hallId}/photos/{photoId}", venueHandler.DeleteVenueHallPhoto)
 				r.With(ownerOrMaster).Post("/venues/{id}/halls/{hallId}/photos/{photoId}/cover", venueHandler.SetVenueHallCoverPhoto)
+				r.With(ownerOrMaster).Post("/venues/{id}/videos", venueHandler.UploadVenueVideo)
+				r.With(ownerOrMaster).Delete("/venues/{id}/videos/{videoId}", venueHandler.DeleteVenueVideo)
 
 				// Owner cabinet
 				ownerCabinet := middleware.RequireRole(roles.RoleUser, roles.RoleVenueOwner, roles.RoleMaster)
@@ -391,6 +393,8 @@ func buildRouter(ctx context.Context, log zerolog.Logger, cfg Config, d *deps) (
 					r.Post("/profile/photos/{photoId}/cover", masterHandler.SetMasterCoverPhoto)
 					r.Delete("/profile/photos/{photoId}", masterHandler.DeleteMasterPhoto)
 					r.Post("/profile/photos", masterHandler.UploadMasterPhoto)
+					r.Delete("/profile/videos/{videoId}", masterHandler.DeleteMasterVideo)
+					r.Post("/profile/videos", masterHandler.UploadMasterVideo)
 					r.Get("/profile", masterHandler.GetMyProfile)
 					// emailVerified (defined above in this protected group) gates
 					// master-profile creation — the second moderation-load action.

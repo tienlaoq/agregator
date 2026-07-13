@@ -456,7 +456,7 @@ func (s *Server) ReserveSlot(ctx context.Context, req *venuev1.ReserveSlotReques
 
 	if err := s.uc.ReserveSlot(ctx, venueID, bookingID, req.GetDate(), req.GetTimeFrom(), req.GetTimeTo(), hallIDs); err != nil {
 		if errors.Is(err, repository.ErrSlotUnavailable) {
-			return nil, pkgerrors.InvalidArgument("time slot not available")
+			return nil, pkgerrors.InvalidArgument("выбранное время уже занято, выберите другое")
 		}
 		return nil, s.internalErr(err, "reserve slot failed")
 	}
@@ -786,6 +786,66 @@ func (s *Server) DeleteVenuePhoto(ctx context.Context, req *venuev1.DeleteVenueP
 	return &venuev1.DeleteVenuePhotoResponse{Url: deletedURL}, nil
 }
 
+func (s *Server) AddVenueVideo(ctx context.Context, req *venuev1.AddVenueVideoRequest) (*venuev1.VenueResponse, error) {
+	venueID, err := uuid.Parse(req.GetVenueId())
+	if err != nil {
+		return nil, pkgerrors.InvalidArgument("invalid venue_id")
+	}
+	ownerID, err := uuid.Parse(req.GetOwnerId())
+	if err != nil {
+		return nil, pkgerrors.InvalidArgument("invalid owner_id")
+	}
+	url := strings.TrimSpace(req.GetUrl())
+	if url == "" {
+		return nil, pkgerrors.InvalidArgument("url is required")
+	}
+
+	v, err := s.uc.AddVenueVideo(ctx, venueID, ownerID, url)
+	if err != nil {
+		if _, ok := status.FromError(err); ok {
+			return nil, err
+		}
+		return nil, s.internalErr(err, "add venue video failed")
+	}
+	if pubErr := s.publisher.VenueUpdated(ctx, v); pubErr != nil {
+		s.log.Warn().Err(pubErr).Str("venue_id", v.ID.String()).Msg("venue.updated publish failed")
+	}
+	return venueToProto(v), nil
+}
+
+func (s *Server) DeleteVenueVideo(ctx context.Context, req *venuev1.DeleteVenueVideoRequest) (*venuev1.DeleteVenueVideoResponse, error) {
+	venueID, err := uuid.Parse(req.GetVenueId())
+	if err != nil {
+		return nil, pkgerrors.InvalidArgument("invalid venue_id")
+	}
+	ownerID, err := uuid.Parse(req.GetOwnerId())
+	if err != nil {
+		return nil, pkgerrors.InvalidArgument("invalid owner_id")
+	}
+	videoID, err := uuid.Parse(req.GetVideoId())
+	if err != nil {
+		return nil, pkgerrors.InvalidArgument("invalid video_id")
+	}
+
+	deletedURL, err := s.uc.DeleteVenueVideo(ctx, venueID, ownerID, videoID)
+	if err != nil {
+		if _, ok := status.FromError(err); ok {
+			return nil, err
+		}
+		return nil, s.internalErr(err, "delete venue video failed")
+	}
+	v, err := s.uc.GetByID(ctx, venueID)
+	if err != nil {
+		return nil, s.internalErr(err, "get venue after video delete failed")
+	}
+	if v != nil {
+		if pubErr := s.publisher.VenueUpdated(ctx, v); pubErr != nil {
+			s.log.Warn().Err(pubErr).Str("venue_id", v.ID.String()).Msg("venue.updated publish failed")
+		}
+	}
+	return &venuev1.DeleteVenueVideoResponse{Url: deletedURL}, nil
+}
+
 func (s *Server) SetVenueCoverPhoto(ctx context.Context, req *venuev1.SetVenueCoverPhotoRequest) (*venuev1.VenueResponse, error) {
 	venueID, err := uuid.Parse(req.GetVenueId())
 	if err != nil {
@@ -1015,6 +1075,14 @@ func venueToProto(v *domain.Venue) *venuev1.VenueResponse {
 			Url:       p.URL,
 			SortOrder: p.SortOrder,
 			IsCover:   p.IsCover,
+		})
+	}
+
+	for _, vid := range v.Videos {
+		resp.Videos = append(resp.Videos, &venuev1.VenueVideo{
+			Id:        vid.ID.String(),
+			Url:       vid.URL,
+			SortOrder: vid.SortOrder,
 		})
 	}
 

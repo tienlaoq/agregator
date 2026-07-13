@@ -156,7 +156,7 @@ func TestCreateBooking_ReserveConflictDeletesBooking(t *testing.T) {
 			return &venuev1.CheckSlotResponse{Available: true}, nil
 		},
 		ReserveSlotFunc: func(_ context.Context, _ *venuev1.ReserveSlotRequest, _ ...grpc.CallOption) (*venuev1.ReserveSlotResponse, error) {
-			return nil, status.Error(codes.InvalidArgument, "time slot not available")
+			return nil, status.Error(codes.InvalidArgument, "выбранное время уже занято, выберите другое")
 		},
 	}
 

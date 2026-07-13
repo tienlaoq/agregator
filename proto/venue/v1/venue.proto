@@ -44,6 +44,8 @@ service VenueService {
   rpc AddVenueHallPhoto(AddVenueHallPhotoRequest) returns (VenueResponse);
   rpc DeleteVenueHallPhoto(DeleteVenueHallPhotoRequest) returns (DeleteVenueHallPhotoResponse);
   rpc SetVenueHallCoverPhoto(SetVenueHallCoverPhotoRequest) returns (VenueResponse);
+  rpc AddVenueVideo(AddVenueVideoRequest) returns (VenueResponse);
+  rpc DeleteVenueVideo(DeleteVenueVideoRequest) returns (DeleteVenueVideoResponse);
   // CRM RPCs (GetVenueManagementAccess, ListVenueStaff, AddVenueStaff,
   // RemoveVenueStaff, ListVenueCRMTasks, CreateVenueCRMTask,
   // CompleteVenueCRMTask) were extracted to crm-service
@@ -228,6 +230,7 @@ message VenueResponse {
   string social_links = 31;
   repeated VenueHall halls = 32;
   string payout_legal_form = 33;
+  repeated VenueVideo videos = 36;
   // Tags 34 (yookassa_seller_account_id) and 35 (management_access) were
   // removed: 34 belonged to the marketplace-split model now replaced by
   // payment-service payout rails; 35 moved to crm-service and is composed
@@ -263,6 +266,12 @@ message VenueHallPhoto {
   string url = 2;
   int32 sort_order = 3;
   bool is_cover = 4;
+}
+
+message VenueVideo {
+  string id = 1;
+  string url = 2;
+  int32 sort_order = 3;
 }
 
 message VenueHall {
@@ -509,6 +518,22 @@ message SetVenueHallCoverPhotoRequest {
   string hall_id = 2;
   string owner_id = 3;
   string photo_id = 4;
+}
+
+message AddVenueVideoRequest {
+  string venue_id = 1;
+  string owner_id = 2;
+  string url = 3; // public path, e.g. /api/v1/uploads/venues/{id}/{file}
+}
+
+message DeleteVenueVideoRequest {
+  string venue_id = 1;
+  string owner_id = 2;
+  string video_id = 3;
+}
+
+message DeleteVenueVideoResponse {
+  string url = 1; // stored URL so gateway can remove file from disk
 }
 
 // All CRM message types (Get/List/Add/Remove staff, CRM tasks) were extracted

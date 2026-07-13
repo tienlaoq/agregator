@@ -76,6 +76,12 @@ var (
 	GatewayRequestEmptyFile = Entry{HTTP: 400, Code: "GATEWAY.REQUEST.EMPTY_FILE", Message: "Пустой файл"}
 	// GatewayRequestInvalidImageType — GATEWAY.REQUEST.INVALID_IMAGE_TYPE
 	GatewayRequestInvalidImageType = Entry{HTTP: 400, Code: "GATEWAY.REQUEST.INVALID_IMAGE_TYPE", Message: "Допустимы только JPEG, PNG и WebP"}
+	// GatewayRequestInvalidVideoId — GATEWAY.REQUEST.INVALID_VIDEO_ID
+	GatewayRequestInvalidVideoId = Entry{HTTP: 400, Code: "GATEWAY.REQUEST.INVALID_VIDEO_ID", Message: "Некорректный идентификатор видео"}
+	// GatewayRequestVideoFieldRequired — GATEWAY.REQUEST.VIDEO_FIELD_REQUIRED
+	GatewayRequestVideoFieldRequired = Entry{HTTP: 400, Code: "GATEWAY.REQUEST.VIDEO_FIELD_REQUIRED", Message: "Поле video обязательно"}
+	// GatewayRequestInvalidVideoType — GATEWAY.REQUEST.INVALID_VIDEO_TYPE
+	GatewayRequestInvalidVideoType = Entry{HTTP: 400, Code: "GATEWAY.REQUEST.INVALID_VIDEO_TYPE", Message: "Допустимы только видео MP4 и WebM"}
 	// GatewayAccountConfirmationRequired — GATEWAY.ACCOUNT.CONFIRMATION_REQUIRED
 	GatewayAccountConfirmationRequired = Entry{HTTP: 400, Code: "GATEWAY.ACCOUNT.CONFIRMATION_REQUIRED", Message: "Для удаления аккаунта введите подтверждение"}
 	// GatewayAccountConfirmationMismatch — GATEWAY.ACCOUNT.CONFIRMATION_MISMATCH
@@ -185,6 +191,12 @@ func ByCode(code string) (Entry, bool) {
 		return GatewayRequestEmptyFile, true
 	case "GATEWAY.REQUEST.INVALID_IMAGE_TYPE":
 		return GatewayRequestInvalidImageType, true
+	case "GATEWAY.REQUEST.INVALID_VIDEO_ID":
+		return GatewayRequestInvalidVideoId, true
+	case "GATEWAY.REQUEST.VIDEO_FIELD_REQUIRED":
+		return GatewayRequestVideoFieldRequired, true
+	case "GATEWAY.REQUEST.INVALID_VIDEO_TYPE":
+		return GatewayRequestInvalidVideoType, true
 	case "GATEWAY.ACCOUNT.CONFIRMATION_REQUIRED":
 		return GatewayAccountConfirmationRequired, true
 	case "GATEWAY.ACCOUNT.CONFIRMATION_MISMATCH":
