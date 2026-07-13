@@ -35,6 +35,56 @@ func TestHTTPMiddleware_preservesHijacker(t *testing.T) {
 	}
 }
 
+// Регрессия: hijacked-соединение (WebSocket) считается как запрос, но его
+// длительность (вся сессия — минуты/часы) НЕ попадает в гистограмму латентности,
+// иначе p95 SLO уезжает в +Inf.
+func TestHTTPMiddleware_hijackSkipsDuration(t *testing.T) {
+	const route = "/api/v1/hijacktest"
+
+	r := chi.NewRouter()
+	r.Use(HTTPMiddleware)
+	r.Get(route, func(w http.ResponseWriter, _ *http.Request) {
+		_, _, _ = w.(http.Hijacker).Hijack() // имитируем WS-апгрейд
+	})
+	r.ServeHTTP(&hijackableRecorder{httptest.NewRecorder()},
+		httptest.NewRequest(http.MethodGet, route, http.NoBody))
+
+	c, err := httpRequests.GetMetricWithLabelValues(http.MethodGet, "2xx", route)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := int(testutil.ToFloat64(c)); got != 1 {
+		t.Fatalf("requests=%d want 1 (request must still be counted)", got)
+	}
+
+	if n := durationSampleCount(t, route); n != 0 {
+		t.Fatalf("duration samples=%d want 0 (WS session must not pollute latency histogram)", n)
+	}
+}
+
+// durationSampleCount returns the histogram sample count for httpDuration with
+// the given route label, gathering the real registry.
+func durationSampleCount(t *testing.T, route string) uint64 {
+	t.Helper()
+	mfs, err := registry.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, mf := range mfs {
+		if mf.GetName() != "api_gateway_http_request_duration_seconds" {
+			continue
+		}
+		for _, m := range mf.GetMetric() {
+			for _, l := range m.GetLabel() {
+				if l.GetName() == "route" && l.GetValue() == route {
+					return m.GetHistogram().GetSampleCount()
+				}
+			}
+		}
+	}
+	return 0
+}
+
 func TestHTTPMiddleware_routeAndStatus(t *testing.T) {
 	t.Parallel()
 

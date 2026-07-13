@@ -187,6 +187,12 @@ func (noopVenueClient) DeleteVenueHallPhoto(context.Context, *venuev1.DeleteVenu
 func (noopVenueClient) SetVenueHallCoverPhoto(context.Context, *venuev1.SetVenueHallCoverPhotoRequest, ...grpc.CallOption) (*venuev1.VenueResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "not set up")
 }
+func (noopVenueClient) AddVenueVideo(context.Context, *venuev1.AddVenueVideoRequest, ...grpc.CallOption) (*venuev1.VenueResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "not set up")
+}
+func (noopVenueClient) DeleteVenueVideo(context.Context, *venuev1.DeleteVenueVideoRequest, ...grpc.CallOption) (*venuev1.DeleteVenueVideoResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "not set up")
+}
 func (noopVenueClient) SuspendVenuesByOwner(context.Context, *venuev1.SuspendVenuesByOwnerRequest, ...grpc.CallOption) (*venuev1.SuspendVenuesByOwnerResponse, error) {
 	return &venuev1.SuspendVenuesByOwnerResponse{}, nil
 }

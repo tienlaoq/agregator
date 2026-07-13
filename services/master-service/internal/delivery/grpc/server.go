@@ -675,6 +675,34 @@ func (s *Server) DeleteMasterPhoto(ctx context.Context, req *masterv1.DeleteMast
 	return &masterv1.DeleteMasterPhotoResponse{DeletedUrl: u}, nil
 }
 
+func (s *Server) AddMasterVideo(ctx context.Context, req *masterv1.AddMasterVideoRequest) (*masterv1.MasterResponse, error) {
+	uid, err := callerUUID(ctx)
+	if err != nil {
+		return nil, err
+	}
+	m, err := s.uc.AddMasterVideo(ctx, uid, req.GetUrl())
+	if err != nil {
+		return nil, err
+	}
+	return &masterv1.MasterResponse{Master: masterToProto(m)}, nil
+}
+
+func (s *Server) DeleteMasterVideo(ctx context.Context, req *masterv1.DeleteMasterVideoRequest) (*masterv1.DeleteMasterVideoResponse, error) {
+	uid, err := callerUUID(ctx)
+	if err != nil {
+		return nil, err
+	}
+	vid, err := parseUUID(req.GetVideoId(), "video_id")
+	if err != nil {
+		return nil, err
+	}
+	u, err := s.uc.DeleteMasterVideo(ctx, uid, vid)
+	if err != nil {
+		return nil, err
+	}
+	return &masterv1.DeleteMasterVideoResponse{DeletedUrl: u}, nil
+}
+
 func (s *Server) SetMasterCoverPhoto(ctx context.Context, req *masterv1.SetMasterCoverPhotoRequest) (*masterv1.MasterResponse, error) {
 	uid, err := callerUUID(ctx)
 	if err != nil {
@@ -715,6 +743,15 @@ func masterToProto(m *domain.Master) *masterv1.Master {
 			Url:       p.URL,
 			SortOrder: p.SortOrder,
 			IsCover:   p.IsCover,
+		})
+	}
+	vids := make([]*masterv1.MasterVideo, 0, len(m.Videos))
+	for i := range m.Videos {
+		v := &m.Videos[i]
+		vids = append(vids, &masterv1.MasterVideo{
+			Id:        v.ID.String(),
+			Url:       v.URL,
+			SortOrder: v.SortOrder,
 		})
 	}
 	creds := make([]*masterv1.MasterCredentialItem, 0, len(m.Credentials))
@@ -759,6 +796,7 @@ func masterToProto(m *domain.Master) *masterv1.Master {
 		ModerationComment:          m.ModerationComment,
 		Services:                   svcs,
 		Photos:                     ph,
+		Videos:                     vids,
 		Credentials:                creds,
 		CreatedAt:                  timestamppb.New(m.CreatedAt),
 		UpdatedAt:                  timestamppb.New(m.UpdatedAt),

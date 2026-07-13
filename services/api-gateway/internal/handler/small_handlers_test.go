@@ -83,6 +83,38 @@ func TestVenuePhotoExt(t *testing.T) {
 	}
 }
 
+func TestVideoExt(t *testing.T) {
+	// ftyp box: 4-byte size, then "ftyp" at offset 4.
+	mp4Head := append([]byte{0x00, 0x00, 0x00, 0x18}, []byte("ftypmp42")...)
+	// QuickTime .mov: same ftyp box, major brand "qt  ".
+	movHead := append([]byte{0x00, 0x00, 0x00, 0x14}, []byte("ftypqt  ")...)
+	webmHead := []byte{0x1A, 0x45, 0xDF, 0xA3, 0x00, 0x00}
+	tests := []struct {
+		name        string
+		contentType string
+		head        []byte
+		wantExt     string
+		wantOK      bool
+	}{
+		{"mp4 by content-type", "video/mp4", nil, ".mp4", true},
+		{"webm by content-type", "video/webm", nil, ".webm", true},
+		{"mp4 by magic", "application/octet-stream", mp4Head, ".mp4", true},
+		{"mov rejected by brand", "application/octet-stream", movHead, "", false},
+		{"webm by magic", "application/octet-stream", webmHead, ".webm", true},
+		{"image rejected", "image/jpeg", []byte{0xFF, 0xD8, 0xFF, 0x00}, "", false},
+		{"too short", "application/octet-stream", []byte{0x00}, "", false},
+		{"unknown", "text/plain", []byte("hello world here"), "", false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ext, ok := videoExt(tc.contentType, tc.head)
+			if ext != tc.wantExt || ok != tc.wantOK {
+				t.Fatalf("got (%q,%v), want (%q,%v)", ext, ok, tc.wantExt, tc.wantOK)
+			}
+		})
+	}
+}
+
 // buildMultipart returns a request body + content-type header carrying the
 // given parts (field name -> content bytes).
 func buildMultipart(t *testing.T, parts []struct {

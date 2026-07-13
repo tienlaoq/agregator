@@ -115,4 +115,7 @@ type MasterRepository interface {
 	AddMasterPhoto(ctx context.Context, masterID uuid.UUID, url string) (*MasterPhoto, error)
 	DeleteMasterPhoto(ctx context.Context, masterID, photoID uuid.UUID) (deletedURL string, err error)
 	SetMasterCoverPhoto(ctx context.Context, masterID, photoID uuid.UUID) error
+
+	AddMasterVideo(ctx context.Context, masterID uuid.UUID, url string) (*MasterVideo, error)
+	DeleteMasterVideo(ctx context.Context, masterID, videoID uuid.UUID) (deletedURL string, err error)
 }

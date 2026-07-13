@@ -17,6 +17,7 @@ const (
 	ProviderMock  ProviderName = "mock"
 	ProviderTBank ProviderName = "tbank"
 	ProviderSber  ProviderName = "sber"
+	ProviderAlfa  ProviderName = "alfa"
 )
 
 // ProviderConfig holds per-provider credentials loaded from environment.
@@ -33,6 +34,12 @@ type ProviderConfig struct {
 	// Sber — SBER_MERCHANT_LOGIN / SBER_SECRET_KEY
 	SberMerchantLogin string
 	SberSecretKey     string
+
+	// Alfa — ALFA_USERNAME / ALFA_PASSWORD (RBS technical "…-api" user),
+	// ALFA_GATEWAY_URL selects the gateway host (prod vs the rbsuat test host).
+	AlfaUsername   string
+	AlfaPassword   string
+	AlfaGatewayURL string
 }
 
 type Config struct {
@@ -97,10 +104,10 @@ func (c *Config) Validate(env string) error {
 	isProduction := strings.EqualFold(strings.TrimSpace(env), "production")
 
 	switch c.ActiveProvider {
-	case ProviderMock, ProviderTBank, ProviderSber:
+	case ProviderMock, ProviderTBank, ProviderSber, ProviderAlfa:
 		// known — ok
 	default:
-		return fmt.Errorf("unknown PAYMENT_PROVIDER %q: must be mock, tbank, or sber", c.ActiveProvider)
+		return fmt.Errorf("unknown PAYMENT_PROVIDER %q: must be mock, tbank, sber, or alfa", c.ActiveProvider)
 	}
 
 	if !isProduction {
@@ -132,6 +139,13 @@ func (c *Config) Validate(env string) error {
 		if strings.TrimSpace(c.Provider.SberSecretKey) == "" {
 			return fmt.Errorf("production: SBER_SECRET_KEY must be set when PAYMENT_PROVIDER=sber")
 		}
+	case ProviderAlfa:
+		if strings.TrimSpace(c.Provider.AlfaUsername) == "" {
+			return fmt.Errorf("production: ALFA_USERNAME must be set when PAYMENT_PROVIDER=alfa")
+		}
+		if strings.TrimSpace(c.Provider.AlfaPassword) == "" {
+			return fmt.Errorf("production: ALFA_PASSWORD must be set when PAYMENT_PROVIDER=alfa")
+		}
 	}
 
 	if strings.TrimSpace(c.InternalServiceToken) == "" {
@@ -159,6 +173,10 @@ func Load() Config {
 			// Sber
 			SberMerchantLogin: config.GetEnv("SBER_MERCHANT_LOGIN", ""),
 			SberSecretKey:     config.GetEnv("SBER_SECRET_KEY", ""),
+			// Alfa
+			AlfaUsername:   config.GetEnv("ALFA_USERNAME", ""),
+			AlfaPassword:   config.GetEnv("ALFA_PASSWORD", ""),
+			AlfaGatewayURL: config.GetEnv("ALFA_GATEWAY_URL", "https://pay.alfabank.ru/payment/rest/"),
 		},
 
 		PaymentReturnURL:     config.GetEnv("PAYMENT_RETURN_URL", "http://localhost:3000/bookings"),

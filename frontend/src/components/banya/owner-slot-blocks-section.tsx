@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -13,13 +13,22 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Trash2 } from "lucide-react";
 import {
   createOwnerSlotBlock,
   deleteOwnerSlotBlock,
   formatApiErrorMessage,
+  getVenueBookingMode,
   listOwnerSlotBlocks,
 } from "@/lib/api";
+import type { VenueHall } from "@/lib/types";
 
 function defaultDateRange(): { from: string; to: string } {
   const t = new Date();
@@ -30,7 +39,13 @@ function defaultDateRange(): { from: string; to: string } {
   return { from, to };
 }
 
-export function OwnerSlotBlocksSection({ venueId }: { venueId: string }) {
+export function OwnerSlotBlocksSection({
+  venueId,
+  halls = [],
+}: {
+  venueId: string;
+  halls?: VenueHall[];
+}) {
   const qc = useQueryClient();
   const initialRange = useMemo(() => defaultDateRange(), []);
   const [dateFrom, setDateFrom] = useState(initialRange.from);
@@ -41,6 +56,25 @@ export function OwnerSlotBlocksSection({ venueId }: { venueId: string }) {
   const [timeTo, setTimeTo] = useState("12:00");
   const [note, setNote] = useState("");
   const [formErr, setFormErr] = useState("");
+
+  const { data: modeData } = useQuery({
+    queryKey: ["venue-booking-mode", venueId],
+    queryFn: () => getVenueBookingMode(venueId),
+    enabled: Boolean(venueId),
+  });
+  const perHall = modeData?.booking_mode === "per_hall";
+  // A per_hall venue with no halls at all behaves as whole (backend falls back
+  // to a whole-venue block), so a hall is only required when halls exist.
+  const requireHall = perHall && halls.length > 0;
+
+  // When a hall is required, default to the first one. Unused otherwise.
+  const [blockHall, setBlockHall] = useState("");
+  useEffect(() => {
+    if (!requireHall) return;
+    if (!halls.some((h) => h.id === blockHall)) {
+      setBlockHall(halls[0].id);
+    }
+  }, [requireHall, halls, blockHall]);
 
   const { data, isLoading, error } = useQuery({
     queryKey: ["owner-slot-blocks", venueId, dateFrom, dateTo],
@@ -55,6 +89,7 @@ export function OwnerSlotBlocksSection({ venueId }: { venueId: string }) {
         time_from: timeFrom,
         time_to: timeTo,
         note: note.trim() || undefined,
+        hall_ids: requireHall && blockHall ? [blockHall] : undefined,
       }),
     onSuccess: () => {
       setFormErr("");
@@ -191,6 +226,23 @@ export function OwnerSlotBlocksSection({ venueId }: { venueId: string }) {
                 />
               </div>
             </div>
+            {requireHall ? (
+              <div className="space-y-2 sm:col-span-2">
+                <Label>Зал</Label>
+                <Select value={blockHall} onValueChange={setBlockHall}>
+                  <SelectTrigger className="w-full sm:w-[220px]">
+                    <SelectValue placeholder="Выберите зал" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {halls.map((h) => (
+                      <SelectItem key={h.id} value={h.id}>
+                        {h.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            ) : null}
             <div className="space-y-2 sm:col-span-2">
               <Label htmlFor="slot-new-note">Комментарий (необязательно)</Label>
               <Textarea
@@ -209,7 +261,7 @@ export function OwnerSlotBlocksSection({ venueId }: { venueId: string }) {
           <Button
             type="button"
             className="mt-4"
-            disabled={createMut.isPending}
+            disabled={createMut.isPending || (requireHall && !blockHall)}
             onClick={() => createMut.mutate()}
           >
             {createMut.isPending ? "Сохранение…" : "Добавить занятость"}

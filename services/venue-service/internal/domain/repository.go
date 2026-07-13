@@ -109,6 +109,9 @@ type VenueRepository interface {
 	DeleteVenuePhoto(ctx context.Context, venueID, ownerID, photoID uuid.UUID) (deletedURL string, err error)
 	SetVenueCoverPhoto(ctx context.Context, venueID, ownerID, photoID uuid.UUID) error
 
+	AddVenueVideo(ctx context.Context, venueID, ownerID uuid.UUID, url string) (*VenueVideo, error)
+	DeleteVenueVideo(ctx context.Context, venueID, ownerID, videoID uuid.UUID) (deletedURL string, err error)
+
 	ReplaceVenueHalls(ctx context.Context, venueID, ownerID uuid.UUID, items []VenueHallUpsert) error
 	AddVenueHallPhoto(ctx context.Context, venueID, hallID uuid.UUID, url string) (*VenueHallPhoto, error)
 	DeleteVenueHallPhoto(ctx context.Context, venueID, hallID, photoID uuid.UUID) (deletedURL string, err error)

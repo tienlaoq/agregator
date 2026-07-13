@@ -526,6 +526,33 @@ func (r *stubRepo) AddMasterPhoto(_ context.Context, masterID uuid.UUID, url str
 	m.Photos = append(m.Photos, p)
 	return &p, nil
 }
+func (r *stubRepo) AddMasterVideo(_ context.Context, masterID uuid.UUID, url string) (*domain.MasterVideo, error) {
+	m, ok := r.masters[masterID]
+	if !ok {
+		return nil, domain.ErrNotFound
+	}
+	v := domain.MasterVideo{
+		ID:        uuid.New(),
+		MasterID:  masterID,
+		URL:       url,
+		SortOrder: int32(len(m.Videos)),
+	}
+	m.Videos = append(m.Videos, v)
+	return &v, nil
+}
+func (r *stubRepo) DeleteMasterVideo(_ context.Context, masterID, videoID uuid.UUID) (string, error) {
+	m, ok := r.masters[masterID]
+	if !ok {
+		return "", domain.ErrNotFound
+	}
+	for i, v := range m.Videos {
+		if v.ID == videoID {
+			m.Videos = append(m.Videos[:i], m.Videos[i+1:]...)
+			return v.URL, nil
+		}
+	}
+	return "", domain.ErrNotFound
+}
 func (r *stubRepo) DeleteMasterPhoto(_ context.Context, masterID, photoID uuid.UUID) (string, error) {
 	if r.deletePhotoErr != nil {
 		return "", r.deletePhotoErr

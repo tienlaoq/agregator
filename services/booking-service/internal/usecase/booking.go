@@ -219,10 +219,13 @@ func (uc *BookingUseCase) CreateBooking(ctx context.Context, in CreateBookingInp
 	// Порядок внешних вызовов:
 	//
 	//  1. repo.Create          — INSERT со status='pending', получаем booking_id.
-	//                            EXCLUDE constraint (005_booking_slot_exclusion) даёт
-	//                            атомарную защиту от двойной брони на уровне PG.
+	//                            Слот здесь НЕ фенсится: venue-wide EXCLUDE снят
+	//                            (010) т.к. ломал per-hall режим. Гонку на слот
+	//                            ловит шаг 2.
 	//  2. ReserveSlot          — захват слота в venue-service с реальным booking_id.
-	//                            Компенсация при ошибке: repo.Delete.
+	//                            Единственный авторитетный guard занятости
+	//                            (reserved_slots, hall-aware + ручные блокировки).
+	//                            При пересечении → InvalidArgument. Компенсация: repo.Delete.
 	//  3. CreatePayment        — создание платежа. Компенсация при ошибке:
 	//                            ReleaseSlot + repo.Delete.
 	//  4. repo.SetPaymentAndStatus — один UPDATE: payment_id + payment_url + status='payment_pending'.
@@ -232,7 +235,7 @@ func (uc *BookingUseCase) CreateBooking(ctx context.Context, in CreateBookingInp
 	//                            reaper-джобом (см. TECH_DEBT [BOOKING-ORPHAN]) или
 	//                            добавлением CancelPayment RPC (см. [BOOKING-ORPHAN-PAYMENT]).
 
-	// Шаг 1: атомарная запись в БД — защита от двойной брони через EXCLUDE.
+	// Шаг 1: запись брони (status='pending'). Занятость слота фенсит шаг 2.
 	if err := uc.repo.Create(ctx, b); err != nil {
 		return nil, fmt.Errorf("create booking: %w", err)
 	}
@@ -250,8 +253,11 @@ func (uc *BookingUseCase) CreateBooking(ctx context.Context, in CreateBookingInp
 	})
 	if err != nil {
 		_ = uc.repo.Delete(ctx, b.ID)
+		// venue-service отдаёт InvalidArgument с готовым для гостя сообщением
+		// (слот занят / нужно выбрать зал в per_hall) — форвардим его как есть,
+		// не подменяя единым «время занято».
 		if st, ok := status.FromError(err); ok && st.Code() == codes.InvalidArgument {
-			return nil, pkgerr.InvalidArgument("выбранное время уже занято, выберите другое")
+			return nil, pkgerr.InvalidArgument(st.Message())
 		}
 		return nil, fmt.Errorf("reserve slot: %w", err)
 	}

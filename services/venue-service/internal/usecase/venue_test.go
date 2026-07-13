@@ -691,6 +691,45 @@ func TestReserveSlot_ModeGate(t *testing.T) {
 	}
 }
 
+func TestReserveSlot_PerHallRequiresHall(t *testing.T) {
+	ctx := context.Background()
+	vid := uuid.New()
+	bid := uuid.New()
+	hall := uuid.New()
+
+	t.Run("per_hall_no_hall_with_halls_rejected", func(t *testing.T) {
+		reserved := false
+		repo := &mockVenueRepo{
+			BookingModeFn: func(_ context.Context, _ uuid.UUID) (string, error) { return domain.BookingModePerHall, nil },
+			HallIDsFn:     func(_ context.Context, _ uuid.UUID) ([]uuid.UUID, error) { return []uuid.UUID{hall}, nil },
+			ReserveSlotFn: func(_ context.Context, _, _ uuid.UUID, _, _, _ string, _ []uuid.UUID) error {
+				reserved = true
+				return nil
+			},
+		}
+		uc := NewVenueUseCase(repo, dummyRedis(t))
+		err := uc.ReserveSlot(ctx, vid, bid, "2026-03-01", "10:00", "12:00", nil)
+		require.Error(t, err)
+		assert.False(t, reserved, "must not reserve a whole-venue row in per_hall")
+	})
+
+	t.Run("per_hall_no_hall_no_halls_allowed", func(t *testing.T) {
+		var gotHalls []uuid.UUID
+		repo := &mockVenueRepo{
+			BookingModeFn: func(_ context.Context, _ uuid.UUID) (string, error) { return domain.BookingModePerHall, nil },
+			HallIDsFn:     func(_ context.Context, _ uuid.UUID) ([]uuid.UUID, error) { return nil, nil },
+			ReserveSlotFn: func(_ context.Context, _, _ uuid.UUID, _, _, _ string, hallIDs []uuid.UUID) error {
+				gotHalls = hallIDs
+				return nil
+			},
+		}
+		uc := NewVenueUseCase(repo, dummyRedis(t))
+		err := uc.ReserveSlot(ctx, vid, bid, "2026-03-01", "10:00", "12:00", nil)
+		require.NoError(t, err)
+		assert.Nil(t, gotHalls, "no halls defined → whole-venue reservation")
+	})
+}
+
 func TestCheckSlot_ModeGate(t *testing.T) {
 	ctx := context.Background()
 	vid := uuid.New()
@@ -811,12 +850,15 @@ func TestCreateManualSlotBlock_HallResolution(t *testing.T) {
 		assert.Nil(t, got)
 	})
 
-	t.Run("per_hall_empty_expands_to_all", func(t *testing.T) {
+	t.Run("per_hall_empty_rejected", func(t *testing.T) {
 		var got []uuid.UUID
 		uc := NewVenueUseCase(base(domain.BookingModePerHall, &got), dummyRedis(t))
 		_, err := uc.CreateManualSlotBlock(ctx, owner, vid, nil, "2026-03-01", "10:00", "12:00", "")
-		require.NoError(t, err)
-		assert.ElementsMatch(t, []uuid.UUID{hallA, hallB}, got)
+		require.Error(t, err)
+		st, ok := status.FromError(err)
+		require.True(t, ok)
+		assert.Equal(t, codes.InvalidArgument, st.Code())
+		assert.Nil(t, got, "must not create any block row")
 	})
 
 	t.Run("per_hall_specific_hall", func(t *testing.T) {
@@ -835,5 +877,24 @@ func TestCreateManualSlotBlock_HallResolution(t *testing.T) {
 		st, ok := status.FromError(err)
 		require.True(t, ok)
 		assert.Equal(t, codes.InvalidArgument, st.Code())
+	})
+
+	t.Run("per_hall_no_halls_defined_falls_back_to_whole", func(t *testing.T) {
+		got := []uuid.UUID{uuid.New()} // sentinel: must be overwritten with nil
+		repo := &mockVenueRepo{
+			GetByIDFn: func(_ context.Context, _ uuid.UUID) (*domain.Venue, error) {
+				return &domain.Venue{ID: vid, OwnerID: owner}, nil
+			},
+			BookingModeFn: func(_ context.Context, _ uuid.UUID) (string, error) { return domain.BookingModePerHall, nil },
+			HallIDsFn:     func(_ context.Context, _ uuid.UUID) ([]uuid.UUID, error) { return nil, nil },
+			CreateManualSlotBlockFn: func(_ context.Context, _ uuid.UUID, hallIDs []uuid.UUID, _, _, _, _ string) ([]domain.ManualSlotBlock, error) {
+				got = hallIDs
+				return []domain.ManualSlotBlock{{ID: uuid.New()}}, nil
+			},
+		}
+		uc := NewVenueUseCase(repo, dummyRedis(t))
+		_, err := uc.CreateManualSlotBlock(ctx, owner, vid, nil, "2026-03-01", "10:00", "12:00", "")
+		require.NoError(t, err)
+		assert.Nil(t, got, "no halls → whole-venue block")
 	})
 }

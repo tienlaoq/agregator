@@ -414,6 +414,17 @@ export default function PartnerPage() {
                 </div>
 
                 <ConsentCheckbox checked={consent} onCheckedChange={setConsent} />
+                <p className="text-xs text-muted-foreground">
+                  Регистрируясь, вы принимаете{" "}
+                  <Link
+                    href={isMasterTrack ? "/legal/master-agreement" : "/legal/venue-agreement"}
+                    target="_blank"
+                    className="text-primary underline"
+                  >
+                    договор-оферту {isMasterTrack ? "пар-мастера" : "заведения"}
+                  </Link>
+                  .
+                </p>
 
                 {error && <p className="text-sm text-destructive">{error}</p>}
 

@@ -87,6 +87,18 @@ errors:
     message: "Допустимы только JPEG, PNG и WebP"
 
   - http_status: 400
+    code: GATEWAY.REQUEST.INVALID_VIDEO_ID
+    message: "Некорректный идентификатор видео"
+
+  - http_status: 400
+    code: GATEWAY.REQUEST.VIDEO_FIELD_REQUIRED
+    message: "Поле video обязательно"
+
+  - http_status: 400
+    code: GATEWAY.REQUEST.INVALID_VIDEO_TYPE
+    message: "Допустимы только видео MP4 и WebM"
+
+  - http_status: 400
     code: GATEWAY.ACCOUNT.CONFIRMATION_REQUIRED
     message: "Для удаления аккаунта введите подтверждение"
 

@@ -1,0 +1,17 @@
+-- Снимаем venue-wide EXCLUDE с bookings: он ломал per-hall режим.
+--
+-- Констрейнт из 005 ключевался на (venue_id, tsrange) — по всему заведению,
+-- без учёта зала. Залы (004/006) и per-hall режим (venue-service мигр. 017)
+-- появились позже, а этот констрейнт так и остался hall-blind. В per_hall
+-- режиме он отклонял вторую бронь на другой зал того же заведения в то же
+-- время — ещё до вызова venue-service, который развёл бы их по залам.
+--
+-- Единственный источник правды по занятости слота — reserved_slots в
+-- venue-service: там EXCLUDE ключуется на COALESCE(hall_id, venue_id) и уже
+-- учитывает и залы, и ручные блокировки владельца. CreateBooking захватывает
+-- слот через ReserveSlot (шаг 2); при пересечении venue-service возвращает
+-- InvalidArgument, booking-service откатывает INSERT (repo.Delete) и отдаёт
+-- гостю то же «время занято». Дублировать hall-aware exclusion в bookings
+-- нельзя без разбивки брони на строку-на-зал (booking_hall_ids — uuid[]),
+-- поэтому убираем дубль, а не переписываем его.
+ALTER TABLE bookings DROP CONSTRAINT IF EXISTS bookings_no_overlap;

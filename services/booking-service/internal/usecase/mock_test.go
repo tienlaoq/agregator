@@ -126,6 +126,12 @@ func (m *mockVenueClient) DeleteVenueHallPhoto(ctx context.Context, in *venuev1.
 func (m *mockVenueClient) SetVenueHallCoverPhoto(ctx context.Context, in *venuev1.SetVenueHallCoverPhotoRequest, opts ...grpc.CallOption) (*venuev1.VenueResponse, error) {
 	return nil, nil
 }
+func (m *mockVenueClient) AddVenueVideo(ctx context.Context, in *venuev1.AddVenueVideoRequest, opts ...grpc.CallOption) (*venuev1.VenueResponse, error) {
+	return nil, nil
+}
+func (m *mockVenueClient) DeleteVenueVideo(ctx context.Context, in *venuev1.DeleteVenueVideoRequest, opts ...grpc.CallOption) (*venuev1.DeleteVenueVideoResponse, error) {
+	return nil, nil
+}
 func (m *mockVenueClient) SuspendVenuesByOwner(ctx context.Context, in *venuev1.SuspendVenuesByOwnerRequest, opts ...grpc.CallOption) (*venuev1.SuspendVenuesByOwnerResponse, error) {
 	return nil, nil
 }

@@ -100,6 +100,13 @@ export interface VenuePhoto {
   is_cover?: boolean;
 }
 
+/** Видео карточки (ответ owner/public API) */
+export interface VenueVideo {
+  id: string;
+  url: string;
+  sort_order?: number;
+}
+
 /** Фото зала (ответ API) */
 export interface VenueHallPhoto {
   id: string;
@@ -319,6 +326,7 @@ export interface Venue {
   review_count: number;
   image_url?: string;
   photos?: VenuePhoto[];
+  videos?: VenueVideo[];
   halls?: VenueHall[];
   amenities: string[];
   services: VenueService[];
@@ -607,6 +615,9 @@ export interface UpdateVenueRequest {
   latitude: number;
   longitude: number;
   working_hours: string;
+  /** Базовая цена за час на уровне заведения. Используется, когда залов нет
+   * (whole-режим); при наличии залов цена карточки берётся из них (минимальная). */
+  price_from: number;
   /** Залы: цена и удобства задаются по каждому залу; на карточке агрегируются автоматически. */
   halls: VenueHallFormLine[];
   /** Полный список услуг; поле `key` в JSON игнорируется бэкендом. */
@@ -708,6 +719,13 @@ export interface MasterPhoto {
   is_cover: boolean;
 }
 
+/** Видео профиля мастера */
+export interface MasterVideo {
+  id: string;
+  url: string;
+  sort_order?: number;
+}
+
 /** Сертификат или награда мастера. kind: "certificate" | "award". */
 export type MasterCredentialKind = "certificate" | "award";
 
@@ -773,6 +791,7 @@ export interface MasterProfile {
   moderated_at?: string;
   services: MasterServiceItem[];
   photos?: MasterPhoto[];
+  videos?: MasterVideo[];
   credentials?: MasterCredentialItem[];
   created_at?: string;
   updated_at?: string;

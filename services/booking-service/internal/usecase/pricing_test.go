@@ -99,6 +99,15 @@ func TestComputeBookingTotalPriceMulti(t *testing.T) {
 		require.Equal(t, int64(10000), total)
 	})
 
+	t.Run("no halls venue → venue base hourly", func(t *testing.T) {
+		// Заведение без залов вовсе: цена берётся с venue.price_from.
+		// 2000 × 2h (120min) = 4000.
+		hallless := &venuev1.VenueResponse{Id: "v2", PriceFrom: 2000}
+		total, err := computeBookingTotalPriceMulti(hallless, nil, nil, 120)
+		require.NoError(t, err)
+		require.Equal(t, int64(4000), total)
+	})
+
 	t.Run("fixed-price service", func(t *testing.T) {
 		total, err := computeBookingTotalPriceMulti(v, []string{"svc-fixed"}, nil, 120)
 		require.NoError(t, err)

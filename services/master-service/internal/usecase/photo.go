@@ -178,6 +178,48 @@ func (uc *MasterUseCase) DeleteMasterPhoto(ctx context.Context, userID, photoID 
 	return u, nil
 }
 
+func (uc *MasterUseCase) AddMasterVideo(ctx context.Context, userID uuid.UUID, url string) (*domain.Master, error) {
+	m, err := uc.repo.GetByUserID(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	if m == nil {
+		return nil, pkgerrors.NotFound("master profile not found")
+	}
+	// Videos are stored under the same masters/<id>/ prefix as photos, so the
+	// photo URL validator applies unchanged (it allowlists the storage path and
+	// filename, not the media type).
+	cleanURL, err := normalizeMasterPhotoURL(m.ID, url)
+	if err != nil {
+		return nil, pkgerrors.InvalidArgument(err.Error())
+	}
+	if _, err := uc.repo.AddMasterVideo(ctx, m.ID, cleanURL); err != nil {
+		if errors.Is(err, domain.ErrVideoLimitReached) {
+			return nil, pkgerrors.InvalidArgument(fmt.Sprintf("too many videos (max %d)", domain.MaxMasterVideos))
+		}
+		return nil, err
+	}
+	return uc.repo.GetByUserID(ctx, userID)
+}
+
+func (uc *MasterUseCase) DeleteMasterVideo(ctx context.Context, userID, videoID uuid.UUID) (string, error) {
+	m, err := uc.repo.GetByUserID(ctx, userID)
+	if err != nil {
+		return "", err
+	}
+	if m == nil {
+		return "", pkgerrors.NotFound("master profile not found")
+	}
+	u, err := uc.repo.DeleteMasterVideo(ctx, m.ID, videoID)
+	if err != nil {
+		if errors.Is(err, domain.ErrNotFound) {
+			return "", pkgerrors.NotFound("video not found")
+		}
+		return "", err
+	}
+	return u, nil
+}
+
 func (uc *MasterUseCase) SetMasterCoverPhoto(ctx context.Context, userID, photoID uuid.UUID) (*domain.Master, error) {
 	m, err := uc.repo.GetByUserID(ctx, userID)
 	if err != nil {

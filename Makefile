@@ -1,4 +1,4 @@
-.PHONY: proto-gen build build-linux docker-build docker-up docker-down test test-handler test-integration infra-up infra-down migrate help
+.PHONY: proto-gen build build-linux docker-build docker-up docker-down test test-handler test-integration loadtest infra-up infra-down migrate help
 
 SERVICES = analytics-service auth-service user-service venue-service booking-service review-service payment-service master-service crm-service notification-service api-gateway
 
@@ -58,6 +58,13 @@ test-handler: ## Run api-gateway handler tests inside Docker (no local Go requir
 test-integration: ## Run DB integration tests (requires Docker)
 	cd services/payment-service && go test -tags=integration -race -count=1 ./internal/repository/...
 	cd services/venue-service && go test -tags=integration -race -count=1 ./internal/repository/...
+
+# k6-нагрузка на публичный каталог api-gateway. Требует установленного k6.
+# Настройка: make loadtest PROFILE=stress BASE_URL=http://localhost:8080
+LOADTEST_BASE_URL ?= http://localhost:8080
+PROFILE ?= load
+loadtest: ## Run k6 load test against public read endpoints (PROFILE=smoke|load|stress|spike)
+	BASE_URL=$(LOADTEST_BASE_URL) PROFILE=$(PROFILE) k6 run deploy/loadtest/public-read.js
 
 infra-up: ## Start infrastructure (PG, Redis, NATS, MinIO)
 	docker compose -f deploy/docker-compose.infra.yml up -d

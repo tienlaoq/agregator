@@ -22,11 +22,13 @@ import Image from "next/image";
 import {
   createMasterProfile,
   deleteMasterPhoto,
+  deleteMasterVideo,
   getMyMasterProfile,
   patchMyMasterProfile,
   setMasterCoverPhoto,
   submitMasterForReview,
   uploadMasterPhoto,
+  uploadMasterVideo,
   formatApiErrorMessage,
   isEmailNotVerifiedError,
   venueMediaUrl,
@@ -332,6 +334,7 @@ export default function MasterProfilePage() {
   const [emailNotVerified, setEmailNotVerified] = useState(false);
   const [submitWarning, setSubmitWarning] = useState("");
   const [photoError, setPhotoError] = useState("");
+  const [videoError, setVideoError] = useState("");
 
   const [displayName, setDisplayName] = useState("");
   const [bio, setBio] = useState("");
@@ -704,6 +707,31 @@ export default function MasterProfilePage() {
       setPhotoError(formatApiErrorMessage(e, "Не удалось назначить обложку.")),
   });
 
+  const uploadVideoMu = useMutation({
+    mutationFn: (file: File) => uploadMasterVideo(file),
+    onSuccess: () => {
+      setVideoError("");
+      void qc.invalidateQueries({ queryKey: ["my-master-profile"] });
+    },
+    onError: (e: unknown) =>
+      setVideoError(
+        formatApiErrorMessage(
+          e,
+          "Не удалось загрузить видео. Допустимы MP4 и WebM, до 50 МБ, не более 6 роликов.",
+        ),
+      ),
+  });
+
+  const deleteVideoMu = useMutation({
+    mutationFn: (videoId: string) => deleteMasterVideo(videoId),
+    onSuccess: () => {
+      setVideoError("");
+      void qc.invalidateQueries({ queryKey: ["my-master-profile"] });
+    },
+    onError: (e: unknown) =>
+      setVideoError(formatApiErrorMessage(e, "Не удалось удалить видео.")),
+  });
+
   if (!hydrated || !token || user?.role !== "master") return null;
 
   const meta = profile ? MASTER_PROFILE_STATUS_LABELS[profile.status] : null;
@@ -714,6 +742,13 @@ export default function MasterProfilePage() {
   const sortedMasterPhotos = profile ? sortMasterPhotos(profile.photos) : [];
   const masterPhotoCount = sortedMasterPhotos.length;
   const canAddMasterPhotos = masterPhotoCount < MAX_MASTER_PHOTOS;
+
+  const sortedMasterVideos = [...(profile?.videos ?? [])].sort(
+    (a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0),
+  );
+  const masterVideoCount = sortedMasterVideos.length;
+  const MAX_MASTER_VIDEOS = 6;
+  const canAddMasterVideos = masterVideoCount < MAX_MASTER_VIDEOS;
 
   const checklistBody = buildMasterPatchBody();
   const checklist = masterReadinessChecklist(checklistBody, masterPhotoCount);
@@ -866,6 +901,92 @@ export default function MasterProfilePage() {
                       for (const f of Array.from(files)) {
                         try {
                           await uploadPhotoMu.mutateAsync(f);
+                        } catch {
+                          break;
+                        }
+                      }
+                      e.target.value = "";
+                    }}
+                  />
+                </label>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card className="mb-6">
+            <CardHeader className="pb-4">
+              <CardTitle className="text-lg">Видео</CardTitle>
+              <CardDescription>
+                Короткие ролики о вашей работе. MP4 или WebM, до 50 МБ каждый,
+                не более {MAX_MASTER_VIDEOS}.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              {videoError ? (
+                <p className="mb-3 text-sm text-destructive" role="alert">
+                  {videoError}
+                </p>
+              ) : null}
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                {sortedMasterVideos.map((v) => (
+                  <div
+                    key={v.id}
+                    className="group relative overflow-hidden rounded-lg border border-border"
+                  >
+                    <video
+                      src={venueMediaUrl(v.url)}
+                      controls
+                      preload="metadata"
+                      className="aspect-video w-full bg-black object-contain"
+                    />
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="destructive"
+                      className="absolute right-2 top-2 h-8 px-2 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100"
+                      disabled={deleteVideoMu.isPending}
+                      onClick={() => {
+                        if (
+                          window.confirm(
+                            "Удалить это видео? Его нельзя будет восстановить.",
+                          )
+                        ) {
+                          deleteVideoMu.mutate(v.id);
+                        }
+                      }}
+                      aria-label="Удалить видео"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  </div>
+                ))}
+                <label
+                  className={
+                    canAddMasterVideos && !uploadVideoMu.isPending
+                      ? "flex aspect-video cursor-pointer flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed border-border bg-muted/30 text-muted-foreground transition-colors hover:border-primary hover:bg-muted/50 hover:text-primary"
+                      : "flex aspect-video cursor-not-allowed flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed border-border bg-muted/20 text-muted-foreground opacity-60"
+                  }
+                >
+                  <Upload className="h-8 w-8" />
+                  <span className="px-2 text-center text-xs">
+                    {uploadVideoMu.isPending
+                      ? "Загрузка…"
+                      : canAddMasterVideos
+                        ? "Загрузить видео"
+                        : "Лимит видео"}
+                  </span>
+                  <input
+                    type="file"
+                    accept="video/mp4,video/webm"
+                    className="hidden"
+                    multiple
+                    disabled={!canAddMasterVideos || uploadVideoMu.isPending}
+                    onChange={async (e) => {
+                      const { files } = e.target;
+                      if (!files?.length) return;
+                      for (const f of Array.from(files)) {
+                        try {
+                          await uploadVideoMu.mutateAsync(f);
                         } catch {
                           break;
                         }

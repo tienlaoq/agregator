@@ -38,6 +38,11 @@ const legalLinks = [
   { href: "/privacy", label: "Политика конфиденциальности" },
   { href: "/consent", label: "Согласие на обработку ПД" },
   { href: "/terms", label: "Пользовательское соглашение" },
+  { href: "/legal/license", label: "Лицензионный договор" },
+  { href: "/legal/venue-agreement", label: "Договор с заведением" },
+  { href: "/legal/master-agreement", label: "Договор с пар-мастером" },
+  { href: "/legal/refunds", label: "Регламент отмен и возвратов" },
+  { href: "/legal/complaints", label: "Регламент жалоб" },
 ]
 
 const linkClass = "text-muted-foreground transition-colors hover:text-foreground"

@@ -27,6 +27,7 @@ import (
 	"github.com/tienlao/agregator/services/payment-service/internal/kpi"
 	"github.com/tienlao/agregator/services/payment-service/internal/outbox"
 	"github.com/tienlao/agregator/services/payment-service/internal/provider"
+	"github.com/tienlao/agregator/services/payment-service/internal/provider/alfa"
 	"github.com/tienlao/agregator/services/payment-service/internal/provider/mock"
 	"github.com/tienlao/agregator/services/payment-service/internal/repository"
 	"github.com/tienlao/agregator/services/payment-service/internal/usecase"
@@ -262,6 +263,10 @@ func buildProvider(cfg config.Config) (provider.PaymentProvider, error) {
 		// Placeholder: implement internal/provider/sber/client.go,
 		// then replace this error with: return sber.NewClient(p.SberMerchantLogin, p.SberSecretKey), nil
 		return nil, fmt.Errorf("sber provider not yet implemented: set PAYMENT_PROVIDER=mock or implement internal/provider/sber")
+
+	case config.ProviderAlfa:
+		// Alfa-Bank internet-acquiring on the RBS REST platform.
+		return alfa.NewClient(cfg.Provider.AlfaUsername, cfg.Provider.AlfaPassword, cfg.Provider.AlfaGatewayURL), nil
 
 	default:
 		// Should never reach here — cfg.Validate() catches unknown values at startup.

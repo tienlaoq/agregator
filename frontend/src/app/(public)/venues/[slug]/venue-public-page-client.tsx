@@ -428,6 +428,26 @@ export function VenuePublicPageClient({
           </div>
         )}
 
+        {/* Видео */}
+        {venue.videos?.length ? (
+          <div className="mb-8">
+            <h2 className="mb-3 text-lg font-semibold">Видео</h2>
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              {[...venue.videos]
+                .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0))
+                .map((v) => (
+                  <video
+                    key={v.id}
+                    src={venueMediaUrl(v.url)}
+                    controls
+                    preload="metadata"
+                    className="aspect-video w-full rounded-2xl bg-black object-contain"
+                  />
+                ))}
+            </div>
+          </div>
+        ) : null}
+
         {/* Липкие вкладки-разделы */}
         <div className="sticky top-16 z-30 -mx-4 mb-8 flex gap-1.5 overflow-x-auto border-b border-border bg-background/95 px-4 py-3 backdrop-blur [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
           {tabs.map((t) => (

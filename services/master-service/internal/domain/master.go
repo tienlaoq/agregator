@@ -56,6 +56,11 @@ var (
 	// transaction so concurrent uploads cannot race past the limit.
 	ErrPhotoLimitReached = errors.New("photo limit reached")
 
+	// ErrVideoLimitReached is returned by AddMasterVideo when the master already
+	// has MaxMasterVideos videos. The check is performed inside the repo
+	// transaction so concurrent uploads cannot race past the limit.
+	ErrVideoLimitReached = errors.New("video limit reached")
+
 	// ErrModerationConflict is returned by ModerateAtomic when the conditional
 	// UPDATE touches 0 rows because another moderator already changed the
 	// master's status between the caller's GetByID read and the UPDATE.
@@ -76,6 +81,9 @@ var (
 // Defined here so the repo and usecase layers share the same constant without
 // either importing the other.
 const MaxMasterPhotos int32 = 12
+
+// MaxMasterVideos is the maximum number of videos allowed per master profile.
+const MaxMasterVideos int32 = 6
 
 // Service field length limits. Enforced in usecase.ValidateMasterServiceUpserts
 // and mirrored by CHECK constraints in migration 016.
@@ -201,6 +209,7 @@ type Master struct {
 	ModeratedAt                *time.Time
 	Services                   []MasterService
 	Photos                     []MasterPhoto
+	Videos                     []MasterVideo
 	Credentials                []MasterCredential
 	CreatedAt                  time.Time
 	UpdatedAt                  time.Time
@@ -212,6 +221,13 @@ type MasterPhoto struct {
 	URL       string
 	SortOrder int32
 	IsCover   bool
+}
+
+type MasterVideo struct {
+	ID        uuid.UUID
+	MasterID  uuid.UUID
+	URL       string
+	SortOrder int32
 }
 
 type MasterService struct {

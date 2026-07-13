@@ -39,6 +39,8 @@ service MasterService {
   rpc AddMasterPhoto(AddMasterPhotoRequest) returns (MasterResponse);
   rpc DeleteMasterPhoto(DeleteMasterPhotoRequest) returns (DeleteMasterPhotoResponse);
   rpc SetMasterCoverPhoto(SetMasterCoverPhotoRequest) returns (MasterResponse);
+  rpc AddMasterVideo(AddMasterVideoRequest) returns (MasterResponse);
+  rpc DeleteMasterVideo(DeleteMasterVideoRequest) returns (DeleteMasterVideoResponse);
 
   // SuspendMasterByUser sets the master profile owned by user_id to status
   // "suspended", removing it from public listings. Used by the account-deletion
@@ -79,6 +81,12 @@ message MasterPhoto {
   string url = 2;
   int32 sort_order = 3;
   bool is_cover = 4;
+}
+
+message MasterVideo {
+  string id = 1;
+  string url = 2;
+  int32 sort_order = 3;
 }
 
 // Сертификат или награда мастера. kind: "certificate" | "award".
@@ -154,6 +162,7 @@ message Master {
   string payout_verification_status = 36; // unverified | pending | verified | rejected
   bool payout_ready = 37;
   repeated MasterCredentialItem credentials = 38;
+  repeated MasterVideo videos = 39;
 }
 
 message MasterResponse {
@@ -437,4 +446,18 @@ message DeleteMasterPhotoResponse {
 message SetMasterCoverPhotoRequest {
   string user_id = 1;
   string photo_id = 2;
+}
+
+message AddMasterVideoRequest {
+  string user_id = 1;
+  string url = 2;
+}
+
+message DeleteMasterVideoRequest {
+  string user_id = 1;
+  string video_id = 2;
+}
+
+message DeleteMasterVideoResponse {
+  string deleted_url = 1;
 }
