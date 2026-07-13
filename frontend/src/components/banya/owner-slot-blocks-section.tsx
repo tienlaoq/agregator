@@ -69,12 +69,12 @@ export function OwnerSlotBlocksSection({
 
   // When a hall is required, default to the first one. Unused otherwise.
   const [blockHall, setBlockHall] = useState("");
-  useEffect(() => {
-    if (!requireHall) return;
-    if (!halls.some((h) => h.id === blockHall)) {
-      setBlockHall(halls[0].id);
-    }
-  }, [requireHall, halls, blockHall]);
+  // Adjust during render (React's documented alternative to a setState-in-effect):
+  // requireHall implies halls.length > 0, so halls[0] is safe. Converges in one
+  // extra render once blockHall matches an existing hall.
+  if (requireHall && !halls.some((h) => h.id === blockHall)) {
+    setBlockHall(halls[0].id);
+  }
 
   const { data, isLoading, error } = useQuery({
     queryKey: ["owner-slot-blocks", venueId, dateFrom, dateTo],

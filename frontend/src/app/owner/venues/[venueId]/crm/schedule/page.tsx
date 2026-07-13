@@ -164,13 +164,14 @@ export default function OwnerVenueSchedulePage() {
   // In per_hall mode a hall must be chosen (the backend rejects a hall-less
   // block); default to the first hall. Ignored in whole mode.
   const [blockHall, setBlockHall] = useState("");
-  useEffect(() => {
-    if (bookingMode !== "per_hall") return;
-    const halls = venue?.halls ?? [];
-    if (halls.length > 0 && !halls.some((h) => h.id === blockHall)) {
-      setBlockHall(halls[0].id);
+  // Default to the first hall in per_hall mode. Adjusting during render is
+  // React's documented alternative to a setState-in-effect.
+  if (bookingMode === "per_hall") {
+    const hs = venue?.halls ?? [];
+    if (hs.length > 0 && !hs.some((h) => h.id === blockHall)) {
+      setBlockHall(hs[0].id);
     }
-  }, [bookingMode, venue, blockHall]);
+  }
 
   const invalidateSchedule = () =>
     queryClient.invalidateQueries({ queryKey: ["venue-schedule", venueId, date] });
