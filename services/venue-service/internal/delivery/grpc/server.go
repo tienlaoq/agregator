@@ -59,6 +59,7 @@ func (s *Server) CreateVenue(ctx context.Context, req *venuev1.CreateVenueReques
 		Latitude:         req.GetLatitude(),
 		Longitude:        req.GetLongitude(),
 		PriceFrom:        req.GetPriceFrom(),
+		PriceWeekend:     req.GetPriceWeekend(),
 		Capacity:         req.GetCapacity(),
 		Amenities:        req.GetAmenities(),
 		WorkingHours:     req.GetWorkingHours(),
@@ -166,6 +167,9 @@ func (s *Server) UpdateVenue(ctx context.Context, req *venuev1.UpdateVenueReques
 	}
 	if req.PriceFrom != nil {
 		existing.PriceFrom = req.GetPriceFrom()
+	}
+	if req.PriceWeekend != nil {
+		existing.PriceWeekend = req.GetPriceWeekend()
 	}
 	if req.Capacity != nil {
 		existing.Capacity = req.GetCapacity()
@@ -1033,6 +1037,7 @@ func venueToProto(v *domain.Venue) *venuev1.VenueResponse {
 		Latitude:          v.Latitude,
 		Longitude:         v.Longitude,
 		PriceFrom:         v.PriceFrom,
+		PriceWeekend:      v.PriceWeekend,
 		Capacity:          v.Capacity,
 		Amenities:         v.Amenities,
 		WorkingHours:      v.WorkingHours,
@@ -1104,10 +1109,11 @@ func hallProtoInputsToDomain(items []*venuev1.VenueHallInput) []domain.VenueHall
 			am = []string{}
 		}
 		out = append(out, domain.VenueHall{
-			Name:      it.GetName(),
-			PriceFrom: it.GetPriceFrom(),
-			Capacity:  it.GetCapacity(),
-			Amenities: append([]string(nil), am...),
+			Name:         it.GetName(),
+			PriceFrom:    it.GetPriceFrom(),
+			PriceWeekend: it.GetPriceWeekend(),
+			Capacity:     it.GetCapacity(),
+			Amenities:    append([]string(nil), am...),
 		})
 	}
 	return out
@@ -1129,12 +1135,13 @@ func hallProtoInputsToUpserts(items []*venuev1.VenueHallInput) ([]domain.VenueHa
 			am = []string{}
 		}
 		out = append(out, domain.VenueHallUpsert{
-			ID:        id,
-			Name:      it.GetName(),
-			PriceFrom: it.GetPriceFrom(),
-			Capacity:  it.GetCapacity(),
-			Amenities: append([]string(nil), am...),
-			SortOrder: it.GetSortOrder(),
+			ID:           id,
+			Name:         it.GetName(),
+			PriceFrom:    it.GetPriceFrom(),
+			PriceWeekend: it.GetPriceWeekend(),
+			Capacity:     it.GetCapacity(),
+			Amenities:    append([]string(nil), am...),
+			SortOrder:    it.GetSortOrder(),
 		})
 	}
 	return out, nil
@@ -1142,12 +1149,13 @@ func hallProtoInputsToUpserts(items []*venuev1.VenueHallInput) ([]domain.VenueHa
 
 func hallToProto(h *domain.VenueHall) *venuev1.VenueHall {
 	ph := &venuev1.VenueHall{
-		Id:        h.ID.String(),
-		Name:      h.Name,
-		PriceFrom: h.PriceFrom,
-		Capacity:  h.Capacity,
-		Amenities: h.Amenities,
-		SortOrder: h.SortOrder,
+		Id:           h.ID.String(),
+		Name:         h.Name,
+		PriceFrom:    h.PriceFrom,
+		PriceWeekend: h.PriceWeekend,
+		Capacity:     h.Capacity,
+		Amenities:    h.Amenities,
+		SortOrder:    h.SortOrder,
 	}
 	for _, p := range h.Photos {
 		ph.Photos = append(ph.Photos, &venuev1.VenueHallPhoto{

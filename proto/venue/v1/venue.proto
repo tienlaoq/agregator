@@ -68,7 +68,7 @@ message CreateVenueRequest {
   string address = 5;
   double latitude = 6;
   double longitude = 7;
-  int64 price_from = 8; // in kopecks
+  int64 price_from = 8; // почасовая ставка в будни, в копейках
   int32 capacity = 9;
   repeated string amenities = 10;
   string working_hours = 11; // JSON string
@@ -94,6 +94,8 @@ message CreateVenueRequest {
   // by the escrow + per-partner payout method stored in payment-service).
   reserved 24;
   reserved "yookassa_seller_account_id";
+
+  int64 price_weekend = 25; // почасовая ставка в выходные, в копейках (0 = как в будни)
 }
 
 message SubmitVenueForReviewRequest {
@@ -130,6 +132,8 @@ message UpdateVenueRequest {
   // Tag 23 was optional yookassa_seller_account_id (deprecated marketplace-split).
   reserved 23;
   reserved "yookassa_seller_account_id";
+
+  optional int64 price_weekend = 24; // почасовая ставка в выходные, в копейках (0 = как в будни)
 }
 
 // Full replace of the services list (owner cabinet). Empty items = remove all services.
@@ -231,6 +235,7 @@ message VenueResponse {
   repeated VenueHall halls = 32;
   string payout_legal_form = 33;
   repeated VenueVideo videos = 36;
+  int64 price_weekend = 37; // почасовая ставка в выходные, в копейках (0 = как в будни)
   // Tags 34 (yookassa_seller_account_id) and 35 (management_access) were
   // removed: 34 belonged to the marketplace-split model now replaced by
   // payment-service payout rails; 35 moved to crm-service and is composed
@@ -277,21 +282,23 @@ message VenueVideo {
 message VenueHall {
   string id = 1;
   string name = 2;
-  int64 price_from = 3;
+  int64 price_from = 3; // почасовая ставка в будни, в копейках
   int32 capacity = 4;
   repeated string amenities = 5;
   int32 sort_order = 6;
   repeated VenueHallPhoto photos = 7;
+  int64 price_weekend = 8; // почасовая ставка в выходные, в копейках (0 = как в будни)
 }
 
 // id пустой — создать новый зал; с id — обновить существующий (принадлежит заведению).
 message VenueHallInput {
   optional string id = 1;
   string name = 2;
-  int64 price_from = 3;
+  int64 price_from = 3; // почасовая ставка в будни, в копейках
   int32 capacity = 4;
   repeated string amenities = 5;
   int32 sort_order = 6;
+  int64 price_weekend = 7; // почасовая ставка в выходные, в копейках (0 = как в будни)
 }
 
 message VenueHallsReplace {

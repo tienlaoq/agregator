@@ -242,6 +242,12 @@ export function MasterPublicPageClient({
 
   const priceHint = useMemo(() => {
     if (!master) return null;
+    // Ставка с учётом дня: выходная цена если задана (>0) и выбран сб/вс.
+    const isWeekend = date ? date.getDay() === 0 || date.getDay() === 6 : false;
+    const hourlyRate =
+      isWeekend && Number(master.price_weekend) > 0
+        ? Number(master.price_weekend)
+        : Number(master.hourly_rate) || 0;
     if (selectedServiceIds.length > 0) {
       let sumRub = 0;
       let hourlySlots = 0;
@@ -252,11 +258,11 @@ export function MasterPublicPageClient({
         else hourlySlots++;
       }
       if (hourlySlots > 1) return null;
-      if (hourlySlots === 1 && typeof master.hourly_rate === "number" && master.hourly_rate > 0 && slotValid) {
+      if (hourlySlots === 1 && hourlyRate > 0 && slotValid) {
         const mins = slotLengthMinutes(time, timeTo);
         if (mins != null) {
           const hours = Math.ceil(mins / 60);
-          sumRub += (master.hourly_rate / 100) * hours;
+          sumRub += (hourlyRate / 100) * hours;
         }
       }
       if (sumRub > 0) {
@@ -267,19 +273,19 @@ export function MasterPublicPageClient({
       }
       return null;
     }
-    if (typeof master.hourly_rate === "number" && master.hourly_rate > 0 && slotValid) {
+    if (hourlyRate > 0 && slotValid) {
       const mins = slotLengthMinutes(time, timeTo);
       if (mins != null) {
         const hours = Math.ceil(mins / 60);
         const rub = new Intl.NumberFormat("ru-RU", {
           minimumFractionDigits: 0,
           maximumFractionDigits: 0,
-        }).format((master.hourly_rate / 100) * hours);
+        }).format((hourlyRate / 100) * hours);
         return `≈ ${rub} ₽`;
       }
     }
     return null;
-  }, [master, selectedServiceIds, time, timeTo, slotValid]);
+  }, [master, selectedServiceIds, time, timeTo, slotValid, date]);
 
   // Render-time управление time/timeTo вместо трёх useEffect'ов
   // (react-hooks/set-state-in-effect). Логика:

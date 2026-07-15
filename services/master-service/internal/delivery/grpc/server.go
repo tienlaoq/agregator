@@ -126,6 +126,10 @@ func (s *Server) UpdateMyProfile(ctx context.Context, req *masterv1.UpdateMyProf
 		v := req.GetHourlyRate()
 		in.HourlyRate = &v
 	}
+	if req.PriceWeekend != nil {
+		v := req.GetPriceWeekend()
+		in.PriceWeekend = &v
+	}
 	if req.AvailabilityJson != nil {
 		v := req.GetAvailabilityJson()
 		in.AvailabilityJSON = &v
@@ -779,6 +783,7 @@ func masterToProto(m *domain.Master) *masterv1.Master {
 		ExperienceYears:            m.ExperienceYears,
 		Specializations:            m.Specializations,
 		HourlyRate:                 m.HourlyRate,
+		PriceWeekend:               m.PriceWeekend,
 		AvailabilityJson:           m.AvailabilityJSON,
 		PayoutLegalForm:            m.PayoutLegalForm,
 		PayoutLegalName:            m.PayoutLegalName,

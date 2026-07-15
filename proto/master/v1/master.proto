@@ -134,7 +134,8 @@ message Master {
   repeated MasterTravelExcludeZone travel_exclude_zones = 25;
   int32 experience_years = 10;
   repeated string specializations = 11;
-  int64 hourly_rate = 12;
+  int64 hourly_rate = 12; // почасовая ставка в будни, в копейках
+  int64 price_weekend = 40; // почасовая ставка в выходные, в копейках (0 = как в будни)
   string availability_json = 13;
   string status = 14;
   string moderation_comment = 15;
@@ -191,6 +192,7 @@ message UpdateMyProfileRequest {
   optional int32 experience_years = 8;
   repeated string specializations = 9;
   optional int64 hourly_rate = 10;
+  optional int64 price_weekend = 33; // почасовая ставка в выходные, в копейках (0 = как в будни)
   optional string availability_json = 11;
   repeated MasterServiceItemInput services_replace = 12;
   // When true, replace all services with services_replace (empty list clears services).

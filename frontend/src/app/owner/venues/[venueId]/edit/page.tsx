@@ -239,6 +239,7 @@ function venueHallsToForm(v: Venue): VenueHallFormLine[] {
     id: h.id,
     name: h.name,
     price_from: h.price_from,
+    price_weekend: h.price_weekend ?? 0,
     capacity: h.capacity ?? 8,
     amenities: [...(h.amenities ?? [])],
     photos: [...(h.photos ?? [])],
@@ -258,6 +259,7 @@ function venueToForm(v: Venue): UpdateVenueRequest {
       v.longitude != null && !Number.isNaN(v.longitude) ? v.longitude : 37.6173,
     working_hours: v.working_hours?.trim() || "{}",
     price_from: v.price_from ?? 0,
+    price_weekend: v.price_weekend ?? 0,
     halls: venueHallsToForm(v),
     services: venueServicesToFormLines(v.services ?? []),
     legal_entity_name: v.legal_entity_name ?? "",
@@ -273,11 +275,13 @@ function serializeForm(f: UpdateVenueRequest): string {
   return JSON.stringify({
     ...f,
     price_from: f.price_from,
+    price_weekend: f.price_weekend,
     halls: f.halls.map((h) => ({
       k: h.clientKey,
       id: h.id ?? "",
       name: h.name,
       price_from: h.price_from,
+      price_weekend: h.price_weekend,
       capacity: h.capacity,
       amenities: [...h.amenities].sort(),
     })),
@@ -298,6 +302,7 @@ function hallsPayloadForApi(form: UpdateVenueRequest) {
       id: h.id,
       name: h.name.trim(),
       price_from: h.price_from,
+      price_weekend: h.price_weekend,
       capacity: h.capacity,
       amenities: [...h.amenities],
       sort_order: i,
@@ -1158,23 +1163,47 @@ export default function EditOwnerVenuePage() {
               <CardContent className="space-y-8">
                 {form.halls.length === 0 ? (
                   <div className="space-y-2">
-                    <Label htmlFor="venue-price-from">Цена за час (₽)</Label>
-                    <Input
-                      id="venue-price-from"
-                      type="number"
-                      inputMode="numeric"
-                      min={0}
-                      value={form.price_from || ""}
-                      onChange={(e) =>
-                        updateField("price_from", Number(e.target.value))
-                      }
-                      placeholder="напр. 2000"
-                      className="max-w-xs"
-                    />
+                    <div className="flex flex-wrap gap-4">
+                      <div className="space-y-2">
+                        <Label htmlFor="venue-price-from">
+                          Цена за час, будни (₽)
+                        </Label>
+                        <Input
+                          id="venue-price-from"
+                          type="number"
+                          inputMode="numeric"
+                          min={0}
+                          value={form.price_from || ""}
+                          onChange={(e) =>
+                            updateField("price_from", Number(e.target.value))
+                          }
+                          placeholder="напр. 2000"
+                          className="max-w-xs"
+                        />
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="venue-price-weekend">
+                          Цена за час, выходные (₽)
+                        </Label>
+                        <Input
+                          id="venue-price-weekend"
+                          type="number"
+                          inputMode="numeric"
+                          min={0}
+                          value={form.price_weekend || ""}
+                          onChange={(e) =>
+                            updateField("price_weekend", Number(e.target.value))
+                          }
+                          placeholder="напр. 2500"
+                          className="max-w-xs"
+                        />
+                      </div>
+                    </div>
                     <p className="text-xs text-muted-foreground">
                       Базовая цена заведения — используется, пока не добавлены
                       залы. Как только появится хотя бы один зал, цена карточки
-                      берётся из залов (минимальная).
+                      берётся из залов (минимальная). Цена в выходные пустая или 0 —
+                      считается как в будни.
                     </p>
                   </div>
                 ) : null}
@@ -1230,7 +1259,7 @@ export default function EditOwnerVenuePage() {
                           />
                         </div>
                         <div className="space-y-2">
-                          <Label>Цена (₽/час)</Label>
+                          <Label>Цена, будни (₽/час)</Label>
                           <Input
                             type="number"
                             min={0}
@@ -1240,6 +1269,20 @@ export default function EditOwnerVenuePage() {
                                 price_from: Number(e.target.value),
                               })
                             }
+                          />
+                        </div>
+                        <div className="space-y-2">
+                          <Label>Цена, выходные (₽/час)</Label>
+                          <Input
+                            type="number"
+                            min={0}
+                            value={hall.price_weekend || ""}
+                            onChange={(e) =>
+                              updateHall(hallIndex, {
+                                price_weekend: Number(e.target.value),
+                              })
+                            }
+                            placeholder="как в будни, если пусто"
                           />
                         </div>
                         <div className="space-y-2">

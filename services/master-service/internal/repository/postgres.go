@@ -119,7 +119,7 @@ const masterColumns = `id, user_id, slug, display_name, bio, phone, city, work_f
   payout_legal_form,
   payout_legal_name, payout_inn, payout_kpp, payout_ogrn, payout_ogrnip,
   payout_bank_name, payout_bik, payout_settlement_account, payout_correspondent_account, payout_verification_status,
-  status, moderation_comment, moderated_by, moderated_at, created_at, updated_at`
+  status, moderation_comment, moderated_by, moderated_at, created_at, updated_at, price_weekend`
 
 // masterColumnsAliased is the same list with the "m." table alias, for use in
 // queries that join or alias the masters table (e.g. ListPublic).
@@ -129,7 +129,7 @@ const masterColumnsAliased = `m.id, m.user_id, m.slug, m.display_name, m.bio, m.
   m.payout_legal_form,
   m.payout_legal_name, m.payout_inn, m.payout_kpp, m.payout_ogrn, m.payout_ogrnip,
   m.payout_bank_name, m.payout_bik, m.payout_settlement_account, m.payout_correspondent_account, m.payout_verification_status,
-  m.status, m.moderation_comment, m.moderated_by, m.moderated_at, m.created_at, m.updated_at`
+  m.status, m.moderation_comment, m.moderated_by, m.moderated_at, m.created_at, m.updated_at, m.price_weekend`
 
 type MasterRepo struct {
 	pool *pgxpool.Pool
@@ -148,8 +148,8 @@ INSERT INTO masters (
   payout_legal_form,
   payout_legal_name, payout_inn, payout_kpp, payout_ogrn, payout_ogrnip,
   payout_bank_name, payout_bik, payout_settlement_account, payout_correspondent_account, payout_verification_status,
-  status, moderation_comment, moderated_by, moderated_at
-) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31)
+  status, moderation_comment, moderated_by, moderated_at, price_weekend
+) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32)
 RETURNING created_at, updated_at
 `
 	zj, err := marshalTravelExcludeZonesJSON(m.TravelExcludeZones)
@@ -163,7 +163,7 @@ RETURNING created_at, updated_at
 		m.PayoutLegalForm,
 		m.PayoutLegalName, m.PayoutINN, m.PayoutKPP, m.PayoutOGRN, m.PayoutOGRNIP,
 		m.PayoutBankName, m.PayoutBIK, m.PayoutSettlementAccount, m.PayoutCorrespondentAccount, m.PayoutVerificationStatus,
-		m.Status, m.ModerationComment, m.ModeratedBy, m.ModeratedAt,
+		m.Status, m.ModerationComment, m.ModeratedBy, m.ModeratedAt, m.PriceWeekend,
 	).Scan(&m.CreatedAt, &m.UpdatedAt)
 	if err != nil {
 		var pgErr *pgconn.PgError
@@ -239,7 +239,7 @@ func scanMasterRow(row pgx.Row) (*domain.Master, error) {
 		&m.PayoutLegalForm,
 		&m.PayoutLegalName, &m.PayoutINN, &m.PayoutKPP, &m.PayoutOGRN, &m.PayoutOGRNIP,
 		&m.PayoutBankName, &m.PayoutBIK, &m.PayoutSettlementAccount, &m.PayoutCorrespondentAccount, &m.PayoutVerificationStatus,
-		&m.Status, &m.ModerationComment, &modBy, &modAt, &m.CreatedAt, &m.UpdatedAt,
+		&m.Status, &m.ModerationComment, &modBy, &modAt, &m.CreatedAt, &m.UpdatedAt, &m.PriceWeekend,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
@@ -282,7 +282,7 @@ func scanMasterRowWithTotal(row pgx.Row, total *int32) (*domain.Master, error) {
 		&m.PayoutLegalForm,
 		&m.PayoutLegalName, &m.PayoutINN, &m.PayoutKPP, &m.PayoutOGRN, &m.PayoutOGRNIP,
 		&m.PayoutBankName, &m.PayoutBIK, &m.PayoutSettlementAccount, &m.PayoutCorrespondentAccount, &m.PayoutVerificationStatus,
-		&m.Status, &m.ModerationComment, &modBy, &modAt, &m.CreatedAt, &m.UpdatedAt,
+		&m.Status, &m.ModerationComment, &modBy, &modAt, &m.CreatedAt, &m.UpdatedAt, &m.PriceWeekend,
 		total,
 	)
 	if err != nil {
@@ -478,6 +478,7 @@ UPDATE masters SET
   payout_legal_name = $16, payout_inn = $17, payout_kpp = $18, payout_ogrn = $19, payout_ogrnip = $20,
   payout_bank_name = $21, payout_bik = $22, payout_settlement_account = $23, payout_correspondent_account = $24, payout_verification_status = $25,
   status = $26, moderation_comment = $27, moderated_by = $28, moderated_at = $29,
+  price_weekend = $30,
   updated_at = now()
 WHERE id = $1
 RETURNING updated_at
@@ -494,6 +495,7 @@ func updateMasterArgs(m *domain.Master, zj string) []any {
 		m.PayoutLegalName, m.PayoutINN, m.PayoutKPP, m.PayoutOGRN, m.PayoutOGRNIP,
 		m.PayoutBankName, m.PayoutBIK, m.PayoutSettlementAccount, m.PayoutCorrespondentAccount, m.PayoutVerificationStatus,
 		m.Status, m.ModerationComment, m.ModeratedBy, m.ModeratedAt,
+		m.PriceWeekend,
 	}
 }
 

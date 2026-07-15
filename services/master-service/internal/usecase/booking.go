@@ -13,6 +13,7 @@ import (
 	paymentv1 "github.com/tienlao/agregator/gen/go/payment/v1"
 
 	pkgerrors "github.com/tienlao/agregator/pkg/errors"
+	"github.com/tienlao/agregator/pkg/pricing"
 	"github.com/tienlao/agregator/services/master-service/internal/domain"
 )
 
@@ -47,7 +48,7 @@ func (uc *MasterUseCase) CreateBooking(ctx context.Context, clientUserID uuid.UU
 	if err := validateBookingSlot(date, timeFrom, timeTo); err != nil {
 		return nil, err
 	}
-	totalPrice, err := estimateMasterBookingPriceKopecks(m, serviceID, timeFrom, timeTo)
+	totalPrice, err := estimateMasterBookingPriceKopecks(m, serviceID, date, timeFrom, timeTo)
 	if err != nil {
 		return nil, err
 	}
@@ -195,7 +196,7 @@ func validateBookingSlot(date, timeFrom, timeTo string) error {
 	return nil
 }
 
-func estimateMasterBookingPriceKopecks(m *domain.Master, serviceID *uuid.UUID, timeFrom, timeTo string) (int64, error) {
+func estimateMasterBookingPriceKopecks(m *domain.Master, serviceID *uuid.UUID, date, timeFrom, timeTo string) (int64, error) {
 	if serviceID != nil {
 		for _, s := range m.Services {
 			if s.ID == *serviceID {
@@ -207,10 +208,15 @@ func estimateMasterBookingPriceKopecks(m *domain.Master, serviceID *uuid.UUID, t
 		}
 		return 0, pkgerrors.InvalidArgument("unknown service")
 	}
-	if m.HourlyRate <= 0 {
+	// Formats are pre-validated by validateBookingSlot; parse errors cannot occur here.
+	// A bare calendar date's weekday is timezone-independent, so no location is needed.
+	bookDate, _ := time.Parse(time.DateOnly, strings.TrimSpace(date))
+	// Guard on the effective rate for the day: a master who only set a weekend rate
+	// (weekday hourly_rate = 0) must still be bookable on weekends.
+	hourly := pricing.WeekendRate(m.HourlyRate, m.PriceWeekend, pricing.IsWeekendDay(bookDate))
+	if hourly <= 0 {
 		return 0, pkgerrors.InvalidArgument("master hourly rate is not configured")
 	}
-	// Formats are pre-validated by validateBookingSlot; parse errors cannot occur here.
 	startAt, _ := time.Parse("15:04", strings.TrimSpace(timeFrom))
 	endAt, _ := time.Parse("15:04", strings.TrimSpace(timeTo))
 	minutes := int64(endAt.Sub(startAt).Minutes())
@@ -218,7 +224,7 @@ func estimateMasterBookingPriceKopecks(m *domain.Master, serviceID *uuid.UUID, t
 		return 0, pkgerrors.InvalidArgument("invalid booking duration")
 	}
 	// Round up partial hours so master is not underpaid on uneven slots.
-	amount := (m.HourlyRate*minutes + 59) / 60
+	amount := (hourly*minutes + 59) / 60
 	if amount <= 0 {
 		return 0, pkgerrors.InvalidArgument("invalid booking amount")
 	}

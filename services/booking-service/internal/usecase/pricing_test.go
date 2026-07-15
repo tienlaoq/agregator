@@ -58,10 +58,10 @@ func TestPersistServiceFields(t *testing.T) {
 
 func venueWithHalls() *venuev1.VenueResponse {
 	return &venuev1.VenueResponse{
-		Id: "v1", PriceFrom: 3000,
+		Id: "v1", PriceFrom: 3000, PriceWeekend: 4000,
 		Halls: []*venuev1.VenueHall{
-			{Id: "h1", PriceFrom: 5000},
-			{Id: "h2", PriceFrom: 2000},
+			{Id: "h1", PriceFrom: 5000, PriceWeekend: 6000},
+			{Id: "h2", PriceFrom: 2000}, // PriceWeekend 0 → falls back to weekday
 		},
 		Services: []*venuev1.VenueServiceItem{
 			{Id: "svc-fixed", Price: 10000},
@@ -79,14 +79,23 @@ func TestValidateHallIDs(t *testing.T) {
 
 func TestEffectiveHourlyPriceFromVenueAndHalls(t *testing.T) {
 	v := venueWithHalls()
+	const weekday, weekend = false, true
+
 	// No halls → venue base.
-	require.Equal(t, int64(3000), effectiveHourlyPriceFromVenueAndHalls(v, nil))
+	require.Equal(t, int64(3000), effectiveHourlyPriceFromVenueAndHalls(v, nil, weekday))
 	// Hall with higher price raises the base.
-	require.Equal(t, int64(5000), effectiveHourlyPriceFromVenueAndHalls(v, []string{"h1"}))
+	require.Equal(t, int64(5000), effectiveHourlyPriceFromVenueAndHalls(v, []string{"h1"}, weekday))
 	// Hall cheaper than base does not lower it.
-	require.Equal(t, int64(3000), effectiveHourlyPriceFromVenueAndHalls(v, []string{"h2"}))
+	require.Equal(t, int64(3000), effectiveHourlyPriceFromVenueAndHalls(v, []string{"h2"}, weekday))
 	// Max across selected halls.
-	require.Equal(t, int64(5000), effectiveHourlyPriceFromVenueAndHalls(v, []string{"h1", "h2"}))
+	require.Equal(t, int64(5000), effectiveHourlyPriceFromVenueAndHalls(v, []string{"h1", "h2"}, weekday))
+
+	// Weekend: venue base uses weekend rate.
+	require.Equal(t, int64(4000), effectiveHourlyPriceFromVenueAndHalls(v, nil, weekend))
+	// Weekend: h1 uses its weekend rate 6000.
+	require.Equal(t, int64(6000), effectiveHourlyPriceFromVenueAndHalls(v, []string{"h1"}, weekend))
+	// Weekend: h2 has no weekend rate → weekday 2000, so venue weekend base 4000 wins.
+	require.Equal(t, int64(4000), effectiveHourlyPriceFromVenueAndHalls(v, []string{"h2"}, weekend))
 }
 
 func TestComputeBookingTotalPriceMulti(t *testing.T) {
@@ -94,49 +103,56 @@ func TestComputeBookingTotalPriceMulti(t *testing.T) {
 
 	t.Run("no services → hourly on effective base", func(t *testing.T) {
 		// h1 base 5000 × 2h (90min → 2h) = 10000.
-		total, err := computeBookingTotalPriceMulti(v, nil, []string{"h1"}, 90)
+		total, err := computeBookingTotalPriceMulti(v, nil, []string{"h1"}, 90, false)
 		require.NoError(t, err)
 		require.Equal(t, int64(10000), total)
+	})
+
+	t.Run("weekend uses hall weekend rate", func(t *testing.T) {
+		// h1 weekend 6000 × 2h (90min → 2h) = 12000.
+		total, err := computeBookingTotalPriceMulti(v, nil, []string{"h1"}, 90, true)
+		require.NoError(t, err)
+		require.Equal(t, int64(12000), total)
 	})
 
 	t.Run("no halls venue → venue base hourly", func(t *testing.T) {
 		// Заведение без залов вовсе: цена берётся с venue.price_from.
 		// 2000 × 2h (120min) = 4000.
 		hallless := &venuev1.VenueResponse{Id: "v2", PriceFrom: 2000}
-		total, err := computeBookingTotalPriceMulti(hallless, nil, nil, 120)
+		total, err := computeBookingTotalPriceMulti(hallless, nil, nil, 120, false)
 		require.NoError(t, err)
 		require.Equal(t, int64(4000), total)
 	})
 
 	t.Run("fixed-price service", func(t *testing.T) {
-		total, err := computeBookingTotalPriceMulti(v, []string{"svc-fixed"}, nil, 120)
+		total, err := computeBookingTotalPriceMulti(v, []string{"svc-fixed"}, nil, 120, false)
 		require.NoError(t, err)
 		require.Equal(t, int64(10000), total)
 	})
 
 	t.Run("one hourly service uses hourly base", func(t *testing.T) {
 		// svc-hourly has price 0 → charged hourly: base 3000 × 1h = 3000.
-		total, err := computeBookingTotalPriceMulti(v, []string{"svc-hourly"}, nil, 60)
+		total, err := computeBookingTotalPriceMulti(v, []string{"svc-hourly"}, nil, 60, false)
 		require.NoError(t, err)
 		require.Equal(t, int64(3000), total)
 	})
 
 	t.Run("fixed + hourly combine", func(t *testing.T) {
 		// 10000 (fixed) + 3000 (hourly 1h) = 13000.
-		total, err := computeBookingTotalPriceMulti(v, []string{"svc-fixed", "svc-hourly"}, nil, 60)
+		total, err := computeBookingTotalPriceMulti(v, []string{"svc-fixed", "svc-hourly"}, nil, 60, false)
 		require.NoError(t, err)
 		require.Equal(t, int64(13000), total)
 	})
 
 	t.Run("unknown service rejected", func(t *testing.T) {
-		_, err := computeBookingTotalPriceMulti(v, []string{"nope"}, nil, 60)
+		_, err := computeBookingTotalPriceMulti(v, []string{"nope"}, nil, 60, false)
 		require.Error(t, err)
 	})
 
 	t.Run("more than one hourly service rejected", func(t *testing.T) {
 		v2 := venueWithHalls()
 		v2.Services = append(v2.Services, &venuev1.VenueServiceItem{Id: "svc-hourly-2", Price: 0})
-		_, err := computeBookingTotalPriceMulti(v2, []string{"svc-hourly", "svc-hourly-2"}, nil, 60)
+		_, err := computeBookingTotalPriceMulti(v2, []string{"svc-hourly", "svc-hourly-2"}, nil, 60, false)
 		require.Error(t, err)
 	})
 }

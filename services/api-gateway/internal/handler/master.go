@@ -122,6 +122,7 @@ func masterProtoToJSON(m *masterv1.Master) map[string]any {
 		"experience_years":             m.GetExperienceYears(),
 		"specializations":              m.GetSpecializations(),
 		"hourly_rate":                  m.GetHourlyRate(),
+		"price_weekend":                m.GetPriceWeekend(),
 		"availability_json":            m.GetAvailabilityJson(),
 		"payout_legal_form":            m.GetPayoutLegalForm(),
 		"payout_legal_name":            m.GetPayoutLegalName(),
@@ -390,7 +391,7 @@ func (h *MasterHandler) updateReqFromRaw(uid string, raw map[string]json.RawMess
 	var dn, bio, phone, city, wf, avj, plf *string
 	var pln, pinn, pkpp, pogrn, pogrnip, pbank, pbik, psettle, pcorr, pver *string
 	var tr, ex *int32
-	var hr *int64
+	var hr, pw *int64
 	var tblat, tblon *float64
 	setString("display_name", &dn)
 	setString("bio", &bio)
@@ -412,6 +413,7 @@ func (h *MasterHandler) updateReqFromRaw(uid string, raw map[string]json.RawMess
 	setInt32("travel_radius_km", &tr)
 	setInt32("experience_years", &ex)
 	setInt64("hourly_rate", &hr)
+	setInt64("price_weekend", &pw)
 	setFloat64("travel_base_latitude", &tblat)
 	setFloat64("travel_base_longitude", &tblon)
 	req.DisplayName = dn
@@ -423,6 +425,7 @@ func (h *MasterHandler) updateReqFromRaw(uid string, raw map[string]json.RawMess
 	req.TravelRadiusKm = tr
 	req.ExperienceYears = ex
 	req.HourlyRate = hr
+	req.PriceWeekend = pw
 	req.TravelBaseLatitude = tblat
 	req.TravelBaseLongitude = tblon
 	req.PayoutLegalForm = plf

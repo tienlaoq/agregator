@@ -108,16 +108,16 @@ func (r *venueRepo) Create(ctx context.Context, venue *domain.Venue) error {
 	err = tx.QueryRow(ctx, `
 		INSERT INTO venues (owner_id, slug, name, type, description, address, city, location, price_from, capacity, amenities, working_hours, phone, status,
 			legal_entity_name, inn, ogrn, public_listing_url, verification_note, social_links,
-			payout_legal_form)
+			payout_legal_form, price_weekend)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, ST_SetSRID(ST_MakePoint($8, $9), 4326)::geography, $10, $11, $12, $13, $14, $15,
-			$16, $17, $18, $19, $20, $21::jsonb, $22)
+			$16, $17, $18, $19, $20, $21::jsonb, $22, $23)
 		RETURNING id, created_at, updated_at`,
 		venue.OwnerID, venue.Slug, venue.Name, venue.Type, venue.Description,
 		venue.Address, venue.City, venue.Longitude, venue.Latitude,
 		venue.PriceFrom, venue.Capacity, venue.Amenities, venue.WorkingHours, venue.Phone,
 		venue.Status,
 		venue.LegalEntityName, venue.INN, venue.OGRN, venue.PublicListingURL, venue.VerificationNote, venue.SocialLinks,
-		venue.PayoutLegalForm,
+		venue.PayoutLegalForm, venue.PriceWeekend,
 	).Scan(&venue.ID, &venue.CreatedAt, &venue.UpdatedAt)
 	if err != nil {
 		return fmt.Errorf("insert venue: %w", err)
@@ -147,9 +147,9 @@ func (r *venueRepo) Create(ctx context.Context, venue *domain.Venue) error {
 			amenities = []string{}
 		}
 		if err = tx.QueryRow(ctx, `
-			INSERT INTO venue_halls (venue_id, name, price_from, capacity, amenities, sort_order)
-			VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
-			venue.ID, h.Name, h.PriceFrom, h.Capacity, amenities, int32(i),
+			INSERT INTO venue_halls (venue_id, name, price_from, price_weekend, capacity, amenities, sort_order)
+			VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
+			venue.ID, h.Name, h.PriceFrom, h.PriceWeekend, h.Capacity, amenities, int32(i),
 		).Scan(&h.ID); err != nil {
 			return fmt.Errorf("insert venue_hall: %w", err)
 		}
@@ -158,14 +158,14 @@ func (r *venueRepo) Create(ctx context.Context, venue *domain.Venue) error {
 		h.Photos = []domain.VenueHallPhoto{}
 	}
 	if len(venue.Halls) > 0 {
-		pf, capacity, am := derivedVenueFieldsFromHalls(venue.Halls)
+		pf, pw, capacity, am := derivedVenueFieldsFromHalls(venue.Halls)
 		if _, err := tx.Exec(ctx, `
-			UPDATE venues SET price_from = $2, capacity = $3, amenities = $4 WHERE id = $1`,
-			venue.ID, pf, capacity, am,
+			UPDATE venues SET price_from = $2, price_weekend = $3, capacity = $4, amenities = $5 WHERE id = $1`,
+			venue.ID, pf, pw, capacity, am,
 		); err != nil {
 			return fmt.Errorf("update venue derived from halls: %w", err)
 		}
-		venue.PriceFrom, venue.Capacity, venue.Amenities = pf, capacity, am
+		venue.PriceFrom, venue.PriceWeekend, venue.Capacity, venue.Amenities = pf, pw, capacity, am
 	}
 
 	return tx.Commit(ctx)
@@ -223,7 +223,7 @@ func (r *venueRepo) Update(ctx context.Context, venue *domain.Venue) error {
 			working_hours = $11, phone = $12,
 			legal_entity_name = $13, inn = $14, ogrn = $15,
 			public_listing_url = $16, social_links = $17::jsonb, verification_note = $18,
-			payout_legal_form = $19,
+			payout_legal_form = $19, price_weekend = $20,
 			status = CASE WHEN status IN ('active', 'rejected') THEN 'pending_review' ELSE status END,
 			is_active = CASE WHEN status IN ('active', 'rejected') THEN false ELSE is_active END,
 			moderation_comment = CASE WHEN status IN ('active', 'rejected') THEN '' ELSE moderation_comment END,
@@ -236,7 +236,7 @@ func (r *venueRepo) Update(ctx context.Context, venue *domain.Venue) error {
 		venue.PriceFrom, venue.Capacity, venue.Amenities,
 		venue.WorkingHours, venue.Phone,
 		venue.LegalEntityName, venue.INN, venue.OGRN, venue.PublicListingURL, venue.SocialLinks, venue.VerificationNote,
-		venue.PayoutLegalForm,
+		venue.PayoutLegalForm, venue.PriceWeekend,
 	)
 	if err != nil {
 		return fmt.Errorf("update venue: %w", err)
@@ -255,7 +255,7 @@ func (r *venueRepo) GetByIDs(ctx context.Context, ids []uuid.UUID) ([]domain.Ven
 	rows, err := r.pool.Query(ctx, `
 		SELECT v.id, v.owner_id, v.slug, v.name, v.type, v.description, v.address, v.city,
 			ST_Y(v.location::geometry) AS latitude, ST_X(v.location::geometry) AS longitude,
-			v.price_from, v.capacity, v.amenities, v.working_hours, v.phone,
+			v.price_from, v.price_weekend, v.capacity, v.amenities, v.working_hours, v.phone,
 			v.avg_rating, v.review_count, v.is_active, v.status, v.moderation_comment,
 			v.moderated_at, v.moderated_by,
 			v.legal_entity_name, v.inn, v.ogrn, v.public_listing_url, v.verification_note,
@@ -293,7 +293,7 @@ func (r *venueRepo) getVenue(ctx context.Context, where string, arg any) (*domai
 	err := r.pool.QueryRow(ctx, `
 		SELECT v.id, v.owner_id, v.slug, v.name, v.type, v.description, v.address, v.city,
 			ST_Y(v.location::geometry) AS latitude, ST_X(v.location::geometry) AS longitude,
-			v.price_from, v.capacity, v.amenities, v.working_hours, v.phone,
+			v.price_from, v.price_weekend, v.capacity, v.amenities, v.working_hours, v.phone,
 			v.avg_rating, v.review_count, v.is_active, v.status, v.moderation_comment,
 			v.moderated_at, v.moderated_by,
 			v.legal_entity_name, v.inn, v.ogrn, v.public_listing_url, v.verification_note,
@@ -460,7 +460,7 @@ func (r *venueRepo) getHallsWithPhotosByVenueIDs(ctx context.Context, venueIDs [
 		return out, nil
 	}
 	rows, err := r.pool.Query(ctx, `
-		SELECT id, venue_id, name, price_from, capacity, amenities, sort_order
+		SELECT id, venue_id, name, price_from, price_weekend, capacity, amenities, sort_order
 		FROM venue_halls WHERE venue_id = ANY($1::uuid[])
 		ORDER BY venue_id, sort_order ASC, id ASC`, venueIDs)
 	if err != nil {
@@ -471,7 +471,7 @@ func (r *venueRepo) getHallsWithPhotosByVenueIDs(ctx context.Context, venueIDs [
 	var flat []domain.VenueHall
 	for rows.Next() {
 		var h domain.VenueHall
-		if err := rows.Scan(&h.ID, &h.VenueID, &h.Name, &h.PriceFrom, &h.Capacity, &h.Amenities, &h.SortOrder); err != nil {
+		if err := rows.Scan(&h.ID, &h.VenueID, &h.Name, &h.PriceFrom, &h.PriceWeekend, &h.Capacity, &h.Amenities, &h.SortOrder); err != nil {
 			return nil, fmt.Errorf("scan venue_hall: %w", err)
 		}
 		flat = append(flat, h)
@@ -636,7 +636,7 @@ func (r *venueRepo) List(ctx context.Context, page, pageSize int32, venueType, s
 	query := fmt.Sprintf(`
 		SELECT id, owner_id, slug, name, type, description, address, city,
 			ST_Y(location::geometry) AS latitude, ST_X(location::geometry) AS longitude,
-			price_from, capacity, amenities, working_hours, phone,
+			price_from, price_weekend, capacity, amenities, working_hours, phone,
 			avg_rating, review_count, is_active, status, moderation_comment,
 			moderated_at, moderated_by,
 			legal_entity_name, inn, ogrn, public_listing_url, verification_note,
@@ -744,7 +744,7 @@ func (r *venueRepo) Search(ctx context.Context, params domain.SearchParams) (*do
 	query := fmt.Sprintf(`
 		SELECT id, owner_id, slug, name, type, description, address, city,
 			ST_Y(location::geometry) AS latitude, ST_X(location::geometry) AS longitude,
-			price_from, capacity, amenities, working_hours, phone,
+			price_from, price_weekend, capacity, amenities, working_hours, phone,
 			avg_rating, review_count, is_active, status, moderation_comment,
 			moderated_at, moderated_by,
 			legal_entity_name, inn, ogrn, public_listing_url, verification_note,
@@ -775,7 +775,7 @@ func (r *venueRepo) ListByOwner(ctx context.Context, ownerID uuid.UUID) ([]domai
 	rows, err := r.pool.Query(ctx, `
 		SELECT id, owner_id, slug, name, type, description, address, city,
 			ST_Y(location::geometry) AS latitude, ST_X(location::geometry) AS longitude,
-			price_from, capacity, amenities, working_hours, phone,
+			price_from, price_weekend, capacity, amenities, working_hours, phone,
 			avg_rating, review_count, is_active, status, moderation_comment,
 			moderated_at, moderated_by,
 			legal_entity_name, inn, ogrn, public_listing_url, verification_note,
@@ -870,7 +870,7 @@ func (r *venueRepo) ListByStatus(ctx context.Context, status string, page, pageS
 	const venueAdminSelect = `
 		SELECT id, owner_id, slug, name, type, description, address, city,
 			ST_Y(location::geometry) AS latitude, ST_X(location::geometry) AS longitude,
-			price_from, capacity, amenities, working_hours, phone,
+			price_from, price_weekend, capacity, amenities, working_hours, phone,
 			avg_rating, review_count, is_active, status, moderation_comment,
 			moderated_at, moderated_by,
 			legal_entity_name, inn, ogrn, public_listing_url, verification_note,
@@ -1184,11 +1184,21 @@ func (r *venueRepo) SetVenueCoverPhoto(ctx context.Context, venueID, ownerID, ph
 	return nil
 }
 
-func derivedVenueFieldsFromHalls(halls []domain.VenueHall) (priceFrom int64, capacity int32, amenities []string) {
+func derivedVenueFieldsFromHalls(halls []domain.VenueHall) (priceFrom, priceWeekend int64, capacity int32, amenities []string) {
 	seen := make(map[string]struct{})
 	for _, h := range halls {
 		if h.PriceFrom > 0 && (priceFrom == 0 || h.PriceFrom < priceFrom) {
 			priceFrom = h.PriceFrom
+		}
+		// Эффективная выходная ставка зала: явная, иначе — как в будни. Берём
+		// минимум по залам, чтобы venue-level price_weekend был согласован с
+		// price_from (min по залам) для whole-режима без выбранного зала.
+		we := h.PriceWeekend
+		if we == 0 {
+			we = h.PriceFrom
+		}
+		if we > 0 && (priceWeekend == 0 || we < priceWeekend) {
+			priceWeekend = we
 		}
 		if h.Capacity > capacity {
 			capacity = h.Capacity
@@ -1207,7 +1217,7 @@ func derivedVenueFieldsFromHalls(halls []domain.VenueHall) (priceFrom int64, cap
 		}
 	}
 	sort.Strings(amenities)
-	return priceFrom, capacity, amenities
+	return priceFrom, priceWeekend, capacity, amenities
 }
 
 func (r *venueRepo) getHallsWithPhotos(ctx context.Context, venueID uuid.UUID) ([]domain.VenueHall, error) {
@@ -1252,9 +1262,9 @@ func (r *venueRepo) ReplaceVenueHalls(ctx context.Context, venueID, ownerID uuid
 				return ErrHallNotInVenue
 			}
 			if _, err := tx.Exec(ctx, `
-				UPDATE venue_halls SET name = $1, price_from = $2, capacity = $3, amenities = $4, sort_order = $5, updated_at = now()
+				UPDATE venue_halls SET name = $1, price_from = $2, capacity = $3, amenities = $4, sort_order = $5, price_weekend = $8, updated_at = now()
 				WHERE id = $6 AND venue_id = $7`,
-				name, it.PriceFrom, it.Capacity, amenities, int32(i), *it.ID, venueID,
+				name, it.PriceFrom, it.Capacity, amenities, int32(i), *it.ID, venueID, it.PriceWeekend,
 			); err != nil {
 				return fmt.Errorf("update venue_hall: %w", err)
 			}
@@ -1262,9 +1272,9 @@ func (r *venueRepo) ReplaceVenueHalls(ctx context.Context, venueID, ownerID uuid
 		} else {
 			var newID uuid.UUID
 			err := tx.QueryRow(ctx, `
-				INSERT INTO venue_halls (venue_id, name, price_from, capacity, amenities, sort_order)
-				VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
-				venueID, name, it.PriceFrom, it.Capacity, amenities, int32(i),
+				INSERT INTO venue_halls (venue_id, name, price_from, price_weekend, capacity, amenities, sort_order)
+				VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
+				venueID, name, it.PriceFrom, it.PriceWeekend, it.Capacity, amenities, int32(i),
 			).Scan(&newID)
 			if err != nil {
 				return fmt.Errorf("insert venue_hall: %w", err)
@@ -1282,7 +1292,7 @@ func (r *venueRepo) ReplaceVenueHalls(ctx context.Context, venueID, ownerID uuid
 
 	var hallRows []domain.VenueHall
 	hrows, err := tx.Query(ctx, `
-		SELECT id, venue_id, name, price_from, capacity, amenities, sort_order
+		SELECT id, venue_id, name, price_from, price_weekend, capacity, amenities, sort_order
 		FROM venue_halls WHERE venue_id = $1`, venueID)
 	if err != nil {
 		return fmt.Errorf("list halls for derived: %w", err)
@@ -1290,7 +1300,7 @@ func (r *venueRepo) ReplaceVenueHalls(ctx context.Context, venueID, ownerID uuid
 	defer hrows.Close()
 	for hrows.Next() {
 		var h domain.VenueHall
-		if err := hrows.Scan(&h.ID, &h.VenueID, &h.Name, &h.PriceFrom, &h.Capacity, &h.Amenities, &h.SortOrder); err != nil {
+		if err := hrows.Scan(&h.ID, &h.VenueID, &h.Name, &h.PriceFrom, &h.PriceWeekend, &h.Capacity, &h.Amenities, &h.SortOrder); err != nil {
 			return fmt.Errorf("scan hall row: %w", err)
 		}
 		hallRows = append(hallRows, h)
@@ -1299,16 +1309,18 @@ func (r *venueRepo) ReplaceVenueHalls(ctx context.Context, venueID, ownerID uuid
 		return err
 	}
 	// capacity/amenities are always hall-derived — with zero halls they reset to
-	// 0/empty (derivedVenueFieldsFromHalls([]) == 0,0,nil). price_from is different:
-	// in whole mode (no halls) it lives at the venue level, set by Update() from
-	// the form, so halls only override it when they exist — otherwise we'd wipe it.
-	pf, capacity, am := derivedVenueFieldsFromHalls(hallRows)
+	// 0/empty (derivedVenueFieldsFromHalls([]) == 0,0,0,nil). price_from/price_weekend
+	// are different: in whole mode (no halls) they live at the venue level, set by
+	// Update() from the form, so halls only override them when they exist — otherwise
+	// we'd wipe the venue-level rates.
+	pf, pw, capacity, am := derivedVenueFieldsFromHalls(hallRows)
 	if _, err := tx.Exec(ctx, `
 		UPDATE venues SET
-			price_from = CASE WHEN $5 THEN $2 ELSE price_from END,
-			capacity = $3, amenities = $4, updated_at = now()
+			price_from = CASE WHEN $6 THEN $2 ELSE price_from END,
+			price_weekend = CASE WHEN $6 THEN $3 ELSE price_weekend END,
+			capacity = $4, amenities = $5, updated_at = now()
 		WHERE id = $1`,
-		venueID, pf, capacity, am, len(hallRows) > 0,
+		venueID, pf, pw, capacity, am, len(hallRows) > 0,
 	); err != nil {
 		return fmt.Errorf("update venue derived from halls: %w", err)
 	}
@@ -1883,7 +1895,7 @@ func venueScanTargets(v *domain.Venue) []any {
 	return []any{
 		&v.ID, &v.OwnerID, &v.Slug, &v.Name, &v.Type, &v.Description, &v.Address, &v.City,
 		&v.Latitude, &v.Longitude,
-		&v.PriceFrom, &v.Capacity, &v.Amenities, &v.WorkingHours, &v.Phone,
+		&v.PriceFrom, &v.PriceWeekend, &v.Capacity, &v.Amenities, &v.WorkingHours, &v.Phone,
 		&v.AvgRating, &v.ReviewCount, &v.IsActive, &v.Status, &v.ModerationComment,
 		&v.ModeratedAt, &v.ModeratedBy,
 		&v.LegalEntityName, &v.INN, &v.OGRN, &v.PublicListingURL, &v.VerificationNote,

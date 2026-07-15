@@ -34,6 +34,7 @@ func TestVenueToProto_FullMapping(t *testing.T) {
 		Latitude:          55.75,
 		Longitude:         37.62,
 		PriceFrom:         1500,
+		PriceWeekend:      2200,
 		Capacity:          10,
 		Amenities:         []string{"wifi", "parking"},
 		WorkingHours:      "10-22",
@@ -61,12 +62,13 @@ func TestVenueToProto_FullMapping(t *testing.T) {
 		},
 		Halls: []domain.VenueHall{
 			{
-				ID:        hallID,
-				Name:      "Большой зал",
-				PriceFrom: 3000,
-				Capacity:  20,
-				Amenities: []string{"бассейн"},
-				SortOrder: 2,
+				ID:           hallID,
+				Name:         "Большой зал",
+				PriceFrom:    3000,
+				PriceWeekend: 3500,
+				Capacity:     20,
+				Amenities:    []string{"бассейн"},
+				SortOrder:    2,
 				Photos: []domain.VenueHallPhoto{
 					{ID: hallPhotoID, URL: "https://cdn/hall.jpg", SortOrder: 1, IsCover: true},
 				},
@@ -87,6 +89,9 @@ func TestVenueToProto_FullMapping(t *testing.T) {
 	}
 	if got.GetPriceFrom() != 1500 || got.GetCapacity() != 10 {
 		t.Errorf("PriceFrom/Capacity mismatch: %d/%d", got.GetPriceFrom(), got.GetCapacity())
+	}
+	if got.GetPriceWeekend() != 2200 {
+		t.Errorf("PriceWeekend = %d, want 2200", got.GetPriceWeekend())
 	}
 	if got.GetInn() != "7707083893" || got.GetOgrn() != "1027700132195" {
 		t.Errorf("INN/OGRN mismatch: %q/%q", got.GetInn(), got.GetOgrn())
@@ -116,6 +121,9 @@ func TestVenueToProto_FullMapping(t *testing.T) {
 	hall := got.GetHalls()[0]
 	if hall.GetName() != "Большой зал" || hall.GetCapacity() != 20 {
 		t.Errorf("hall mapping mismatch: %+v", hall)
+	}
+	if hall.GetPriceFrom() != 3000 || hall.GetPriceWeekend() != 3500 {
+		t.Errorf("hall price mismatch: from=%d weekend=%d", hall.GetPriceFrom(), hall.GetPriceWeekend())
 	}
 	if len(hall.GetPhotos()) != 1 || !hall.GetPhotos()[0].GetIsCover() {
 		t.Errorf("hall photo not mapped: %+v", hall.GetPhotos())
@@ -183,12 +191,13 @@ func TestHallProtoInputsToUpserts(t *testing.T) {
 	existingIDStr := existingID.String()
 	inputs := []*venuev1.VenueHallInput{
 		{
-			Id:        &existingIDStr,
-			Name:      "Зал 1",
-			PriceFrom: 1000,
-			Capacity:  8,
-			Amenities: []string{"душ"},
-			SortOrder: 1,
+			Id:           &existingIDStr,
+			Name:         "Зал 1",
+			PriceFrom:    1000,
+			PriceWeekend: 1400,
+			Capacity:     8,
+			Amenities:    []string{"душ"},
+			SortOrder:    1,
 		},
 		{
 			// no Id → insert; nil amenities normalized to empty slice
@@ -208,6 +217,9 @@ func TestHallProtoInputsToUpserts(t *testing.T) {
 	}
 	if ups[0].ID == nil || *ups[0].ID != existingID {
 		t.Errorf("first upsert ID = %v, want %v", ups[0].ID, existingID)
+	}
+	if ups[0].PriceWeekend != 1400 {
+		t.Errorf("first upsert PriceWeekend = %d, want 1400", ups[0].PriceWeekend)
 	}
 	if ups[1].ID != nil {
 		t.Errorf("second upsert ID = %v, want nil", ups[1].ID)

@@ -355,6 +355,7 @@ export default function MasterProfilePage() {
   const [excludePlacementMode, setExcludePlacementMode] = useState(false);
   const [experienceYears, setExperienceYears] = useState(0);
   const [hourlyRub, setHourlyRub] = useState(0);
+  const [weekendRub, setWeekendRub] = useState(0);
   const [specText, setSpecText] = useState("");
   const [availabilityNote, setAvailabilityNote] = useState("");
   const [services, setServices] = useState<ServiceLine[]>([newServiceLine()]);
@@ -485,6 +486,7 @@ export default function MasterProfilePage() {
     }
     setExperienceYears(profile.experience_years);
     setHourlyRub(kopecksToRub(profile.hourly_rate));
+    setWeekendRub(kopecksToRub(profile.price_weekend));
     setSpecText(profile.specializations?.join(", ") ?? "");
     setAvailabilityNote(availabilityNoteFromStored(profile.availability_json));
     setServices(
@@ -603,6 +605,7 @@ export default function MasterProfilePage() {
       travel_radius_km: travelRadius,
       experience_years: experienceYears,
       hourly_rate: rubToKopecks(hourlyRub),
+      price_weekend: rubToKopecks(weekendRub),
       availability_json: mergeAvailabilityWithNote(profile?.availability_json, availabilityNote),
       specializations: specs,
       services: svcPayload,
@@ -1296,7 +1299,7 @@ export default function MasterProfilePage() {
                 </div>
               </div>
               <div className="space-y-2">
-                <Label>Базовая ставка (₽/час)</Label>
+                <Label>Ставка по будням (₽/час)</Label>
                 <p className="text-xs text-muted-foreground">
                   В каталоге в строке «от … ₽ / час» показывается минимальная цена среди ваших услуг; если
                   услуг с ценой нет — используется эта ставка.
@@ -1309,6 +1312,22 @@ export default function MasterProfilePage() {
                   value={numFieldValue(hourlyRub, true)}
                   onChange={(e) =>
                     setHourlyRub(parseNonNegFloatInput(e.target.value, 0))
+                  }
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>Ставка по выходным (₽/час)</Label>
+                <p className="text-xs text-muted-foreground">
+                  Применяется к броням на субботу и воскресенье. Оставьте 0 — будет как в будни.
+                </p>
+                <Input
+                  type="number"
+                  min={0}
+                  step={100}
+                  inputMode="decimal"
+                  value={numFieldValue(weekendRub, true)}
+                  onChange={(e) =>
+                    setWeekendRub(parseNonNegFloatInput(e.target.value, 0))
                   }
                 />
               </div>
