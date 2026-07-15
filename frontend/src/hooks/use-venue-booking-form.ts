@@ -31,14 +31,37 @@ export function maxSlotMinutesForSelectedServices(
   return Math.min(720, m)
 }
 
-/** Почасовая база для подсказки: max(цена заведения, выбранные залы). */
-export function effectiveHourlyRateRub(venue: Venue, hallIds: string[]): number {
-  let base = Math.max(0, Number(venue.price_from) || 0)
+/** Выходной ли день (сб/вс). Без даты — считаем будни. */
+export function isWeekendDate(d: Date | undefined): boolean {
+  if (!d) return false
+  const wd = d.getDay()
+  return wd === 0 || wd === 6
+}
+
+/** Ставка с учётом будни/выходные: выходная цена если задана (>0) и день выходной. */
+function rateForDay(weekday: number, weekend: number, isWeekend: boolean): number {
+  return isWeekend && weekend > 0 ? weekend : weekday
+}
+
+/** Почасовая база для подсказки: max(цена заведения, выбранные залы) с учётом дня. */
+export function effectiveHourlyRateRub(
+  venue: Venue,
+  hallIds: string[],
+  isWeekend = false,
+): number {
+  let base = Math.max(
+    0,
+    rateForDay(Number(venue.price_from) || 0, Number(venue.price_weekend) || 0, isWeekend),
+  )
   for (const id of hallIds) {
     const h = venue.halls?.find((x) => x.id === id)
-    if (h && Number(h.price_from) > 0) {
-      base = Math.max(base, Number(h.price_from))
-    }
+    if (!h) continue
+    const rate = rateForDay(
+      Number(h.price_from) || 0,
+      Number(h.price_weekend) || 0,
+      isWeekend,
+    )
+    if (rate > 0) base = Math.max(base, rate)
   }
   return base
 }
@@ -109,7 +132,11 @@ export function useVenueBookingForm({ venue, slug }: UseVenueBookingFormOptions)
 
   const priceHint = useMemo(() => {
     if (!venue) return null
-    const hourlyBase = effectiveHourlyRateRub(venue, selectedHallIds)
+    const hourlyBase = effectiveHourlyRateRub(
+      venue,
+      selectedHallIds,
+      isWeekendDate(date),
+    )
     if (selectedServiceIds.length > 0) {
       let sumRub = 0
       let hourlySlots = 0
@@ -134,7 +161,7 @@ export function useVenueBookingForm({ venue, slug }: UseVenueBookingFormOptions)
       }
     }
     return null
-  }, [venue, selectedServiceIds, selectedHallIds, time, timeTo, slotValid])
+  }, [venue, selectedServiceIds, selectedHallIds, time, timeTo, slotValid, date])
 
   // Автоустановка timeTo при смене time или набора услуг
   useEffect(() => {

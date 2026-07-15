@@ -295,16 +295,19 @@ func Test_validateBookingSlot(t *testing.T) {
 }
 
 func Test_estimateMasterBookingPriceKopecks(t *testing.T) {
+	// 2026-07-15 — среда (будни), 2026-07-18 — суббота (выходной).
+	const weekday, weekend = "2026-07-15", "2026-07-18"
 	m := &domain.Master{
-		ID:         uuid.New(),
-		HourlyRate: 10000,
+		ID:           uuid.New(),
+		HourlyRate:   10000,
+		PriceWeekend: 20000,
 		Services: []domain.MasterService{
 			{ID: uuid.MustParse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"), Price: 15000},
 		},
 	}
-	t.Run("by service", func(t *testing.T) {
+	t.Run("by service ignores day", func(t *testing.T) {
 		id := m.Services[0].ID
-		got, err := estimateMasterBookingPriceKopecks(m, &id, "10:00", "11:00")
+		got, err := estimateMasterBookingPriceKopecks(m, &id, weekend, "10:00", "11:00")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -312,13 +315,48 @@ func Test_estimateMasterBookingPriceKopecks(t *testing.T) {
 			t.Fatalf("got %d, want 15000", got)
 		}
 	})
-	t.Run("by hourly duration rounded up", func(t *testing.T) {
-		got, err := estimateMasterBookingPriceKopecks(m, nil, "10:00", "11:30")
+	t.Run("weekday hourly rounded up", func(t *testing.T) {
+		got, err := estimateMasterBookingPriceKopecks(m, nil, weekday, "10:00", "11:30")
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if got != 15000 {
+		if got != 15000 { // 10000/ч * 1.5ч
 			t.Fatalf("got %d, want 15000", got)
+		}
+	})
+	t.Run("weekend uses price_weekend", func(t *testing.T) {
+		got, err := estimateMasterBookingPriceKopecks(m, nil, weekend, "10:00", "11:00")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got != 20000 { // выходная ставка
+			t.Fatalf("got %d, want 20000", got)
+		}
+	})
+	t.Run("weekend falls back to weekday when unset", func(t *testing.T) {
+		noWeekend := &domain.Master{HourlyRate: 10000, PriceWeekend: 0}
+		got, err := estimateMasterBookingPriceKopecks(noWeekend, nil, weekend, "10:00", "11:00")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got != 10000 {
+			t.Fatalf("got %d, want 10000", got)
+		}
+	})
+	t.Run("weekend-only master (weekday rate 0) is bookable on weekend", func(t *testing.T) {
+		weekendOnly := &domain.Master{HourlyRate: 0, PriceWeekend: 20000}
+		got, err := estimateMasterBookingPriceKopecks(weekendOnly, nil, weekend, "10:00", "11:00")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got != 20000 {
+			t.Fatalf("got %d, want 20000", got)
+		}
+	})
+	t.Run("weekend-only master rejected on weekday", func(t *testing.T) {
+		weekendOnly := &domain.Master{HourlyRate: 0, PriceWeekend: 20000}
+		if _, err := estimateMasterBookingPriceKopecks(weekendOnly, nil, weekday, "10:00", "11:00"); err == nil {
+			t.Fatal("expected error for weekday booking with no weekday rate")
 		}
 	})
 }

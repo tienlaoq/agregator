@@ -599,9 +599,19 @@ export function VenuePublicPageClient({
                             <div className="flex flex-wrap gap-x-3 gap-y-1 text-sm text-muted-foreground">
                               {hall.price_from > 0 ? (
                                 <span>
-                                  от{" "}
+                                  будни{" "}
                                   <span className="font-semibold text-foreground">
                                     {hall.price_from.toLocaleString("ru-RU")} ₽
+                                  </span>
+                                  /час
+                                </span>
+                              ) : null}
+                              {hall.price_weekend > 0 &&
+                              hall.price_weekend !== hall.price_from ? (
+                                <span>
+                                  выходные{" "}
+                                  <span className="font-semibold text-foreground">
+                                    {hall.price_weekend.toLocaleString("ru-RU")} ₽
                                   </span>
                                   /час
                                 </span>

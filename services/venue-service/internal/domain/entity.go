@@ -38,7 +38,8 @@ type Venue struct {
 	City              string
 	Latitude          float64
 	Longitude         float64
-	PriceFrom         int64
+	PriceFrom         int64 // почасовая ставка в будни (копейки)
+	PriceWeekend      int64 // почасовая ставка в выходные (копейки); 0 = как в будни
 	Capacity          int32
 	Amenities         []string
 	WorkingHours      string
@@ -107,14 +108,15 @@ type VenueVideo struct {
 
 // VenueHall is a rentable space inside a venue (Russian: зал).
 type VenueHall struct {
-	ID        uuid.UUID
-	VenueID   uuid.UUID
-	Name      string
-	PriceFrom int64
-	Capacity  int32
-	Amenities []string
-	SortOrder int32
-	Photos    []VenueHallPhoto
+	ID           uuid.UUID
+	VenueID      uuid.UUID
+	Name         string
+	PriceFrom    int64 // почасовая ставка в будни (копейки)
+	PriceWeekend int64 // почасовая ставка в выходные (копейки); 0 = как в будни
+	Capacity     int32
+	Amenities    []string
+	SortOrder    int32
+	Photos       []VenueHallPhoto
 }
 
 type VenueHallPhoto struct {
@@ -127,12 +129,13 @@ type VenueHallPhoto struct {
 
 // VenueHallUpsert is used to create or update halls (nil ID = insert).
 type VenueHallUpsert struct {
-	ID        *uuid.UUID
-	Name      string
-	PriceFrom int64
-	Capacity  int32
-	Amenities []string
-	SortOrder int32
+	ID           *uuid.UUID
+	Name         string
+	PriceFrom    int64
+	PriceWeekend int64
+	Capacity     int32
+	Amenities    []string
+	SortOrder    int32
 }
 
 type ReservedSlot struct {

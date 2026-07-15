@@ -186,7 +186,8 @@ type Master struct {
 	TravelExcludeZones  []MasterTravelExcludeZone
 	ExperienceYears     int32
 	Specializations     []string
-	HourlyRate          int64
+	HourlyRate          int64 // почасовая ставка в будни, в копейках
+	PriceWeekend        int64 // почасовая ставка в выходные, в копейках (0 = как в будни)
 	AvailabilityJSON    string
 	// NOTE: the legacy seller-account column was dropped when the platform moved
 	// from marketplace-split to escrow + per-partner payouts (DB column removed in

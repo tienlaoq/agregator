@@ -379,6 +379,7 @@ func (h *VenueHandler) Create(w http.ResponseWriter, r *http.Request) {
 		Latitude         float64               `json:"latitude"`
 		Longitude        float64               `json:"longitude"`
 		PriceFrom        int64                 `json:"price_from"`
+		PriceWeekend     int64                 `json:"price_weekend"`
 		Capacity         int32                 `json:"capacity"`
 		Amenities        []string              `json:"amenities"`
 		WorkingHours     string                `json:"working_hours"`
@@ -428,6 +429,7 @@ func (h *VenueHandler) Create(w http.ResponseWriter, r *http.Request) {
 		Latitude:         req.Latitude,
 		Longitude:        req.Longitude,
 		PriceFrom:        req.PriceFrom,
+		PriceWeekend:     req.PriceWeekend,
 		Capacity:         req.Capacity,
 		Amenities:        req.Amenities,
 		WorkingHours:     req.WorkingHours,
@@ -485,6 +487,7 @@ func (h *VenueHandler) Update(w http.ResponseWriter, r *http.Request) {
 		Latitude         *float64               `json:"latitude"`
 		Longitude        *float64               `json:"longitude"`
 		PriceFrom        *int64                 `json:"price_from"`
+		PriceWeekend     *int64                 `json:"price_weekend"`
 		Capacity         *int32                 `json:"capacity"`
 		Amenities        *[]string              `json:"amenities"`
 		WorkingHours     *string                `json:"working_hours"`
@@ -530,6 +533,9 @@ func (h *VenueHandler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.PriceFrom != nil {
 		grpcReq.PriceFrom = req.PriceFrom
+	}
+	if req.PriceWeekend != nil {
+		grpcReq.PriceWeekend = req.PriceWeekend
 	}
 	if req.Capacity != nil {
 		grpcReq.Capacity = req.Capacity
@@ -884,12 +890,13 @@ type venueServiceItemReq struct {
 }
 
 type venueHallItemReq struct {
-	ID        *string  `json:"id,omitempty"`
-	Name      string   `json:"name"`
-	PriceFrom int64    `json:"price_from"`
-	Capacity  int32    `json:"capacity"`
-	Amenities []string `json:"amenities"`
-	SortOrder int32    `json:"sort_order"`
+	ID           *string  `json:"id,omitempty"`
+	Name         string   `json:"name"`
+	PriceFrom    int64    `json:"price_from"`
+	PriceWeekend int64    `json:"price_weekend"`
+	Capacity     int32    `json:"capacity"`
+	Amenities    []string `json:"amenities"`
+	SortOrder    int32    `json:"sort_order"`
 }
 
 func venueHallItemsToProto(items []venueHallItemReq) []*venuev1.VenueHallInput {
@@ -900,11 +907,12 @@ func venueHallItemsToProto(items []venueHallItemReq) []*venuev1.VenueHallInput {
 			am = []string{}
 		}
 		hi := &venuev1.VenueHallInput{
-			Name:      strings.TrimSpace(h.Name),
-			PriceFrom: h.PriceFrom,
-			Capacity:  h.Capacity,
-			Amenities: am,
-			SortOrder: h.SortOrder,
+			Name:         strings.TrimSpace(h.Name),
+			PriceFrom:    h.PriceFrom,
+			PriceWeekend: h.PriceWeekend,
+			Capacity:     h.Capacity,
+			Amenities:    am,
+			SortOrder:    h.SortOrder,
 		}
 		if h.ID != nil {
 			s := strings.TrimSpace(*h.ID)
@@ -1070,13 +1078,14 @@ func venueToJSON(v *venuev1.VenueResponse, includeVerification bool) map[string]
 			}
 		}
 		halls[i] = map[string]any{
-			"id":         hall.GetId(),
-			"name":       hall.GetName(),
-			"price_from": hall.GetPriceFrom(),
-			"capacity":   hall.GetCapacity(),
-			"amenities":  hall.GetAmenities(),
-			"sort_order": hall.GetSortOrder(),
-			"photos":     hPhotos,
+			"id":            hall.GetId(),
+			"name":          hall.GetName(),
+			"price_from":    hall.GetPriceFrom(),
+			"price_weekend": hall.GetPriceWeekend(),
+			"capacity":      hall.GetCapacity(),
+			"amenities":     hall.GetAmenities(),
+			"sort_order":    hall.GetSortOrder(),
+			"photos":        hPhotos,
 		}
 	}
 	var createdAt time.Time
@@ -1095,6 +1104,7 @@ func venueToJSON(v *venuev1.VenueResponse, includeVerification bool) map[string]
 		"latitude":      v.GetLatitude(),
 		"longitude":     v.GetLongitude(),
 		"price_from":    v.GetPriceFrom(),
+		"price_weekend": v.GetPriceWeekend(),
 		"capacity":      v.GetCapacity(),
 		"amenities":     v.GetAmenities(),
 		"working_hours": v.GetWorkingHours(),

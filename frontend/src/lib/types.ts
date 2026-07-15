@@ -119,7 +119,10 @@ export interface VenueHallPhoto {
 export interface VenueHall {
   id: string;
   name: string;
+  /** почасовая ставка в будни (копейки) */
   price_from: number;
+  /** почасовая ставка в выходные (копейки); 0 = как в будни */
+  price_weekend: number;
   capacity: number;
   amenities: string[];
   sort_order?: number;
@@ -132,6 +135,7 @@ export interface VenueHallFormLine {
   id?: string;
   name: string;
   price_from: number;
+  price_weekend: number;
   capacity: number;
   amenities: string[];
   photos?: VenueHallPhoto[];
@@ -146,6 +150,7 @@ export function newVenueHallLine(): VenueHallFormLine {
     clientKey,
     name: "",
     price_from: 0,
+    price_weekend: 0,
     capacity: 8,
     amenities: [],
     photos: [],
@@ -157,6 +162,7 @@ export type VenueHallApiItem = {
   id?: string;
   name: string;
   price_from: number;
+  price_weekend: number;
   capacity: number;
   amenities: string[];
   sort_order: number;
@@ -321,7 +327,10 @@ export interface Venue {
   address: string;
   city: string;
   phone: string;
+  /** почасовая ставка в будни (копейки) */
   price_from: number;
+  /** почасовая ставка в выходные (копейки); 0 = как в будни */
+  price_weekend: number;
   rating: number;
   review_count: number;
   image_url?: string;
@@ -582,6 +591,8 @@ export interface CreateVenueRequest {
   phone: string;
   /** Оставлено для совместимости; при передаче `halls` пересчитывается с бэкенда */
   price_from: number;
+  /** почасовая ставка в выходные (копейки); 0 = как в будни */
+  price_weekend?: number;
   /** Вместимость основного зала при создании (если не передаёте `halls`) */
   capacity: number;
   amenities: string[];
@@ -615,9 +626,11 @@ export interface UpdateVenueRequest {
   latitude: number;
   longitude: number;
   working_hours: string;
-  /** Базовая цена за час на уровне заведения. Используется, когда залов нет
+  /** Базовая цена за час на уровне заведения (будни). Используется, когда залов нет
    * (whole-режим); при наличии залов цена карточки берётся из них (минимальная). */
   price_from: number;
+  /** почасовая ставка в выходные (копейки); 0 = как в будни */
+  price_weekend: number;
   /** Залы: цена и удобства задаются по каждому залу; на карточке агрегируются автоматически. */
   halls: VenueHallFormLine[];
   /** Полный список услуг; поле `key` в JSON игнорируется бэкендом. */
@@ -783,7 +796,10 @@ export interface MasterProfile {
   travel_exclude_zones?: MasterTravelExcludeZone[];
   experience_years: number;
   specializations: string[];
+  /** почасовая ставка в будни (копейки) */
   hourly_rate: number;
+  /** почасовая ставка в выходные (копейки); 0 = как в будни */
+  price_weekend: number;
   availability_json: string;
   status: string;
   moderation_comment: string;

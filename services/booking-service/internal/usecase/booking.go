@@ -18,6 +18,7 @@ import (
 	paymentv1 "github.com/tienlao/agregator/gen/go/payment/v1"
 	venuev1 "github.com/tienlao/agregator/gen/go/venue/v1"
 	pkgerr "github.com/tienlao/agregator/pkg/errors"
+	"github.com/tienlao/agregator/pkg/pricing"
 	"github.com/tienlao/agregator/services/booking-service/internal/domain"
 	"github.com/tienlao/agregator/services/booking-service/internal/kpi"
 )
@@ -159,7 +160,17 @@ func (uc *BookingUseCase) CreateBooking(ctx context.Context, in CreateBookingInp
 	if err := validateHallIDs(vResp, hallIDs); err != nil {
 		return nil, err
 	}
-	totalPrice, err := computeBookingTotalPriceMulti(vResp, effectiveIDs, hallIDs, minutes)
+
+	// Weekday vs weekend rate is picked by the booking date. A bare calendar date's
+	// weekday is timezone-independent, so parsing here (before the tz-aware visit
+	// checks below reuse dateParsed) is safe.
+	dateParsed, err := time.Parse("2006-01-02", in.Date)
+	if err != nil {
+		return nil, pkgerr.InvalidArgument("invalid date format, expected YYYY-MM-DD")
+	}
+	isWeekend := pricing.IsWeekendDay(dateParsed)
+
+	totalPrice, err := computeBookingTotalPriceMulti(vResp, effectiveIDs, hallIDs, minutes, isWeekend)
 	if err != nil {
 		return nil, err
 	}
@@ -178,11 +189,6 @@ func (uc *BookingUseCase) CreateBooking(ctx context.Context, in CreateBookingInp
 	}
 	if !slotResp.Available {
 		return nil, pkgerr.InvalidArgument("выбранное время уже занято, выберите другое")
-	}
-
-	dateParsed, err := time.Parse("2006-01-02", in.Date)
-	if err != nil {
-		return nil, pkgerr.InvalidArgument("invalid date format, expected YYYY-MM-DD")
 	}
 
 	loc, lerr := time.LoadLocation(uc.visitTimeZone)
@@ -575,16 +581,16 @@ func validateHallIDs(v *venuev1.VenueResponse, ids []string) error {
 	return nil
 }
 
-func effectiveHourlyPriceFromVenueAndHalls(v *venuev1.VenueResponse, hallIDs []string) int64 {
-	base := v.GetPriceFrom()
+func effectiveHourlyPriceFromVenueAndHalls(v *venuev1.VenueResponse, hallIDs []string, isWeekend bool) int64 {
+	base := pricing.WeekendRate(v.GetPriceFrom(), v.GetPriceWeekend(), isWeekend)
 	if len(hallIDs) == 0 {
 		return base
 	}
-	// Строим карту id→priceFrom один раз — O(venueHalls) вместо O(hallIDs×venueHalls).
+	// Строим карту id→rate один раз — O(venueHalls) вместо O(hallIDs×venueHalls).
 	// Типичный случай: 1-2 выбранных зала из ~5-50 в заведении.
 	hallPrice := make(map[string]int64, len(v.GetHalls()))
 	for _, h := range v.GetHalls() {
-		hallPrice[h.GetId()] = h.GetPriceFrom()
+		hallPrice[h.GetId()] = pricing.WeekendRate(h.GetPriceFrom(), h.GetPriceWeekend(), isWeekend)
 	}
 	for _, hid := range hallIDs {
 		hid = strings.TrimSpace(hid)
@@ -632,8 +638,8 @@ func persistServiceFields(ids []string) (serviceID string, packageIDs []string) 
 	}
 }
 
-func computeBookingTotalPriceMulti(v *venuev1.VenueResponse, serviceIDs []string, hallIDs []string, minutes int) (int64, error) {
-	hourlyBase := effectiveHourlyPriceFromVenueAndHalls(v, hallIDs)
+func computeBookingTotalPriceMulti(v *venuev1.VenueResponse, serviceIDs []string, hallIDs []string, minutes int, isWeekend bool) (int64, error) {
+	hourlyBase := effectiveHourlyPriceFromVenueAndHalls(v, hallIDs, isWeekend)
 	if len(serviceIDs) == 0 {
 		return hourlyTotal(hourlyBase, minutes), nil
 	}

@@ -171,6 +171,7 @@ type UpdateMasterInput struct {
 	TravelBaseLongitude        *float64
 	ExperienceYears            *int32
 	HourlyRate                 *int64
+	PriceWeekend               *int64
 	AvailabilityJSON           *string
 	ApplyServicesReplace       bool
 	ServicesReplace            []domain.MasterServiceUpsert
@@ -271,6 +272,9 @@ func (uc *MasterUseCase) UpdateMyProfile(ctx context.Context, userID uuid.UUID, 
 	}
 	if in.HourlyRate != nil {
 		m.HourlyRate = *in.HourlyRate
+	}
+	if in.PriceWeekend != nil {
+		m.PriceWeekend = *in.PriceWeekend
 	}
 	if in.AvailabilityJSON != nil {
 		s := strings.TrimSpace(*in.AvailabilityJSON)
