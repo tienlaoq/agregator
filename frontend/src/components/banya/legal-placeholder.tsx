@@ -7,9 +7,11 @@ import Link from "next/link"
 export function LegalPlaceholder({
   title,
   children,
+  className,
 }: {
   title: string
   children: React.ReactNode
+  className?: string
 }) {
   return (
     <div className="container mx-auto max-w-3xl px-4 py-12">
@@ -21,7 +23,9 @@ export function LegalPlaceholder({
         <span className="text-foreground">{title}</span>
       </nav>
       <h1 className="mb-6 text-3xl font-bold text-foreground">{title}</h1>
-      <div className="max-w-none space-y-4 text-muted-foreground leading-relaxed">
+      <div
+        className={`max-w-none space-y-4 text-muted-foreground leading-relaxed ${className ?? ""}`}
+      >
         {children}
       </div>
     </div>

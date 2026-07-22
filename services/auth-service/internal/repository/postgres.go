@@ -23,10 +23,10 @@ func NewCredentialRepo(pool *pgxpool.Pool) *CredentialRepo {
 
 func (r *CredentialRepo) Create(ctx context.Context, cred *domain.Credential) error {
 	const q = `
-		INSERT INTO credentials (user_id, email, password_hash)
-		VALUES ($1, $2, $3)
+		INSERT INTO credentials (user_id, email, password_hash, consent_version)
+		VALUES ($1, $2, $3, NULLIF($4, ''))
 		RETURNING id, created_at`
-	return r.pool.QueryRow(ctx, q, cred.UserID, cred.Email, cred.PasswordHash).
+	return r.pool.QueryRow(ctx, q, cred.UserID, cred.Email, cred.PasswordHash, cred.ConsentVersion).
 		Scan(&cred.ID, &cred.CreatedAt)
 }
 

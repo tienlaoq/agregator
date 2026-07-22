@@ -35,6 +35,11 @@ export const metadata: Metadata = {
     ],
     apple: "/apple-icon.png",
   },
+  // Подтверждение прав в Яндекс.Вебмастере. Задайте NEXT_PUBLIC_YANDEX_VERIFICATION
+  // (значение из meta yandex-verification в кабинете). Пусто → тег не рендерится.
+  verification: process.env.NEXT_PUBLIC_YANDEX_VERIFICATION?.trim()
+    ? { yandex: process.env.NEXT_PUBLIC_YANDEX_VERIFICATION.trim() }
+    : undefined,
 };
 
 export default async function RootLayout({

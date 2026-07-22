@@ -22,6 +22,7 @@ You can start editing the page by modifying `app/page.tsx`. The page auto-update
 
 - **`NEXT_PUBLIC_SITE_URL`** — публичный origin без хвоста `/` (например `https://example.com`). Нужен для canonical, Open Graph и `sitemap.xml`.
 - Опционально **`NEXT_PUBLIC_YANDEX_METRIKA_ID`** — числовой id [Яндекс.Метрики](https://metrika.yandex.ru/).
+- Опционально **`NEXT_PUBLIC_YANDEX_VERIFICATION`** — значение из meta `yandex-verification` в [Яндекс.Вебмастере](https://webmaster.yandex.ru/) (способ подтверждения «Метатег»). Рендерится в `<head>` для подтверждения прав на домен.
 - После деплоя: [Яндекс.Вебмастер](https://webmaster.yandex.ru/) и [Google Search Console](https://search.google.com/search-console) — верификация домена, отправка `sitemap.xml`, при необходимости регион сайта.
 - Позиции в поиске **не гарантируются**; зависят от конкуренции, возраста домена, контента и внешних ссылок.
 

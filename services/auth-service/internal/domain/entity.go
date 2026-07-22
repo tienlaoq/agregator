@@ -2,6 +2,14 @@ package domain
 
 import "time"
 
+// CurrentConsentVersion identifies the 152-ФЗ consent text currently published
+// on the site (/consent). Stamped onto new password registrations so we can
+// prove which wording a user accepted. Bump this string whenever the consent
+// page text changes.
+// ponytail: single server-side version constant; if you need per-locale or
+// draft/published states, move it to a table.
+const CurrentConsentVersion = "2026-07-16"
+
 type Credential struct {
 	ID            string
 	UserID        string
@@ -10,7 +18,10 @@ type Credential struct {
 	Provider      string
 	ProviderID    string
 	EmailVerified bool
-	CreatedAt     time.Time
+	// ConsentVersion is the accepted consent text version, or "" for rows that
+	// predate consent tracking / OAuth sign-ups without a consent checkbox.
+	ConsentVersion string
+	CreatedAt      time.Time
 }
 
 type RefreshToken struct {
