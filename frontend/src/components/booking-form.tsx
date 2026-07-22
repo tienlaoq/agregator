@@ -2,9 +2,11 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { createBooking, formatApiErrorMessage } from "@/lib/api";
 import { useAuthStore } from "@/store/auth";
@@ -35,6 +37,7 @@ export function BookingForm({ venueId, venueName, priceFrom }: BookingFormProps)
   const [date, setDate] = useState("");
   const [time, setTime] = useState("");
   const [guests, setGuests] = useState(2);
+  const [accepted, setAccepted] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState(false);
@@ -160,11 +163,30 @@ export function BookingForm({ venueId, venueName, priceFrom }: BookingFormProps)
             </div>
           </div>
 
+          {token && (
+            <div className="flex items-start gap-2.5">
+              <Checkbox
+                id="offer-accept"
+                checked={accepted}
+                onCheckedChange={(v) => setAccepted(v === true)}
+                className="mt-0.5"
+                aria-required
+              />
+              <label htmlFor="offer-accept" className="text-sm leading-snug text-muted-foreground">
+                Я принимаю условия{" "}
+                <Link href="/offer" target="_blank" className="text-primary underline">
+                  Публичной оферты
+                </Link>{" "}
+                и соглашаюсь с Правилами посещения бань.
+              </label>
+            </div>
+          )}
+
           {error && (
             <p className="text-sm text-destructive">{error}</p>
           )}
 
-          <Button type="submit" className="w-full" disabled={loading}>
+          <Button type="submit" className="w-full" disabled={loading || (!!token && !accepted)}>
             {loading ? "Оформление..." : token ? "Забронировать" : "Войти для бронирования"}
           </Button>
         </form>

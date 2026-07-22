@@ -218,9 +218,10 @@ func (uc *AuthUseCase) Register(ctx context.Context, in RegisterInput) (*AuthRes
 	// Step 1 — local credential insert (uniqueness gate, cheapest first).
 	userID := uuid.New().String()
 	cred := &domain.Credential{
-		UserID:       userID,
-		Email:        in.Email,
-		PasswordHash: hash,
+		UserID:         userID,
+		Email:          in.Email,
+		PasswordHash:   hash,
+		ConsentVersion: domain.CurrentConsentVersion, // 152-ФЗ: record accepted consent text version
 	}
 	if err := uc.creds.Create(ctx, cred); err != nil {
 		st, ok := status.FromError(err)
