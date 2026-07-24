@@ -147,9 +147,9 @@ func (r *venueRepo) Create(ctx context.Context, venue *domain.Venue) error {
 			amenities = []string{}
 		}
 		if err = tx.QueryRow(ctx, `
-			INSERT INTO venue_halls (venue_id, name, price_from, price_weekend, capacity, amenities, sort_order)
-			VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
-			venue.ID, h.Name, h.PriceFrom, h.PriceWeekend, h.Capacity, amenities, int32(i),
+			INSERT INTO venue_halls (venue_id, name, price_from, price_weekend, capacity, amenities, sort_order, description, steam_type)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id`,
+			venue.ID, h.Name, h.PriceFrom, h.PriceWeekend, h.Capacity, amenities, int32(i), h.Description, h.SteamType,
 		).Scan(&h.ID); err != nil {
 			return fmt.Errorf("insert venue_hall: %w", err)
 		}
@@ -460,7 +460,7 @@ func (r *venueRepo) getHallsWithPhotosByVenueIDs(ctx context.Context, venueIDs [
 		return out, nil
 	}
 	rows, err := r.pool.Query(ctx, `
-		SELECT id, venue_id, name, price_from, price_weekend, capacity, amenities, sort_order
+		SELECT id, venue_id, name, price_from, price_weekend, capacity, amenities, sort_order, description, steam_type
 		FROM venue_halls WHERE venue_id = ANY($1::uuid[])
 		ORDER BY venue_id, sort_order ASC, id ASC`, venueIDs)
 	if err != nil {
@@ -471,7 +471,7 @@ func (r *venueRepo) getHallsWithPhotosByVenueIDs(ctx context.Context, venueIDs [
 	var flat []domain.VenueHall
 	for rows.Next() {
 		var h domain.VenueHall
-		if err := rows.Scan(&h.ID, &h.VenueID, &h.Name, &h.PriceFrom, &h.PriceWeekend, &h.Capacity, &h.Amenities, &h.SortOrder); err != nil {
+		if err := rows.Scan(&h.ID, &h.VenueID, &h.Name, &h.PriceFrom, &h.PriceWeekend, &h.Capacity, &h.Amenities, &h.SortOrder, &h.Description, &h.SteamType); err != nil {
 			return nil, fmt.Errorf("scan venue_hall: %w", err)
 		}
 		flat = append(flat, h)
@@ -1262,9 +1262,9 @@ func (r *venueRepo) ReplaceVenueHalls(ctx context.Context, venueID, ownerID uuid
 				return ErrHallNotInVenue
 			}
 			if _, err := tx.Exec(ctx, `
-				UPDATE venue_halls SET name = $1, price_from = $2, capacity = $3, amenities = $4, sort_order = $5, price_weekend = $8, updated_at = now()
+				UPDATE venue_halls SET name = $1, price_from = $2, capacity = $3, amenities = $4, sort_order = $5, price_weekend = $8, description = $9, steam_type = $10, updated_at = now()
 				WHERE id = $6 AND venue_id = $7`,
-				name, it.PriceFrom, it.Capacity, amenities, int32(i), *it.ID, venueID, it.PriceWeekend,
+				name, it.PriceFrom, it.Capacity, amenities, int32(i), *it.ID, venueID, it.PriceWeekend, it.Description, it.SteamType,
 			); err != nil {
 				return fmt.Errorf("update venue_hall: %w", err)
 			}
@@ -1272,9 +1272,9 @@ func (r *venueRepo) ReplaceVenueHalls(ctx context.Context, venueID, ownerID uuid
 		} else {
 			var newID uuid.UUID
 			err := tx.QueryRow(ctx, `
-				INSERT INTO venue_halls (venue_id, name, price_from, price_weekend, capacity, amenities, sort_order)
-				VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
-				venueID, name, it.PriceFrom, it.PriceWeekend, it.Capacity, amenities, int32(i),
+				INSERT INTO venue_halls (venue_id, name, price_from, price_weekend, capacity, amenities, sort_order, description, steam_type)
+				VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id`,
+				venueID, name, it.PriceFrom, it.PriceWeekend, it.Capacity, amenities, int32(i), it.Description, it.SteamType,
 			).Scan(&newID)
 			if err != nil {
 				return fmt.Errorf("insert venue_hall: %w", err)

@@ -897,6 +897,8 @@ type venueHallItemReq struct {
 	Capacity     int32    `json:"capacity"`
 	Amenities    []string `json:"amenities"`
 	SortOrder    int32    `json:"sort_order"`
+	Description  string   `json:"description"`
+	SteamType    string   `json:"steam_type"`
 }
 
 func venueHallItemsToProto(items []venueHallItemReq) []*venuev1.VenueHallInput {
@@ -913,6 +915,8 @@ func venueHallItemsToProto(items []venueHallItemReq) []*venuev1.VenueHallInput {
 			Capacity:     h.Capacity,
 			Amenities:    am,
 			SortOrder:    h.SortOrder,
+			Description:  strings.TrimSpace(h.Description),
+			SteamType:    strings.TrimSpace(h.SteamType),
 		}
 		if h.ID != nil {
 			s := strings.TrimSpace(*h.ID)
@@ -1085,6 +1089,8 @@ func venueToJSON(v *venuev1.VenueResponse, includeVerification bool) map[string]
 			"capacity":      hall.GetCapacity(),
 			"amenities":     hall.GetAmenities(),
 			"sort_order":    hall.GetSortOrder(),
+			"description":   hall.GetDescription(),
+			"steam_type":    hall.GetSteamType(),
 			"photos":        hPhotos,
 		}
 	}

@@ -126,7 +126,24 @@ export interface VenueHall {
   capacity: number;
   amenities: string[];
   sort_order?: number;
+  /** свободное описание зала */
+  description?: string;
+  /** тип парной: drova|electro|finnish|hammam|infrared */
+  steam_type?: string;
   photos?: VenueHallPhoto[];
+}
+
+/** Тип парной зала: значение (хранится) → подпись. Пустая строка = не указан. */
+export const HALL_STEAM_TYPES: { value: string; label: string }[] = [
+  { value: "drova", label: "Дровяная" },
+  { value: "electro", label: "Электрическая" },
+  { value: "finnish", label: "Финская (сухой пар)" },
+  { value: "hammam", label: "Хаммам (турецкая)" },
+  { value: "infrared", label: "Инфракрасная" },
+];
+
+export function hallSteamTypeLabel(value: string | undefined): string {
+  return HALL_STEAM_TYPES.find((t) => t.value === value)?.label ?? "";
 }
 
 /** Строка зала в форме редактирования */
@@ -138,6 +155,8 @@ export interface VenueHallFormLine {
   price_weekend: number;
   capacity: number;
   amenities: string[];
+  description: string;
+  steam_type: string;
   photos?: VenueHallPhoto[];
 }
 
@@ -153,6 +172,8 @@ export function newVenueHallLine(): VenueHallFormLine {
     price_weekend: 0,
     capacity: 8,
     amenities: [],
+    description: "",
+    steam_type: "",
     photos: [],
   };
 }
@@ -166,6 +187,8 @@ export type VenueHallApiItem = {
   capacity: number;
   amenities: string[];
   sort_order: number;
+  description: string;
+  steam_type: string;
 };
 
 /** Ключи ссылок на соцсети / мессенджеры (хранятся в API как JSON-объект). */

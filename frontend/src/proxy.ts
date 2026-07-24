@@ -10,12 +10,22 @@ import { buildCsp } from "@/lib/csp"
 export function proxy(request: NextRequest) {
   const nonce = Buffer.from(crypto.randomUUID()).toString("base64")
   const isDev = process.env.NODE_ENV === "development"
-  const csp = buildCsp(nonce, isDev)
+  // /embed/* — публичный виджет брони, встраивается в чужие сайты: CSP разрешает
+  // фрейминг, а root layout по x-pathname убирает Метрику/cookie-баннер.
+  const pathname = request.nextUrl.pathname
+  const embeddable = pathname.startsWith("/embed")
+  // upgrade-insecure-requests шлём только для HTTPS-страниц. За TLS-прокси —
+  // x-forwarded-proto; напрямую (локальный докер по HTTP) — protocol запроса.
+  const secure =
+    (request.headers.get("x-forwarded-proto") ??
+      request.nextUrl.protocol.replace(":", "")) === "https"
+  const csp = buildCsp(nonce, isDev, { embeddable, secure })
 
   // Propagate to the app via request headers (Next extracts the nonce from the
   // CSP request header during render and applies it to framework scripts).
   const requestHeaders = new Headers(request.headers)
   requestHeaders.set("x-nonce", nonce)
+  requestHeaders.set("x-pathname", pathname)
   requestHeaders.set("Content-Security-Policy", csp)
 
   const response = NextResponse.next({ request: { headers: requestHeaders } })

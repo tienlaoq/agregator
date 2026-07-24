@@ -144,7 +144,9 @@ export function ChatPanel({ kind, refId, className }: Props) {
           }}
           rows={1}
           placeholder="Сообщение…"
-          className="max-h-28 min-h-[40px] flex-1 resize-none rounded-2xl border border-border bg-background px-3.5 py-2.5 text-[14px] leading-snug outline-none transition-colors placeholder:text-muted-foreground/70 focus-visible:border-primary/60 focus-visible:ring-2 focus-visible:ring-primary/15"
+          // text-[16px]: меньший шрифт заставляет iOS Safari/WKWebView зумить
+          // при фокусе на поле. 16px — порог, при котором авто-зум отключается.
+          className="max-h-28 min-h-[40px] flex-1 resize-none rounded-2xl border border-border bg-background px-3.5 py-2.5 text-[16px] leading-snug outline-none transition-colors placeholder:text-muted-foreground/70 focus-visible:border-primary/60 focus-visible:ring-2 focus-visible:ring-primary/15"
         />
         <Button
           type="button"

@@ -1,11 +1,9 @@
 import { type NextRequest, NextResponse } from "next/server"
-
-const REFRESH_COOKIE = "banya_refresh"
-const COOKIE_MAX_AGE = 60 * 60 * 24 * 30 // 30 дней
+import { REFRESH_COOKIE, refreshCookieOptions } from "@/lib/refresh-cookie"
 
 /**
  * POST /api/auth/set-refresh
- * Принимает { refresh_token: string } и записывает его в httpOnly Secure cookie.
+ * Принимает { refresh_token: string } и записывает его в httpOnly cookie.
  * Клиентский JS refresh_token в localStorage больше не нужен.
  */
 export async function POST(req: NextRequest) {
@@ -18,13 +16,7 @@ export async function POST(req: NextRequest) {
   }
 
   const res = NextResponse.json({ ok: true })
-  res.cookies.set(REFRESH_COOKIE, refreshToken, {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
-    sameSite: "lax",
-    path: "/",
-    maxAge: COOKIE_MAX_AGE,
-  })
+  res.cookies.set(REFRESH_COOKIE, refreshToken, refreshCookieOptions(req))
   return res
 }
 
@@ -32,14 +24,8 @@ export async function POST(req: NextRequest) {
  * DELETE /api/auth/set-refresh
  * Очищает cookie при logout.
  */
-export async function DELETE() {
+export async function DELETE(req: NextRequest) {
   const res = NextResponse.json({ ok: true })
-  res.cookies.set(REFRESH_COOKIE, "", {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === "production",
-    sameSite: "lax",
-    path: "/",
-    maxAge: 0,
-  })
+  res.cookies.set(REFRESH_COOKIE, "", refreshCookieOptions(req, { clear: true }))
   return res
 }

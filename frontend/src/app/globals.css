@@ -120,7 +120,16 @@
   * {
     @apply border-border outline-ring/50;
   }
+  /* Гасит горизонтальный скролл/«резину» в мобильном WebView. overflow-x: clip
+     (а не hidden) не создаёт scroll-контейнер → sticky-шапка не ломается. */
+  html,
+  body {
+    overflow-x: clip;
+  }
   body {
     @apply bg-background text-foreground;
+    /* Длинные строки без пробелов (пользовательские названия/описания)
+       переносятся, а не распирают ширину. overflow-wrap наследуется вниз. */
+    overflow-wrap: break-word;
   }
 }

@@ -1,4 +1,4 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { headers } from "next/headers";
 import { Geist } from "next/font/google";
 import { Providers } from "./providers";
@@ -13,6 +13,12 @@ const geist = Geist({
   display: "swap",
   adjustFontFallback: true,
 });
+
+// viewport-fit=cover нужен, чтобы работали env(safe-area-inset-*): без него
+// контент уезжает под статус-бар/«чёлку» в мобильном WebView (см. шапку).
+export const viewport: Viewport = {
+  viewportFit: "cover",
+};
 
 export const metadata: Metadata = {
   metadataBase: new URL(siteUrl()),
@@ -47,12 +53,16 @@ export default async function RootLayout({
 }: Readonly<{ children: React.ReactNode }>) {
   // Nonce is injected per-request by src/proxy.ts; pass it to the inline Метрика
   // script so it satisfies the strict-dynamic CSP.
-  const nonce = (await headers()).get("x-nonce") ?? undefined;
+  const hdrs = await headers();
+  const nonce = hdrs.get("x-nonce") ?? undefined;
+  // /embed/* — виджет брони в чужом iframe: без Метрики и cookie-баннера
+  // (сторонний контекст, третьих кук там быть не должно).
+  const isEmbed = (hdrs.get("x-pathname") ?? "").startsWith("/embed");
   return (
     // suppressHydrationWarning нужен при использовании next-themes (класс темы пишется на <html>).
     <html lang="ru" suppressHydrationWarning>
       <body className={`${geist.className} font-sans antialiased`}>
-        <YandexMetrika nonce={nonce} />
+        {isEmbed ? null : <YandexMetrika nonce={nonce} />}
         <Providers>
           {/*
            * AppLayout (header + footer + chat-widget) вынесен отсюда в отдельный
@@ -61,7 +71,7 @@ export default async function RootLayout({
            */}
           {children}
         </Providers>
-        <CookieConsent />
+        {isEmbed ? null : <CookieConsent />}
       </body>
     </html>
   );

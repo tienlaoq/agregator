@@ -7,13 +7,18 @@ const isProd = process.env.NODE_ENV === "production";
 // nonce. The static headers below apply to every response, including assets.
 const securityHeaders = [
   { key: "X-Content-Type-Options", value: "nosniff" },
-  { key: "X-Frame-Options", value: "SAMEORIGIN" },
   { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
   {
     key: "Permissions-Policy",
     value: "camera=(), microphone=(), geolocation=(), payment=(), usb=()",
   },
 ];
+
+// X-Frame-Options вынесен отдельно: он не умеет «разрешить любой origin»
+// (только DENY/SAMEORIGIN), поэтому на /embed/* его не ставим — иначе браузер
+// заблокирует виджет брони в чужом iframe. Фрейминг там контролирует
+// frame-ancestors в CSP (см. src/proxy.ts + lib/csp.ts).
+const frameGuard = { key: "X-Frame-Options", value: "SAMEORIGIN" };
 
 /** HSTS только за пределами localhost (задаётся при деплое за HTTPS). */
 if (isProd && process.env.NEXT_ENABLE_HSTS === "true") {
@@ -45,6 +50,24 @@ const nextConfig: NextConfig = {
         source: "/api/v1/uploads/:path*",
         destination: `${gatewayOrigin}/api/v1/uploads/:path*`,
       },
+      {
+        // Нативное приложение (Capacitor) ходит в API тем же origin, что и сайт
+        // (см. apiUrlForFetch в src/lib/api.ts): gateway по localhost:8080 с
+        // телефона недоступен, а абсолютный NEXT_PUBLIC_API_URL пришлось бы
+        // зашивать под каждую сеть. Проксируем /api/v1/* на gateway (server-side,
+        // без CORS) — как uploads выше. Веб продолжает бить в gateway напрямую.
+        source: "/api/v1/:path*",
+        destination: `${gatewayOrigin}/api/v1/:path*`,
+      },
+      {
+        // Чат и уведомления смонтированы под /api/v2 (см. chat-paths.ts,
+        // notification-paths.ts). Без этого rewrite нативное приложение бьёт
+        // в /api/v2/chat/* на origin сайта → 404, и чат в приложении не
+        // синхронизируется с вебом. WebSocket (/api/v2/chat/ws) сюда не
+        // попадает — он идёт абсолютным URL из global-chat-socket.ts.
+        source: "/api/v2/:path*",
+        destination: `${gatewayOrigin}/api/v2/:path*`,
+      },
     ];
   },
   async headers() {
@@ -52,6 +75,11 @@ const nextConfig: NextConfig = {
       {
         source: "/:path*",
         headers: securityHeaders,
+      },
+      {
+        // Всё, кроме /embed/*, получает защиту от кликджекинга.
+        source: "/((?!embed).*)",
+        headers: [frameGuard],
       },
       {
         source: "/",

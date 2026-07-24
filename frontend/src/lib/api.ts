@@ -53,6 +53,12 @@ const PUBLIC_API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080
 /** URL api-gateway для fetch: в контейнере фронта — внутренний хост compose. */
 function apiUrlForFetch(): string {
   if (typeof window !== "undefined") {
+    // В нативном приложении (Capacitor) сайт грузится с server.url, а gateway по
+    // localhost:8080 с телефона недоступен. Ходим на тот же origin относительным
+    // путём — next.config rewrite /api/v1/* проксирует на gateway (server-side,
+    // без CORS). На вебе оставляем прямой абсолютный вызов, как было.
+    const cap = (window as Window & { Capacitor?: { isNativePlatform?: () => boolean } }).Capacitor;
+    if (cap?.isNativePlatform?.()) return "";
     return PUBLIC_API_URL;
   }
   return process.env.INTERNAL_API_URL || PUBLIC_API_URL;

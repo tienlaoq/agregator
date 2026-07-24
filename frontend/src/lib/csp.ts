@@ -13,7 +13,11 @@
 
 const mediaHost = process.env.NEXT_PUBLIC_MEDIA_HOST ?? ""
 
-export function buildCsp(nonce: string, isDev: boolean): string {
+export function buildCsp(
+  nonce: string,
+  isDev: boolean,
+  opts?: { embeddable?: boolean; secure?: boolean },
+): string {
   const directives: Record<string, string | undefined> = {
     "default-src": "'self'",
     "script-src": [
@@ -28,7 +32,13 @@ export function buildCsp(nonce: string, isDev: boolean): string {
     ]
       .filter(Boolean)
       .join(" "),
-    "style-src": "'self' 'unsafe-inline'", // Tailwind/CSS-in-JS require inline
+    // WebKit (Safari/iOS WKWebView) блокирует <link>/<style> с nonce, если этот
+    // nonce не указан в style-src — 'self'/'unsafe-inline' игнорируются, как только
+    // на элементе есть nonce. Next автоматически проставляет nonce на свои
+    // style-теги, поэтому его надо продублировать здесь, иначе Safari/iOS рендерят
+    // страницу без стилей. style-src-attr сохраняет работу inline style="" (React).
+    "style-src": `'self' 'unsafe-inline' 'nonce-${nonce}'`,
+    "style-src-attr": "'unsafe-inline'",
     "img-src": [
       "'self'",
       "data:",
@@ -62,8 +72,12 @@ export function buildCsp(nonce: string, isDev: boolean): string {
     "object-src": "'none'",
     "base-uri": "'self'",
     "form-action": "'self'",
-    "frame-ancestors": "'none'",
-    "upgrade-insecure-requests": isDev ? undefined : "",
+    // /embed/* — публичный виджет брони: разрешаем встраивание на любой сайт.
+    "frame-ancestors": opts?.embeddable ? "*" : "'none'",
+    // Только для HTTPS-страниц. На HTTP (локальный докер, мобильный WebView по
+    // LAN) эта директива апгрейдит http-субресурсы (CSS/JS) в https, которого
+    // нет → страница грузится без стилей и без JS. См. proxy.ts (secure).
+    "upgrade-insecure-requests": isDev || !opts?.secure ? undefined : "",
   }
 
   return Object.entries(directives)

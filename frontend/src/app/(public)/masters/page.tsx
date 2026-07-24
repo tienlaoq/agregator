@@ -1,6 +1,8 @@
 import { Suspense } from "react"
 import type { Metadata } from "next"
 import { MastersCatalogSection } from "@/components/banya/masters-catalog-section"
+import { getPublicMastersCatalog } from "@/lib/api"
+import type { MasterProfile } from "@/lib/types"
 
 export const metadata: Metadata = {
   title: "Мастера банных услуг",
@@ -14,7 +16,15 @@ export const metadata: Metadata = {
   },
 }
 
-export default function MastersCatalogPage() {
+/** Server Component: первая страница каталога мастеров рендерится на сервере —
+ *  SSR обязателен для каталога (SEO «мастера бани [город]»). Без серверных
+ *  данных useSearchParams в секции делал CSR-bailout, и страница залипала на
+ *  фолбэке. Клиент дофетчивает при фильтрах/пагинации. */
+export default async function MastersCatalogPage() {
+  const initialData = await getPublicMastersCatalog({ page: 1, page_size: 12 }).catch(
+    () => ({ masters: [] as MasterProfile[], total: 0 }),
+  )
+
   return (
     <Suspense
       fallback={
@@ -23,7 +33,7 @@ export default function MastersCatalogPage() {
         </div>
       }
     >
-      <MastersCatalogSection />
+      <MastersCatalogSection initialData={{ masters: initialData.masters, total: initialData.total }} />
     </Suspense>
   )
 }
