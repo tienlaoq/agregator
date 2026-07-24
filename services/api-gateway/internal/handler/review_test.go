@@ -391,7 +391,7 @@ func TestReviewListByVenue_ResolvesMissingNames(t *testing.T) {
 	}}
 	h := NewReviewHandler(svc, user, &reviewCRMMock{})
 	rr := httptest.NewRecorder()
-	h.ListByVenue(rr, reviewReq(http.MethodGet, "/reviews?page=0&page_size=10", "", map[string]string{"venueId": "v1"}, ""))
+	h.ListByVenue(rr, reviewReq(http.MethodGet, "/reviews?page=1&page_size=10", "", map[string]string{"venueId": "v1"}, ""))
 	if rr.Code != http.StatusOK {
 		t.Fatalf("status = %d", rr.Code)
 	}
