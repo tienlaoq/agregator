@@ -23,17 +23,12 @@ func New(pool *pgxpool.Pool) *Repo { return &Repo{pool: pool} }
 func (r *Repo) Pool() *pgxpool.Pool { return r.pool }
 
 func (r *Repo) EnsureSchema(ctx context.Context) error {
-	const q = `
-SELECT EXISTS (
-  SELECT 1 FROM information_schema.tables
-  WHERE table_schema = 'public' AND table_name = 'notifications'
-)`
-	var ok bool
-	if err := r.pool.QueryRow(ctx, q).Scan(&ok); err != nil {
+	var haveNotifications, haveDeviceTokens bool
+	if err := r.pool.QueryRow(ctx, qEnsureSchema).Scan(&haveNotifications, &haveDeviceTokens); err != nil {
 		return fmt.Errorf("verify notification schema: %w", err)
 	}
-	if !ok {
-		return fmt.Errorf("notification schema is outdated: missing notifications table; apply migrations")
+	if !haveNotifications || !haveDeviceTokens {
+		return fmt.Errorf("notification schema is outdated: missing tables (notifications=%t device_tokens=%t); apply migrations", haveNotifications, haveDeviceTokens)
 	}
 	return nil
 }
@@ -60,30 +55,25 @@ func (r *Repo) Create(ctx context.Context, n *domain.Notification) (*domain.Noti
 	if n.Data != "" {
 		data = &n.Data
 	}
-	out, err := scanNotification(r.pool.QueryRow(ctx, `
-INSERT INTO notifications (user_id, type, title, body, data)
-VALUES ($1, $2, $3, $4, $5)
-RETURNING id, user_id, type, title, body, data, read_at, created_at`,
+	out, err := scanNotification(r.pool.QueryRow(ctx, qCreate,
 		n.UserID, n.Type, n.Title, n.Body, data))
 	if err != nil {
 		return nil, err
+	}
+	// scanNotification maps ErrNoRows to (nil, nil) for the lookup paths, but an
+	// INSERT ... RETURNING always yields a row — a nil here means that contract
+	// broke, so fail loudly instead of returning a nil the usecase derefs.
+	if out == nil {
+		return nil, fmt.Errorf("create notification: insert returned no row")
 	}
 	return out, nil
 }
 
 func (r *Repo) List(ctx context.Context, userID uuid.UUID, limit, offset int32, unreadOnly bool) ([]domain.Notification, int32, error) {
-	countQ := `SELECT COUNT(*) FROM notifications WHERE user_id = $1`
-	listQ := `
-SELECT id, user_id, type, title, body, data, read_at, created_at
-FROM   notifications
-WHERE  user_id = $1`
+	countQ, listQ := qCountAll, qListAll
 	if unreadOnly {
-		countQ += ` AND read_at IS NULL`
-		listQ += ` AND read_at IS NULL`
+		countQ, listQ = qCountUnread, qListUnread
 	}
-	listQ += `
-ORDER BY created_at DESC
-LIMIT $2 OFFSET $3`
 
 	var total int32
 	if err := r.pool.QueryRow(ctx, countQ, userID).Scan(&total); err != nil {
@@ -113,16 +103,12 @@ LIMIT $2 OFFSET $3`
 
 func (r *Repo) UnreadCount(ctx context.Context, userID uuid.UUID) (int32, error) {
 	var c int32
-	err := r.pool.QueryRow(ctx,
-		`SELECT COUNT(*) FROM notifications WHERE user_id = $1 AND read_at IS NULL`,
-		userID).Scan(&c)
+	err := r.pool.QueryRow(ctx, qUnreadCount, userID).Scan(&c)
 	return c, err
 }
 
 func (r *Repo) MarkRead(ctx context.Context, userID, notificationID uuid.UUID) (bool, error) {
-	tag, err := r.pool.Exec(ctx, `
-UPDATE notifications SET read_at = now()
-WHERE id = $1 AND user_id = $2 AND read_at IS NULL`, notificationID, userID)
+	tag, err := r.pool.Exec(ctx, qMarkRead, notificationID, userID)
 	if err != nil {
 		return false, err
 	}
@@ -130,39 +116,30 @@ WHERE id = $1 AND user_id = $2 AND read_at IS NULL`, notificationID, userID)
 }
 
 func (r *Repo) MarkAllRead(ctx context.Context, userID uuid.UUID) error {
-	_, err := r.pool.Exec(ctx, `
-UPDATE notifications SET read_at = now()
-WHERE user_id = $1 AND read_at IS NULL`, userID)
+	_, err := r.pool.Exec(ctx, qMarkAllRead, userID)
 	return err
 }
 
 func (r *Repo) SaveDeviceToken(ctx context.Context, userID uuid.UUID, token, platform string) error {
-	_, err := r.pool.Exec(ctx, `
-INSERT INTO device_tokens (token, user_id, platform)
-VALUES ($1, $2, $3)
-ON CONFLICT (token) DO UPDATE
-  SET user_id = EXCLUDED.user_id, platform = EXCLUDED.platform, updated_at = now()`,
-		token, userID, platform)
+	_, err := r.pool.Exec(ctx, qSaveDeviceToken, token, userID, platform)
 	return err
 }
 
 func (r *Repo) DeleteDeviceToken(ctx context.Context, userID uuid.UUID, token string) error {
-	_, err := r.pool.Exec(ctx,
-		`DELETE FROM device_tokens WHERE token = $1 AND user_id = $2`, token, userID)
+	_, err := r.pool.Exec(ctx, qDeleteDeviceToken, token, userID)
 	return err
 }
 
-func (r *Repo) ListDeviceTokens(ctx context.Context, userID uuid.UUID) ([]string, error) {
-	rows, err := r.pool.Query(ctx,
-		`SELECT token FROM device_tokens WHERE user_id = $1`, userID)
+func (r *Repo) ListDeviceTokens(ctx context.Context, userID uuid.UUID) ([]domain.DeviceToken, error) {
+	rows, err := r.pool.Query(ctx, qListDeviceTokens, userID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var out []string
+	var out []domain.DeviceToken
 	for rows.Next() {
-		var t string
-		if err := rows.Scan(&t); err != nil {
+		var t domain.DeviceToken
+		if err := rows.Scan(&t.Token, &t.Platform); err != nil {
 			return nil, err
 		}
 		out = append(out, t)
@@ -174,7 +151,6 @@ func (r *Repo) DeleteDeviceTokens(ctx context.Context, tokens []string) error {
 	if len(tokens) == 0 {
 		return nil
 	}
-	_, err := r.pool.Exec(ctx,
-		`DELETE FROM device_tokens WHERE token = ANY($1)`, tokens)
+	_, err := r.pool.Exec(ctx, qDeleteDeviceTokens, tokens)
 	return err
 }

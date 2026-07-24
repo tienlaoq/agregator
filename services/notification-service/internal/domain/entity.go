@@ -21,3 +21,11 @@ type Notification struct {
 	ReadAt    *time.Time
 	CreatedAt time.Time
 }
+
+// DeviceToken is a registered mobile push token plus the platform it belongs to.
+// Platform ("ios" | "android" | "web" | "") routes the token to the right push
+// provider during fan-out.
+type DeviceToken struct {
+	Token    string
+	Platform string
+}

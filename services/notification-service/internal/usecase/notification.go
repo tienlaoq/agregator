@@ -3,6 +3,7 @@ package usecase
 import (
 	"context"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -31,7 +32,7 @@ const (
 // usecase can prune them. Defined at the consumer site; a nil Pusher disables
 // mobile push (the in-app bell still works).
 type Pusher interface {
-	Push(ctx context.Context, tokens []string, n *domain.Notification) (invalid []string, err error)
+	Push(ctx context.Context, tokens []domain.DeviceToken, n *domain.Notification) (invalid []string, err error)
 }
 
 // NotificationUseCase orchestrates per-user notification reads and writes.
@@ -39,6 +40,9 @@ type NotificationUseCase struct {
 	repo   domain.Repository
 	pusher Pusher
 	log    zerolog.Logger
+	// pushWG tracks detached push goroutines so shutdown can drain them before
+	// the Postgres pool is closed underneath them. See WaitPush.
+	pushWG sync.WaitGroup
 }
 
 // New builds the usecase. pusher may be nil, which disables mobile push (the
@@ -88,9 +92,32 @@ func (uc *NotificationUseCase) Create(ctx context.Context, userID uuid.UUID, typ
 	// it runs detached from the request context (which is cancelled once Create
 	// returns). Bounded by pushTimeout so a stuck provider can't leak goroutines.
 	if uc.pusher != nil {
-		go uc.deliverPush(context.WithoutCancel(ctx), created)
+		uc.pushWG.Add(1)
+		go func() {
+			defer uc.pushWG.Done()
+			uc.deliverPush(context.WithoutCancel(ctx), created)
+		}()
 	}
 	return created, nil
+}
+
+// WaitPush blocks until all in-flight push goroutines finish or timeout elapses,
+// returning true if they drained cleanly. Call it during shutdown (after gRPC
+// GracefulStop, so no new pushes start) and before the DB pool is closed, so
+// pushes don't hit a closed pool mid-query. Each push is already bounded by
+// pushTimeout, so timeout should be ≥ that.
+func (uc *NotificationUseCase) WaitPush(timeout time.Duration) bool {
+	done := make(chan struct{})
+	go func() {
+		uc.pushWG.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return true
+	case <-time.After(timeout):
+		return false
+	}
 }
 
 // deliverPush fans a freshly-created notification out to the user's registered
@@ -136,7 +163,15 @@ func (uc *NotificationUseCase) RegisterDevice(ctx context.Context, userID uuid.U
 	if len(token) > maxTokenBytes {
 		return pkgerrors.InvalidArgument("token слишком длинный")
 	}
-	return uc.repo.SaveDeviceToken(ctx, userID, token, strings.TrimSpace(platform))
+	// platform is descriptive metadata; validate against the known set so typos
+	// don't accumulate. Empty is allowed (unknown/unspecified).
+	platform = strings.ToLower(strings.TrimSpace(platform))
+	switch platform {
+	case "", "ios", "android", "web":
+	default:
+		return pkgerrors.InvalidArgument("platform недопустим")
+	}
+	return uc.repo.SaveDeviceToken(ctx, userID, token, platform)
 }
 
 // UnregisterDevice removes a mobile push token for a user (logout / opt-out).

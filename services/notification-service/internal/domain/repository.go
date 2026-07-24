@@ -21,8 +21,9 @@ type Repository interface {
 	SaveDeviceToken(ctx context.Context, userID uuid.UUID, token, platform string) error
 	// DeleteDeviceToken removes one token for a user (logout / opt-out).
 	DeleteDeviceToken(ctx context.Context, userID uuid.UUID, token string) error
-	// ListDeviceTokens returns every push token registered for a user.
-	ListDeviceTokens(ctx context.Context, userID uuid.UUID) ([]string, error)
+	// ListDeviceTokens returns every push token registered for a user, each with
+	// its platform so fan-out can route it to the right provider.
+	ListDeviceTokens(ctx context.Context, userID uuid.UUID) ([]DeviceToken, error)
 	// DeleteDeviceTokens prunes tokens FCM reported as invalid/unregistered.
 	DeleteDeviceTokens(ctx context.Context, tokens []string) error
 }

@@ -25,7 +25,7 @@ type mockRepo struct {
 	MarkAllReadFunc        func(ctx context.Context, userID uuid.UUID) error
 	SaveDeviceTokenFunc    func(ctx context.Context, userID uuid.UUID, token, platform string) error
 	DeleteDeviceTokenFunc  func(ctx context.Context, userID uuid.UUID, token string) error
-	ListDeviceTokensFunc   func(ctx context.Context, userID uuid.UUID) ([]string, error)
+	ListDeviceTokensFunc   func(ctx context.Context, userID uuid.UUID) ([]domain.DeviceToken, error)
 	DeleteDeviceTokensFunc func(ctx context.Context, tokens []string) error
 }
 
@@ -78,7 +78,7 @@ func (m *mockRepo) DeleteDeviceToken(ctx context.Context, userID uuid.UUID, toke
 	return nil
 }
 
-func (m *mockRepo) ListDeviceTokens(ctx context.Context, userID uuid.UUID) ([]string, error) {
+func (m *mockRepo) ListDeviceTokens(ctx context.Context, userID uuid.UUID) ([]domain.DeviceToken, error) {
 	if m.ListDeviceTokensFunc != nil {
 		return m.ListDeviceTokensFunc(ctx, userID)
 	}

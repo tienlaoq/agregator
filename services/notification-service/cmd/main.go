@@ -22,6 +22,7 @@ import (
 	"github.com/tienlao/agregator/services/notification-service/config"
 	delivery "github.com/tienlao/agregator/services/notification-service/internal/delivery/grpc"
 	"github.com/tienlao/agregator/services/notification-service/internal/fcm"
+	"github.com/tienlao/agregator/services/notification-service/internal/push"
 	"github.com/tienlao/agregator/services/notification-service/internal/repository"
 	"github.com/tienlao/agregator/services/notification-service/internal/usecase"
 )
@@ -86,17 +87,23 @@ func main() {
 		log.Warn().Err(err).Msg("notification-service schema check: migrations may be pending — service will start anyway")
 	}
 
-	// Mobile push (FCM): optional. A nil Pusher disables it — the in-app bell
-	// still works. Bad credentials are a hard failure so a misconfigured deploy
-	// is visible instead of silently dropping push.
+	// Mobile push: optional, routed per-platform by push.Dispatcher. A nil Pusher
+	// disables it — the in-app bell still works. Bad credentials are a hard
+	// failure so a misconfigured deploy is visible instead of silently dropping
+	// push. Today FCM is the only provider (fallback for every platform); an APNs
+	// provider can later be slotted in for "ios" without touching the usecase.
 	var pusher usecase.Pusher
-	if sender, err := fcm.New(ctx, loadFCMCredentials(cfg, log)); err != nil {
+	sender, err := fcm.New(ctx, loadFCMCredentials(cfg, log))
+	if err != nil {
 		log.Fatal().Err(err).Msg("invalid FCM credentials")
-	} else if sender != nil {
-		pusher = sender // only assign when non-nil, else the interface holds a typed-nil
-		log.Info().Msg("mobile push enabled (FCM)")
+	}
+	if sender != nil {
+		// fallback = FCM: handles android/web/ios (and empty platform) until a
+		// dedicated per-platform provider is registered in byPlatform.
+		pusher = push.NewDispatcher(map[string]push.Provider{}, sender, log)
+		log.Info().Msg("mobile push enabled (FCM, all platforms)")
 	} else {
-		log.Warn().Msg("FCM credentials not set — mobile push disabled (in-app bell still works)")
+		log.Warn().Msg("no push providers configured — mobile push disabled (in-app bell still works)")
 	}
 
 	uc := usecase.New(repo, pusher, log)
@@ -182,5 +189,12 @@ func main() {
 	<-quit
 	log.Info().Msg("shutting down")
 	grpcServer.GracefulStop()
+	// GracefulStop has returned, so no new pushes will be scheduled. Drain the
+	// in-flight ones before the deferred pgPool.Close() runs, so they don't hit a
+	// closed pool mid-query. Bounded above the per-push pushTimeout (15s).
+	const pushDrainTimeout = 20 * time.Second
+	if !uc.WaitPush(pushDrainTimeout) {
+		log.Warn().Msg("shutdown: push delivery drain timed out; some pushes may be dropped")
+	}
 	cancel()
 }

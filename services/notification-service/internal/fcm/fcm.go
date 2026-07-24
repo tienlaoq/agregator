@@ -90,6 +90,10 @@ func (s *Sender) Push(ctx context.Context, tokens []string, n *domain.Notificati
 		data["payload"] = n.Data
 	}
 	var firstErr error
+	// Sequential, one POST per token. The caller's pushTimeout (15s) bounds the
+	// whole loop, so this assumes few devices per user — a stalled early token
+	// eats budget from later ones. ponytail: serial send; parallelize with a
+	// bounded errgroup only if per-user device counts grow.
 	for _, tok := range tokens {
 		status, sendErr := s.sendOne(ctx, tok, n, data)
 		// Only 404 means the token is definitively dead (app uninstalled). A 400
