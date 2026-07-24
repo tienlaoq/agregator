@@ -282,6 +282,9 @@ services:
       PG_USER: banya
       PG_PASSWORD: ${POSTGRES_PASSWORD}
       INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN:-}
+      # Firebase service-account JSON for FCM mobile push. Empty ⇒ push disabled
+      # (the in-app bell + WebSocket still work). See deploy/.env.example.
+      FCM_CREDENTIALS_JSON: ${FCM_CREDENTIALS_JSON:-}
     depends_on:
       postgres:
         condition: service_healthy

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
@@ -77,6 +78,10 @@ type notifClientStub struct {
 	unreadOut int32
 	markOut   int32
 	markErr   error
+
+	deviceReq     *notificationv1.RegisterDeviceRequest
+	unregisterReq *notificationv1.UnregisterDeviceRequest
+	deviceErr     error
 }
 
 func (s *notifClientStub) Create(context.Context, *notificationv1.CreateRequest, ...grpc.CallOption) (*notificationv1.CreateResponse, error) {
@@ -106,6 +111,20 @@ func (s *notifClientStub) MarkAllRead(context.Context, *notificationv1.MarkAllRe
 		return nil, s.markErr
 	}
 	return &notificationv1.MarkAllReadResponse{UnreadCount: s.markOut}, nil
+}
+func (s *notifClientStub) RegisterDevice(_ context.Context, in *notificationv1.RegisterDeviceRequest, _ ...grpc.CallOption) (*notificationv1.RegisterDeviceResponse, error) {
+	s.deviceReq = in
+	if s.deviceErr != nil {
+		return nil, s.deviceErr
+	}
+	return &notificationv1.RegisterDeviceResponse{}, nil
+}
+func (s *notifClientStub) UnregisterDevice(_ context.Context, in *notificationv1.UnregisterDeviceRequest, _ ...grpc.CallOption) (*notificationv1.UnregisterDeviceResponse, error) {
+	s.unregisterReq = in
+	if s.deviceErr != nil {
+		return nil, s.deviceErr
+	}
+	return &notificationv1.UnregisterDeviceResponse{}, nil
 }
 
 func newNotifHandler(c notificationGatewayClient) *NotificationHandler {
@@ -275,5 +294,63 @@ func TestNotifications_MarkAllRead_RequiresAuth(t *testing.T) {
 	h.MarkAllRead(rr, authedReq(t, http.MethodPost, "/notifications/read-all", ""))
 	if rr.Code != http.StatusUnauthorized {
 		t.Fatalf("want 401, got %d", rr.Code)
+	}
+}
+
+func authedBodyReq(t *testing.T, method, target, userID, body string) *http.Request {
+	t.Helper()
+	r := httptest.NewRequest(method, target, strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/json")
+	if userID != "" {
+		r = r.WithContext(middleware.WithUserID(r.Context(), userID))
+	}
+	return r
+}
+
+func TestNotifications_RegisterDevice_ForwardsToken(t *testing.T) {
+	c := &notifClientStub{}
+	h := newNotifHandler(c)
+	rr := httptest.NewRecorder()
+	h.RegisterDevice(rr, authedBodyReq(t, http.MethodPost, "/notifications/devices", "user-1",
+		`{"token":"  fcm-abc ","platform":"ios"}`))
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rr.Code)
+	}
+	if c.deviceReq == nil {
+		t.Fatal("RegisterDevice was not forwarded to the backend")
+	}
+	if c.deviceReq.GetToken() != "fcm-abc" {
+		t.Fatalf("token = %q, want trimmed 'fcm-abc'", c.deviceReq.GetToken())
+	}
+	if c.deviceReq.GetUserId() != "user-1" {
+		t.Fatalf("user_id = %q, want 'user-1'", c.deviceReq.GetUserId())
+	}
+}
+
+func TestNotifications_RegisterDevice_RequiresAuth(t *testing.T) {
+	c := &notifClientStub{}
+	h := newNotifHandler(c)
+	rr := httptest.NewRecorder()
+	h.RegisterDevice(rr, authedBodyReq(t, http.MethodPost, "/notifications/devices", "", `{"token":"x"}`))
+	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("want 401, got %d", rr.Code)
+	}
+	if c.deviceReq != nil {
+		t.Fatal("backend must not be called for an unauthenticated request")
+	}
+}
+
+func TestNotifications_UnregisterDevice_ForwardsToken(t *testing.T) {
+	c := &notifClientStub{}
+	h := newNotifHandler(c)
+	rr := httptest.NewRecorder()
+	h.UnregisterDevice(rr, authedBodyReq(t, http.MethodDelete, "/notifications/devices", "user-1", `{"token":"fcm-abc"}`))
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("want 200, got %d", rr.Code)
+	}
+	if c.unregisterReq == nil || c.unregisterReq.GetToken() != "fcm-abc" {
+		t.Fatalf("unregister not forwarded correctly: %+v", c.unregisterReq)
 	}
 }

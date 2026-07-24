@@ -135,3 +135,46 @@ UPDATE notifications SET read_at = now()
 WHERE user_id = $1 AND read_at IS NULL`, userID)
 	return err
 }
+
+func (r *Repo) SaveDeviceToken(ctx context.Context, userID uuid.UUID, token, platform string) error {
+	_, err := r.pool.Exec(ctx, `
+INSERT INTO device_tokens (token, user_id, platform)
+VALUES ($1, $2, $3)
+ON CONFLICT (token) DO UPDATE
+  SET user_id = EXCLUDED.user_id, platform = EXCLUDED.platform, updated_at = now()`,
+		token, userID, platform)
+	return err
+}
+
+func (r *Repo) DeleteDeviceToken(ctx context.Context, userID uuid.UUID, token string) error {
+	_, err := r.pool.Exec(ctx,
+		`DELETE FROM device_tokens WHERE token = $1 AND user_id = $2`, token, userID)
+	return err
+}
+
+func (r *Repo) ListDeviceTokens(ctx context.Context, userID uuid.UUID) ([]string, error) {
+	rows, err := r.pool.Query(ctx,
+		`SELECT token FROM device_tokens WHERE user_id = $1`, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var t string
+		if err := rows.Scan(&t); err != nil {
+			return nil, err
+		}
+		out = append(out, t)
+	}
+	return out, rows.Err()
+}
+
+func (r *Repo) DeleteDeviceTokens(ctx context.Context, tokens []string) error {
+	if len(tokens) == 0 {
+		return nil
+	}
+	_, err := r.pool.Exec(ctx,
+		`DELETE FROM device_tokens WHERE token = ANY($1)`, tokens)
+	return err
+}

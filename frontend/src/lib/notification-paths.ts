@@ -11,4 +11,6 @@ export const notificationV2Paths = {
   read: (notificationId: string) =>
     `${NOTIFICATION_V2_PREFIX}/${encodeURIComponent(notificationId)}/read`,
   wsTicket: `${NOTIFICATION_V2_PREFIX}/ws-ticket`,
+  /** Регистрация/снятие мобильного push-токена (Capacitor / FCM). */
+  devices: `${NOTIFICATION_V2_PREFIX}/devices`,
 } as const;

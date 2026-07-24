@@ -36,6 +36,8 @@ type notificationGatewayClient interface {
 	GetUnreadCount(ctx context.Context, in *notificationv1.GetUnreadCountRequest, opts ...grpc.CallOption) (*notificationv1.GetUnreadCountResponse, error)
 	MarkRead(ctx context.Context, in *notificationv1.MarkReadRequest, opts ...grpc.CallOption) (*notificationv1.MarkReadResponse, error)
 	MarkAllRead(ctx context.Context, in *notificationv1.MarkAllReadRequest, opts ...grpc.CallOption) (*notificationv1.MarkAllReadResponse, error)
+	RegisterDevice(ctx context.Context, in *notificationv1.RegisterDeviceRequest, opts ...grpc.CallOption) (*notificationv1.RegisterDeviceResponse, error)
+	UnregisterDevice(ctx context.Context, in *notificationv1.UnregisterDeviceRequest, opts ...grpc.CallOption) (*notificationv1.UnregisterDeviceResponse, error)
 }
 
 // NotificationHandler serves the per-user "bell" inbox: REST reads/writes that
@@ -170,6 +172,56 @@ func (h *NotificationHandler) MarkAllRead(w http.ResponseWriter, r *http.Request
 		return
 	}
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{"unread_count": resp.GetUnreadCount()})
+}
+
+// RegisterDevice stores the caller's mobile push token so notifications reach
+// the app via FCM when it is backgrounded. Body: {"token":"...","platform":"ios"}.
+func (h *NotificationHandler) RegisterDevice(w http.ResponseWriter, r *http.Request) {
+	userID := middleware.UserIDFromCtx(r.Context())
+	if userID == "" {
+		httpx.WriteCatalog(w, apicatalog.GatewayAuthUnauthorized)
+		return
+	}
+	var body struct {
+		Token    string `json:"token"`
+		Platform string `json:"platform"`
+	}
+	if !httpx.ReadJSONOrRespond(w, r, &body) {
+		return
+	}
+	if _, err := h.client.RegisterDevice(r.Context(), &notificationv1.RegisterDeviceRequest{
+		UserId:   userID,
+		Token:    strings.TrimSpace(body.Token),
+		Platform: strings.TrimSpace(body.Platform),
+	}); err != nil {
+		httpx.GRPCErrorToHTTP(w, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// UnregisterDevice removes the caller's push token (logout / opt-out).
+// Body: {"token":"..."}.
+func (h *NotificationHandler) UnregisterDevice(w http.ResponseWriter, r *http.Request) {
+	userID := middleware.UserIDFromCtx(r.Context())
+	if userID == "" {
+		httpx.WriteCatalog(w, apicatalog.GatewayAuthUnauthorized)
+		return
+	}
+	var body struct {
+		Token string `json:"token"`
+	}
+	if !httpx.ReadJSONOrRespond(w, r, &body) {
+		return
+	}
+	if _, err := h.client.UnregisterDevice(r.Context(), &notificationv1.UnregisterDeviceRequest{
+		UserId: userID,
+		Token:  strings.TrimSpace(body.Token),
+	}); err != nil {
+		httpx.GRPCErrorToHTTP(w, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
 // IssueWSTicket mints a one-time Redis ticket for the notifications WebSocket.

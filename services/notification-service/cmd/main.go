@@ -9,6 +9,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/rs/zerolog"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/health"
 	"google.golang.org/grpc/health/grpc_health_v1"
@@ -20,6 +21,7 @@ import (
 	"github.com/tienlao/agregator/pkg/postgres"
 	"github.com/tienlao/agregator/services/notification-service/config"
 	delivery "github.com/tienlao/agregator/services/notification-service/internal/delivery/grpc"
+	"github.com/tienlao/agregator/services/notification-service/internal/fcm"
 	"github.com/tienlao/agregator/services/notification-service/internal/repository"
 	"github.com/tienlao/agregator/services/notification-service/internal/usecase"
 )
@@ -32,6 +34,23 @@ func isProductionEnv(pgHost string) bool {
 	}
 	h := strings.TrimSpace(strings.ToLower(pgHost))
 	return h != "" && h != "localhost" && h != "127.0.0.1" && h != "::1"
+}
+
+// loadFCMCredentials resolves the Firebase service-account JSON from either a
+// file path or an inline env var (file wins). Returns nil when neither is set;
+// a file that is configured but unreadable is fatal so the misconfig surfaces.
+func loadFCMCredentials(cfg config.Config, log zerolog.Logger) []byte {
+	if p := strings.TrimSpace(cfg.FCMCredentialsFile); p != "" {
+		b, err := os.ReadFile(p)
+		if err != nil {
+			log.Fatal().Err(err).Str("path", p).Msg("cannot read FCM_CREDENTIALS_FILE")
+		}
+		return b
+	}
+	if j := strings.TrimSpace(cfg.FCMCredentialsJSON); j != "" {
+		return []byte(j)
+	}
+	return nil
 }
 
 func main() {
@@ -67,7 +86,20 @@ func main() {
 		log.Warn().Err(err).Msg("notification-service schema check: migrations may be pending — service will start anyway")
 	}
 
-	uc := usecase.New(repo)
+	// Mobile push (FCM): optional. A nil Pusher disables it — the in-app bell
+	// still works. Bad credentials are a hard failure so a misconfigured deploy
+	// is visible instead of silently dropping push.
+	var pusher usecase.Pusher
+	if sender, err := fcm.New(ctx, loadFCMCredentials(cfg, log)); err != nil {
+		log.Fatal().Err(err).Msg("invalid FCM credentials")
+	} else if sender != nil {
+		pusher = sender // only assign when non-nil, else the interface holds a typed-nil
+		log.Info().Msg("mobile push enabled (FCM)")
+	} else {
+		log.Warn().Msg("FCM credentials not set — mobile push disabled (in-app bell still works)")
+	}
+
+	uc := usecase.New(repo, pusher, log)
 
 	// Service-to-service token auth: mandatory in production, optional (no-op
 	// interceptor) for local dev / CI so the service can run standalone.

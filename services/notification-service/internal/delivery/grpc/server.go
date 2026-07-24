@@ -134,3 +134,25 @@ func (s *Server) MarkAllRead(ctx context.Context, req *notificationv1.MarkAllRea
 	}
 	return &notificationv1.MarkAllReadResponse{UnreadCount: c}, nil
 }
+
+func (s *Server) RegisterDevice(ctx context.Context, req *notificationv1.RegisterDeviceRequest) (*notificationv1.RegisterDeviceResponse, error) {
+	userID, err := parseUUIDArg(req.GetUserId(), "user_id")
+	if err != nil {
+		return nil, err
+	}
+	if err := s.uc.RegisterDevice(ctx, userID, req.GetToken(), req.GetPlatform()); err != nil {
+		return nil, s.passthroughOrInternal(err, "register device")
+	}
+	return &notificationv1.RegisterDeviceResponse{}, nil
+}
+
+func (s *Server) UnregisterDevice(ctx context.Context, req *notificationv1.UnregisterDeviceRequest) (*notificationv1.UnregisterDeviceResponse, error) {
+	userID, err := parseUUIDArg(req.GetUserId(), "user_id")
+	if err != nil {
+		return nil, err
+	}
+	if err := s.uc.UnregisterDevice(ctx, userID, req.GetToken()); err != nil {
+		return nil, s.passthroughOrInternal(err, "unregister device")
+	}
+	return &notificationv1.UnregisterDeviceResponse{}, nil
+}

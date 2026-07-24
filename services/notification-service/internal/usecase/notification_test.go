@@ -45,7 +45,7 @@ func TestCreate(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			uc := New(&mockRepo{})
+			uc := newTestUC(&mockRepo{})
 			_, err := uc.Create(ctx, tt.userID, tt.typ, tt.title, tt.body, tt.data)
 			wantCode(t, err, tt.wantCode)
 		})
@@ -63,7 +63,7 @@ func TestCreate_trimsAndForwards(t *testing.T) {
 			return n, nil
 		},
 	}
-	out, err := New(repo).Create(ctx, userID, "  booking ", " Привет ", " body ", ` {"k":"v"} `)
+	out, err := newTestUC(repo).Create(ctx, userID, "  booking ", " Привет ", " body ", ` {"k":"v"} `)
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
@@ -87,7 +87,7 @@ func TestCreate_repoError(t *testing.T) {
 			return nil, errBoom
 		},
 	}
-	_, err := New(repo).Create(context.Background(), uuid.New(), "t", "title", "", "")
+	_, err := newTestUC(repo).Create(context.Background(), uuid.New(), "t", "title", "", "")
 	if !errors.Is(err, errBoom) {
 		t.Fatalf("err = %v, want errBoom", err)
 	}
@@ -98,7 +98,7 @@ func TestList(t *testing.T) {
 	userID := uuid.New()
 
 	t.Run("nil user", func(t *testing.T) {
-		_, _, _, err := New(&mockRepo{}).List(ctx, uuid.Nil, 10, 0, false)
+		_, _, _, err := newTestUC(&mockRepo{}).List(ctx, uuid.Nil, 10, 0, false)
 		wantCode(t, err, codes.InvalidArgument)
 	})
 
@@ -123,7 +123,7 @@ func TestList(t *testing.T) {
 						return nil, 0, nil
 					},
 				}
-				if _, _, _, err := New(repo).List(ctx, userID, tt.inLimit, tt.inOffset, false); err != nil {
+				if _, _, _, err := newTestUC(repo).List(ctx, userID, tt.inLimit, tt.inOffset, false); err != nil {
 					t.Fatalf("List: %v", err)
 				}
 				if gotLimit != tt.wantLimit || gotOff != tt.wantOff {
@@ -140,7 +140,7 @@ func TestList(t *testing.T) {
 			},
 			UnreadCountFunc: func(context.Context, uuid.UUID) (int32, error) { return 3, nil },
 		}
-		list, total, unread, err := New(repo).List(ctx, userID, 10, 0, true)
+		list, total, unread, err := newTestUC(repo).List(ctx, userID, 10, 0, true)
 		if err != nil {
 			t.Fatalf("List: %v", err)
 		}
@@ -155,7 +155,7 @@ func TestList(t *testing.T) {
 				return nil, 0, errBoom
 			},
 		}
-		_, _, _, err := New(repo).List(ctx, userID, 10, 0, false)
+		_, _, _, err := newTestUC(repo).List(ctx, userID, 10, 0, false)
 		if !errors.Is(err, errBoom) {
 			t.Fatalf("err = %v, want errBoom", err)
 		}
@@ -165,7 +165,7 @@ func TestList(t *testing.T) {
 		repo := &mockRepo{
 			UnreadCountFunc: func(context.Context, uuid.UUID) (int32, error) { return 0, errBoom },
 		}
-		_, _, _, err := New(repo).List(ctx, userID, 10, 0, false)
+		_, _, _, err := newTestUC(repo).List(ctx, userID, 10, 0, false)
 		if !errors.Is(err, errBoom) {
 			t.Fatalf("err = %v, want errBoom", err)
 		}
@@ -176,13 +176,13 @@ func TestUnreadCount(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("nil user", func(t *testing.T) {
-		_, err := New(&mockRepo{}).UnreadCount(ctx, uuid.Nil)
+		_, err := newTestUC(&mockRepo{}).UnreadCount(ctx, uuid.Nil)
 		wantCode(t, err, codes.InvalidArgument)
 	})
 
 	t.Run("forwards repo value", func(t *testing.T) {
 		repo := &mockRepo{UnreadCountFunc: func(context.Context, uuid.UUID) (int32, error) { return 9, nil }}
-		got, err := New(repo).UnreadCount(ctx, uuid.New())
+		got, err := newTestUC(repo).UnreadCount(ctx, uuid.New())
 		if err != nil || got != 9 {
 			t.Fatalf("got %d, err %v", got, err)
 		}
@@ -203,14 +203,14 @@ func TestMarkRead(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := New(&mockRepo{}).MarkRead(ctx, tt.userID, tt.nID)
+			_, err := newTestUC(&mockRepo{}).MarkRead(ctx, tt.userID, tt.nID)
 			wantCode(t, err, codes.InvalidArgument)
 		})
 	}
 
 	t.Run("mark error", func(t *testing.T) {
 		repo := &mockRepo{MarkReadFunc: func(context.Context, uuid.UUID, uuid.UUID) (bool, error) { return false, errBoom }}
-		_, err := New(repo).MarkRead(ctx, userID, nID)
+		_, err := newTestUC(repo).MarkRead(ctx, userID, nID)
 		if !errors.Is(err, errBoom) {
 			t.Fatalf("err = %v, want errBoom", err)
 		}
@@ -222,7 +222,7 @@ func TestMarkRead(t *testing.T) {
 			MarkReadFunc:    func(context.Context, uuid.UUID, uuid.UUID) (bool, error) { called = true; return true, nil },
 			UnreadCountFunc: func(context.Context, uuid.UUID) (int32, error) { return 2, nil },
 		}
-		got, err := New(repo).MarkRead(ctx, userID, nID)
+		got, err := newTestUC(repo).MarkRead(ctx, userID, nID)
 		if err != nil || got != 2 || !called {
 			t.Fatalf("got %d err %v called %v", got, err, called)
 		}
@@ -233,13 +233,13 @@ func TestMarkAllRead(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("nil user", func(t *testing.T) {
-		_, err := New(&mockRepo{}).MarkAllRead(ctx, uuid.Nil)
+		_, err := newTestUC(&mockRepo{}).MarkAllRead(ctx, uuid.Nil)
 		wantCode(t, err, codes.InvalidArgument)
 	})
 
 	t.Run("mark error", func(t *testing.T) {
 		repo := &mockRepo{MarkAllReadFunc: func(context.Context, uuid.UUID) error { return errBoom }}
-		_, err := New(repo).MarkAllRead(ctx, uuid.New())
+		_, err := newTestUC(repo).MarkAllRead(ctx, uuid.New())
 		if !errors.Is(err, errBoom) {
 			t.Fatalf("err = %v, want errBoom", err)
 		}
@@ -247,7 +247,7 @@ func TestMarkAllRead(t *testing.T) {
 
 	t.Run("success returns count", func(t *testing.T) {
 		repo := &mockRepo{UnreadCountFunc: func(context.Context, uuid.UUID) (int32, error) { return 0, nil }}
-		got, err := New(repo).MarkAllRead(ctx, uuid.New())
+		got, err := newTestUC(repo).MarkAllRead(ctx, uuid.New())
 		if err != nil || got != 0 {
 			t.Fatalf("got %d err %v", got, err)
 		}

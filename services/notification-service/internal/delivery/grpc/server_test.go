@@ -28,6 +28,11 @@ type mockRepo struct {
 	UnreadCountFunc func(ctx context.Context, userID uuid.UUID) (int32, error)
 	MarkReadFunc    func(ctx context.Context, userID, notificationID uuid.UUID) (bool, error)
 	MarkAllReadFunc func(ctx context.Context, userID uuid.UUID) error
+
+	SaveDeviceTokenFunc    func(ctx context.Context, userID uuid.UUID, token, platform string) error
+	DeleteDeviceTokenFunc  func(ctx context.Context, userID uuid.UUID, token string) error
+	ListDeviceTokensFunc   func(ctx context.Context, userID uuid.UUID) ([]string, error)
+	DeleteDeviceTokensFunc func(ctx context.Context, tokens []string) error
 }
 
 func (m *mockRepo) Create(ctx context.Context, n *domain.Notification) (*domain.Notification, error) {
@@ -65,8 +70,36 @@ func (m *mockRepo) MarkAllRead(ctx context.Context, userID uuid.UUID) error {
 	return nil
 }
 
+func (m *mockRepo) SaveDeviceToken(ctx context.Context, userID uuid.UUID, token, platform string) error {
+	if m.SaveDeviceTokenFunc != nil {
+		return m.SaveDeviceTokenFunc(ctx, userID, token, platform)
+	}
+	return nil
+}
+
+func (m *mockRepo) DeleteDeviceToken(ctx context.Context, userID uuid.UUID, token string) error {
+	if m.DeleteDeviceTokenFunc != nil {
+		return m.DeleteDeviceTokenFunc(ctx, userID, token)
+	}
+	return nil
+}
+
+func (m *mockRepo) ListDeviceTokens(ctx context.Context, userID uuid.UUID) ([]string, error) {
+	if m.ListDeviceTokensFunc != nil {
+		return m.ListDeviceTokensFunc(ctx, userID)
+	}
+	return nil, nil
+}
+
+func (m *mockRepo) DeleteDeviceTokens(ctx context.Context, tokens []string) error {
+	if m.DeleteDeviceTokensFunc != nil {
+		return m.DeleteDeviceTokensFunc(ctx, tokens)
+	}
+	return nil
+}
+
 func newServer(repo *mockRepo) *Server {
-	return NewServer(usecase.New(repo), zerolog.Nop())
+	return NewServer(usecase.New(repo, nil, zerolog.Nop()), zerolog.Nop())
 }
 
 func wantCode(t *testing.T, err error, want codes.Code) {

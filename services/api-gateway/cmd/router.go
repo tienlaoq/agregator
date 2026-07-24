@@ -494,6 +494,9 @@ func buildRouter(ctx context.Context, log zerolog.Logger, cfg Config, d *deps) (
 			r.With(chatCabinet).Post("/notifications/read-all", notificationHandler.MarkAllRead)
 			r.With(chatCabinet).Post("/notifications/{notificationId}/read", notificationHandler.MarkRead)
 			r.With(chatCabinet).Post("/notifications/ws-ticket", notificationHandler.IssueWSTicket)
+			// Mobile push token registration (Capacitor app / FCM).
+			r.With(chatCabinet).Post("/notifications/devices", notificationHandler.RegisterDevice)
+			r.With(chatCabinet).Delete("/notifications/devices", notificationHandler.UnregisterDevice)
 		})
 
 		// WebSocket upgrade — no RequestTimeout (same rationale as v1).
