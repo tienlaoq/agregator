@@ -526,6 +526,26 @@ func (h *NotificationHandler) NotifyMasterReviewCreated(ctx context.Context, mas
 	h.Notify(ctx, masterUserID, "master_review_created", title, body, string(data))
 }
 
+// ── Chat notifications ───────────────────────────────────────────────────────
+
+// NotifyChatMessage delivers the "new chat message" bell to a thread recipient.
+// Implements chatNotifier (chat_notify.go), driven by the chat.message.created
+// JetStream consumer. Best-effort like every other Notify.
+func (h *NotificationHandler) NotifyChatMessage(ctx context.Context, recipientID, threadID, threadKind, refID, messageID string) {
+	data, _ := json.Marshal(map[string]string{
+		"kind":        "chat_message",
+		"thread_id":   threadID,
+		"thread_kind": threadKind,
+		"ref_id":      refID,
+		"message_id":  messageID,
+	})
+	h.Notify(ctx, recipientID, "chat_message",
+		"Новое сообщение",
+		"Вам пришло новое сообщение в чате. Откройте чат, чтобы прочитать.",
+		string(data),
+	)
+}
+
 // ── WebSocket ─────────────────────────────────────────────────────────────────
 
 // WS upgrades the connection and registers it in the per-user hub. The socket

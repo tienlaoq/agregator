@@ -89,6 +89,14 @@ func buildRouter(ctx context.Context, log zerolog.Logger, cfg Config, d *deps) (
 		}); err != nil {
 			log.Warn().Err(err).Msg("notification NATS fanout subscribe failed")
 		}
+
+		// Bell+push for chat messages: consume chat.message.created from
+		// JetStream and notify each thread participant (except the author).
+		if js, err := d.NATS.JetStream(); err != nil {
+			log.Warn().Err(err).Msg("chat-notify: jetstream unavailable — chat push disabled")
+		} else if err := handler.NewChatNotifyConsumer(js, notificationHandler, log).Subscribe(); err != nil {
+			log.Warn().Err(err).Msg("chat-notify: subscribe failed — chat push disabled")
+		}
 	}
 
 	var ticketRepo handler.SupportTicketsPersistence
