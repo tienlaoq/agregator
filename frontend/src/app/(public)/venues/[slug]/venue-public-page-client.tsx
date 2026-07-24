@@ -1,6 +1,7 @@
 "use client"
 
 import { useEffect, useRef, useState } from "react"
+import { createPortal } from "react-dom"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Label } from "@/components/ui/label"
@@ -15,6 +16,12 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { Progress } from "@/components/ui/progress"
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
 import { format, isBefore, startOfDay } from "date-fns"
 import { ru } from "date-fns/locale"
 import {
@@ -44,7 +51,8 @@ import {
   getVenueReviews,
   venueMediaUrl,
 } from "@/lib/api"
-import type { Venue, Review, VenueHallPhoto } from "@/lib/types"
+import type { Venue, Review, VenueHall, VenueHallPhoto } from "@/lib/types"
+import { hallSteamTypeLabel } from "@/lib/types"
 import {
   VENUE_SOCIAL_PUBLIC_LABELS,
   VENUE_TYPE_LABELS,
@@ -55,7 +63,7 @@ import {
 import { useAuthStore } from "@/store/auth"
 import { cn } from "@/lib/utils"
 import { ReviewList } from "@/components/review-list"
-import { useGallery } from "@/hooks/use-gallery"
+import { useGallery, type GallerySlide } from "@/hooks/use-gallery"
 import { useSlotAvailability } from "@/hooks/use-slot-availability"
 import { useVenueBookingForm } from "@/hooks/use-venue-booking-form"
 
@@ -286,9 +294,24 @@ export function VenuePublicPageClient({
     handleBook,
   } = useVenueBookingForm({ venue, slug })
 
+  // Зал, открытый в модалке (карточка зала поверх затемнённого фона).
+  const [openHall, setOpenHall] = useState<VenueHall | null>(null)
+
   // ─── Галерея ────────────────────────────────────────────────────────────
   const carouselSlides = venue ? venueCarouselSlides(venue) : []
   const gallery = useGallery(carouselSlides, `${slug}-${venue?.id ?? ""}`)
+
+  // Лайтбокс для фото открытого зала (тот же хук, отдельный инстанс).
+  const hallSlides: GallerySlide[] = (openHall?.photos ?? [])
+    .slice()
+    .sort((a, b) => {
+      if (Boolean(a.is_cover) !== Boolean(b.is_cover)) return a.is_cover ? -1 : 1
+      return (a.sort_order ?? 0) - (b.sort_order ?? 0)
+    })
+    .map((p) => ({ id: p.id, src: venueMediaUrl(p.url) }))
+  const hallGallery = useGallery(hallSlides, openHall?.id ?? null)
+  // Свайп влево/вправо в лайтбоксе зала (тач).
+  const hallTouchX = useRef<number | null>(null)
 
   if (loading) {
     return (
@@ -469,7 +492,10 @@ export function VenuePublicPageClient({
 
         <div className="grid gap-8 lg:grid-cols-3">
           {/* Main Content */}
-          <div className="lg:col-span-2">
+          {/* min-w-0: grid-элемент по умолчанию min-width:auto и не сжимается уже
+              своего контента — на мобиле длинное описание/форма распирали колонку
+              за экран (горизонтальный оверфлоу). */}
+          <div className="min-w-0 lg:col-span-2">
             {/* Venue Header */}
             <div className="mb-8">
               <div className="mb-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
@@ -574,28 +600,37 @@ export function VenuePublicPageClient({
                       setSelectedHallIds((prev) =>
                         prev.includes(hall.id) ? prev.filter((x) => x !== hall.id) : [...prev, hall.id],
                       )
+                    const openThis = () => setOpenHall(hall)
                     return (
                       <div
                         key={hall.id}
-                        role="button"
-                        tabIndex={0}
-                        aria-pressed={hallSelected}
-                        onClick={toggleHall}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter" || e.key === " ") {
-                            e.preventDefault()
-                            toggleHall()
-                          }
-                        }}
                         className={cn(
-                          "cursor-pointer overflow-hidden rounded-2xl border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                          "overflow-hidden rounded-2xl border transition-colors",
                           hallSelected ? "border-primary bg-primary/5" : "border-border hover:border-primary/40",
                         )}
                       >
-                        <HallPhotos photos={hall.photos ?? []} />
+                        <button
+                          type="button"
+                          onClick={openThis}
+                          aria-label={`Открыть зал «${hall.name}»`}
+                          className="block w-full cursor-pointer"
+                        >
+                          <HallPhotos photos={hall.photos ?? []} />
+                        </button>
                         <div className="flex items-center gap-4 p-4 sm:p-5">
-                          <div className="min-w-0 flex-1 space-y-2">
-                            <h3 className="text-lg font-semibold text-foreground">{hall.name}</h3>
+                          <button
+                            type="button"
+                            onClick={openThis}
+                            className="min-w-0 flex-1 space-y-2 text-left focus-visible:outline-none"
+                          >
+                            <div className="flex flex-wrap items-center gap-2">
+                              <h3 className="text-lg font-semibold text-foreground hover:underline">{hall.name}</h3>
+                              {hallSteamTypeLabel(hall.steam_type) ? (
+                                <Badge variant="outline" className="border-primary/40 text-primary">
+                                  {hallSteamTypeLabel(hall.steam_type)}
+                                </Badge>
+                              ) : null}
+                            </div>
                             <div className="flex flex-wrap gap-x-3 gap-y-1 text-sm text-muted-foreground">
                               {hall.price_from > 0 ? (
                                 <span>
@@ -627,23 +662,124 @@ export function VenuePublicPageClient({
                                 ))}
                               </div>
                             ) : null}
-                          </div>
-                          <span
+                            {hall.description ? (
+                              <p className="line-clamp-2 whitespace-pre-line pt-1 text-sm text-muted-foreground">
+                                {hall.description}
+                              </p>
+                            ) : null}
+                            <span className="inline-flex items-center gap-1 pt-1 text-sm font-medium text-primary">
+                              Подробнее о зале
+                              <ChevronRight className="h-4 w-4" />
+                            </span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={toggleHall}
+                            aria-pressed={hallSelected}
                             className={cn(
-                              "inline-flex shrink-0 items-center gap-1.5 self-start rounded-full px-4 py-2 text-sm font-medium transition-colors",
+                              "inline-flex shrink-0 items-center gap-1.5 self-start rounded-full px-4 py-2 text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
                               hallSelected
                                 ? "bg-primary text-primary-foreground"
-                                : "border border-input bg-background text-foreground",
+                                : "border border-input bg-background text-foreground hover:bg-accent",
                             )}
                           >
                             {hallSelected && <Check className="h-4 w-4" />}
                             {hallSelected ? "Выбрано" : "Выбрать"}
-                          </span>
+                          </button>
                         </div>
                       </div>
                     )
                   })}
                 </div>
+
+                <Dialog open={openHall !== null} onOpenChange={(o) => { if (!o) setOpenHall(null) }}>
+                  {openHall ? (() => {
+                    const h = openHall
+                    const selected = selectedHallIds.includes(h.id)
+                    const photos = [...(h.photos ?? [])].sort((a, b) => {
+                      if (Boolean(a.is_cover) !== Boolean(b.is_cover)) return a.is_cover ? -1 : 1
+                      return (a.sort_order ?? 0) - (b.sort_order ?? 0)
+                    })
+                    const weekend = h.price_weekend > 0 && h.price_weekend !== h.price_from
+                    return (
+                      <DialogContent
+                        className="max-h-[85vh] gap-4 overflow-y-auto sm:max-w-2xl"
+                        onEscapeKeyDown={(e) => { if (hallGallery.lightboxOpen) e.preventDefault() }}
+                        onInteractOutside={(e) => { if (hallGallery.lightboxOpen) e.preventDefault() }}
+                      >
+                        <DialogHeader>
+                          <DialogTitle className="flex flex-wrap items-center gap-2 pr-6">
+                            {h.name}
+                            {hallSteamTypeLabel(h.steam_type) ? (
+                              <Badge variant="outline" className="border-primary/40 text-primary">
+                                {hallSteamTypeLabel(h.steam_type)}
+                              </Badge>
+                            ) : null}
+                          </DialogTitle>
+                        </DialogHeader>
+
+                        {photos.length > 0 ? (
+                          <div className="grid gap-1.5 sm:grid-cols-2">
+                            {photos.map((p, idx) => (
+                              <button
+                                key={p.id}
+                                type="button"
+                                onClick={() => hallGallery.openAt(idx)}
+                                aria-label={`Открыть фото ${idx + 1} в полном размере`}
+                                className="relative aspect-[4/3] cursor-zoom-in overflow-hidden rounded-lg bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                              >
+                                <FramedImg src={venueMediaUrl(p.url)} alt={h.name} />
+                              </button>
+                            ))}
+                          </div>
+                        ) : null}
+
+                        <div className="flex flex-wrap gap-x-6 gap-y-2 text-sm text-muted-foreground">
+                          {h.price_from > 0 ? (
+                            <span>
+                              будни{" "}
+                              <span className="font-semibold text-foreground">{h.price_from.toLocaleString("ru-RU")} ₽</span>/час
+                            </span>
+                          ) : null}
+                          {weekend ? (
+                            <span>
+                              выходные{" "}
+                              <span className="font-semibold text-foreground">{h.price_weekend.toLocaleString("ru-RU")} ₽</span>/час
+                            </span>
+                          ) : null}
+                          {h.capacity > 0 ? <span>до {h.capacity} гостей</span> : null}
+                        </div>
+
+                        {h.amenities && h.amenities.length > 0 ? (
+                          <div className="flex flex-wrap gap-2">
+                            {h.amenities.map((a) => (
+                              <Badge key={a} variant="secondary" className="px-3 py-1 text-sm">
+                                {a}
+                              </Badge>
+                            ))}
+                          </div>
+                        ) : null}
+
+                        {h.description ? (
+                          <p className="whitespace-pre-line text-sm text-foreground/90">{h.description}</p>
+                        ) : null}
+
+                        <Button
+                          onClick={() =>
+                            setSelectedHallIds((prev) =>
+                              prev.includes(h.id) ? prev.filter((x) => x !== h.id) : [...prev, h.id],
+                            )
+                          }
+                          variant={selected ? "default" : "outline"}
+                          className="gap-1.5"
+                        >
+                          {selected && <Check className="h-4 w-4" />}
+                          {selected ? "Выбрано для брони" : "Выбрать для брони"}
+                        </Button>
+                      </DialogContent>
+                    )
+                  })() : null}
+                </Dialog>
               </div>
             ) : venue.amenities && venue.amenities.length > 0 ? (
               <div className="mb-10">
@@ -739,7 +875,7 @@ export function VenuePublicPageClient({
           </div>
 
           {/* Booking Sidebar */}
-          <div className="lg:col-span-1">
+          <div className="min-w-0 lg:col-span-1">
             <Card className="sticky top-24 rounded-2xl border-border">
               <CardHeader>
                 <div className="flex items-baseline justify-between gap-2">
@@ -1038,6 +1174,72 @@ export function VenuePublicPageClient({
             </div>
           )}
         </div>
+      )}
+
+      {/* Лайтбокс фото зала — портал в body, поверх модалки (Dialog тоже в body).
+          pointer-events-auto: Radix-модалка гасит pointer-events на body, надо вернуть. */}
+      {hallGallery.lightboxOpen && hallGallery.current && openHall && createPortal(
+        <div
+          className="pointer-events-auto fixed inset-0 z-[70] flex items-center justify-center bg-black/90 p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-label={`Фото: ${openHall.name}`}
+          onClick={hallGallery.closeLightbox}
+          onTouchStart={(e) => { hallTouchX.current = e.touches[0]?.clientX ?? null }}
+          onTouchEnd={(e) => {
+            const start = hallTouchX.current
+            hallTouchX.current = null
+            if (start == null) return
+            const dx = (e.changedTouches[0]?.clientX ?? start) - start
+            if (Math.abs(dx) > 40) { if (dx < 0) hallGallery.next(); else hallGallery.prev() }
+          }}
+        >
+          <button
+            type="button"
+            aria-label="Закрыть"
+            onClick={hallGallery.closeLightbox}
+            className="absolute right-3 top-3 z-10 inline-flex size-10 items-center justify-center rounded-full bg-white/10 text-white transition-colors hover:bg-white/20"
+          >
+            <X className="size-5" />
+          </button>
+
+          {hallGallery.count > 1 && (
+            <button
+              type="button"
+              aria-label="Предыдущее фото"
+              onClick={(e) => { e.stopPropagation(); hallGallery.prev() }}
+              className="absolute left-3 top-1/2 z-10 inline-flex size-10 -translate-y-1/2 items-center justify-center rounded-full bg-white/10 text-white transition-colors hover:bg-white/20"
+            >
+              <ChevronLeft className="size-6" />
+            </button>
+          )}
+
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={hallGallery.current.src}
+            alt={`${openHall.name} — фото ${hallGallery.index + 1} из ${hallGallery.count}`}
+            onClick={(e) => e.stopPropagation()}
+            className="max-h-[90vh] max-w-[92vw] object-contain"
+          />
+
+          {hallGallery.count > 1 && (
+            <button
+              type="button"
+              aria-label="Следующее фото"
+              onClick={(e) => { e.stopPropagation(); hallGallery.next() }}
+              className="absolute right-3 top-1/2 z-10 inline-flex size-10 -translate-y-1/2 items-center justify-center rounded-full bg-white/10 text-white transition-colors hover:bg-white/20"
+            >
+              <ChevronRight className="size-6" />
+            </button>
+          )}
+
+          {hallGallery.count > 1 && (
+            <div className="absolute bottom-4 left-1/2 -translate-x-1/2 rounded-full bg-black/50 px-3 py-1 text-sm text-white">
+              {hallGallery.index + 1} / {hallGallery.count}
+            </div>
+          )}
+        </div>,
+        document.body,
       )}
     </section>
   )

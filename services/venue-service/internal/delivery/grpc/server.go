@@ -1114,6 +1114,8 @@ func hallProtoInputsToDomain(items []*venuev1.VenueHallInput) []domain.VenueHall
 			PriceWeekend: it.GetPriceWeekend(),
 			Capacity:     it.GetCapacity(),
 			Amenities:    append([]string(nil), am...),
+			Description:  it.GetDescription(),
+			SteamType:    it.GetSteamType(),
 		})
 	}
 	return out
@@ -1142,6 +1144,8 @@ func hallProtoInputsToUpserts(items []*venuev1.VenueHallInput) ([]domain.VenueHa
 			Capacity:     it.GetCapacity(),
 			Amenities:    append([]string(nil), am...),
 			SortOrder:    it.GetSortOrder(),
+			Description:  it.GetDescription(),
+			SteamType:    it.GetSteamType(),
 		})
 	}
 	return out, nil
@@ -1156,6 +1160,8 @@ func hallToProto(h *domain.VenueHall) *venuev1.VenueHall {
 		Capacity:     h.Capacity,
 		Amenities:    h.Amenities,
 		SortOrder:    h.SortOrder,
+		Description:  h.Description,
+		SteamType:    h.SteamType,
 	}
 	for _, p := range h.Photos {
 		ph.Photos = append(ph.Photos, &venuev1.VenueHallPhoto{

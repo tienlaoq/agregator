@@ -15,6 +15,14 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Textarea } from "@/components/ui/textarea";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import {
   Card,
   CardContent,
@@ -44,6 +52,7 @@ import {
   buildVenueSocialLinksPayload,
   parseVenueSocialLinks,
   newVenueHallLine,
+  HALL_STEAM_TYPES,
   type UpdateVenueRequest,
   type VenueUpdatePayload,
   trimVenueSocialLinks,
@@ -242,6 +251,8 @@ function venueHallsToForm(v: Venue): VenueHallFormLine[] {
     price_weekend: h.price_weekend ?? 0,
     capacity: h.capacity ?? 8,
     amenities: [...(h.amenities ?? [])],
+    description: h.description ?? "",
+    steam_type: h.steam_type ?? "",
     photos: [...(h.photos ?? [])],
   }));
 }
@@ -306,6 +317,8 @@ function hallsPayloadForApi(form: UpdateVenueRequest) {
       capacity: h.capacity,
       amenities: [...h.amenities],
       sort_order: i,
+      description: h.description.trim(),
+      steam_type: h.steam_type,
     }))
     .filter((h) => h.name !== "");
 }
@@ -1298,6 +1311,44 @@ export default function EditOwnerVenuePage() {
                             }
                           />
                         </div>
+                      </div>
+                      <div className="mt-4 grid gap-4 sm:grid-cols-2">
+                        <div className="space-y-2">
+                          <Label>Тип парной</Label>
+                          <Select
+                            value={hall.steam_type || "none"}
+                            onValueChange={(v) =>
+                              updateHall(hallIndex, {
+                                steam_type: v === "none" ? "" : v,
+                              })
+                            }
+                          >
+                            <SelectTrigger>
+                              <SelectValue placeholder="Не указан" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="none">Не указан</SelectItem>
+                              {HALL_STEAM_TYPES.map((t) => (
+                                <SelectItem key={t.value} value={t.value}>
+                                  {t.label}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        </div>
+                      </div>
+                      <div className="mt-4 space-y-2">
+                        <Label>Описание зала</Label>
+                        <Textarea
+                          value={hall.description}
+                          onChange={(e) =>
+                            updateHall(hallIndex, {
+                              description: e.target.value.slice(0, 2000),
+                            })
+                          }
+                          placeholder="Чем этот зал отличается, что входит: веники, чай, купель, комната отдыха…"
+                          className="min-h-[90px]"
+                        />
                       </div>
                       <div className="mt-5 space-y-3">
                         <Label className="text-muted-foreground">

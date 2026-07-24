@@ -15,6 +15,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { AlertTriangle, ArrowRight, Loader2 } from "lucide-react";
 import { redirectToLogin } from "@/lib/auth-redirect";
+import { OnboardingChecklist } from "@/components/banya/onboarding-checklist";
 import { getOwnerVenueBookings, getOwnerVenues } from "@/lib/api";
 import { useAuthStore } from "@/store/auth";
 import type { Booking } from "@/lib/types";
@@ -101,6 +102,8 @@ export default function OwnerVenueTodayPage() {
           {venue ? ` · ${venue.name}` : ""}
         </span>
       </div>
+
+      {venue ? <OnboardingChecklist venue={venue} /> : null}
 
       <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
         <MetricCard label="Брони сегодня" value={String(bookings.length)} />

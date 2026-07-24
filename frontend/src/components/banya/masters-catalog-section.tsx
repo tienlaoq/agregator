@@ -61,7 +61,12 @@ function sameCityLists(a: string[], b: string[]): boolean {
   return sa.every((v, i) => v === sb[i])
 }
 
-export function MastersCatalogSection() {
+export function MastersCatalogSection({
+  initialData,
+}: {
+  /** SSR-данные дефолтного вида (page 1, без фильтров) — засевают стартовый стейт. */
+  initialData?: { masters: MasterProfile[]; total: number }
+} = {}) {
   const searchParams = useSearchParams()
   const pathname = usePathname()
   const router = useRouter()
@@ -75,10 +80,15 @@ export function MastersCatalogSection() {
   const [selectedWorkFormat, setSelectedWorkFormat] = useState<(typeof workFormatFilterValues)[number]>("none")
   const [selectedPriceIdx, setSelectedPriceIdx] = useState("0")
   const [page, setPage] = useState(1)
-  const [masters, setMasters] = useState<MasterProfile[]>([])
-  const [total, setTotal] = useState(0)
-  const [loading, setLoading] = useState(true)
+  const [masters, setMasters] = useState<MasterProfile[]>(initialData?.masters ?? [])
+  const [total, setTotal] = useState(initialData?.total ?? 0)
+  const [loading, setLoading] = useState(initialData == null)
   const fetchGen = useRef(0)
+  // Есть SSR-данные для дефолтного вида (без фильтров) — не дёргаем API повторно
+  // на маунте, чтобы не мигать скелетоном поверх уже отрисованного списка.
+  const skipInitialFetch = useRef(
+    initialData != null && !initialQ && initialCities.length === 0,
+  )
 
   useEffect(() => {
     const t = setTimeout(() => setDebouncedQuery(query), 400)
@@ -177,6 +187,10 @@ export function MastersCatalogSection() {
   }, [debouncedQuery, selectedCities, selectedWorkFormat, selectedPriceIdx])
 
   useEffect(() => {
+    if (skipInitialFetch.current) {
+      skipInitialFetch.current = false
+      return
+    }
     const ac = new AbortController()
     void fetchData(ac.signal)
     return () => ac.abort()

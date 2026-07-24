@@ -97,7 +97,20 @@ function connect(): void {
   if (!activeToken || !activeWsTicket || stopped) return;
   const url = buildWsUrl();
   if (!url) return;
-  ws = new WebSocket(url);
+  try {
+    ws = new WebSocket(url);
+  } catch {
+    // Конструктор WebSocket может бросить СИНХРОННО: iOS WKWebView кидает
+    // SecurityError на insecure-origin (http://<lan-ip>), Chrome — на битый URL.
+    // Без этого catch исключение всплывает из React-эффекта и роняет всё
+    // приложение в error boundary. Ведём себя как при onclose — реконнект с backoff.
+    ws = null;
+    if (stopped || !activeToken) return;
+    const backoffMs = Math.min(30000, 1000 * Math.pow(2, Math.min(attempt, 5)));
+    attempt++;
+    reconnectTimer = setTimeout(() => void reconnectWithFreshTicket(), backoffMs);
+    return;
+  }
   ws.onopen = () => {
     attempt = 0;
     ws?.send(JSON.stringify({ type: "ping", event: "chat.ping" }));

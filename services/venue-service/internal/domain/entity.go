@@ -116,6 +116,8 @@ type VenueHall struct {
 	Capacity     int32
 	Amenities    []string
 	SortOrder    int32
+	Description  string // свободное описание зала
+	SteamType    string // тип парной: дровяная|электро|финская|хамам|инфракрасная
 	Photos       []VenueHallPhoto
 }
 
@@ -136,6 +138,8 @@ type VenueHallUpsert struct {
 	Capacity     int32
 	Amenities    []string
 	SortOrder    int32
+	Description  string
+	SteamType    string
 }
 
 type ReservedSlot struct {

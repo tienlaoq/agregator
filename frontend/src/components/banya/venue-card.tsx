@@ -39,8 +39,8 @@ export function VenueCard({ venue, sizes = "(max-width: 640px) 100vw, (max-width
   const workingHours = formatWorkingHours(venue.working_hours)
 
   return (
-    <Link href={`/venues/${venue.slug}`} className="group block h-full">
-      <Card className="flex h-full flex-col overflow-hidden border-border bg-card transition-all hover:shadow-xl">
+    <Link href={`/venues/${venue.slug}`} className="group block h-full min-w-0">
+      <Card className="flex h-full flex-col gap-0 overflow-hidden border-border bg-card py-0 transition-all hover:shadow-xl">
         <div className="relative aspect-[4/3] overflow-hidden bg-muted flex items-center justify-center">
           {cardImg ? (
             <FramedImage

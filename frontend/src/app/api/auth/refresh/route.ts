@@ -1,7 +1,5 @@
 import { type NextRequest, NextResponse } from "next/server"
-
-const REFRESH_COOKIE = "banya_refresh"
-const COOKIE_MAX_AGE = 60 * 60 * 24 * 30
+import { REFRESH_COOKIE, refreshCookieOptions } from "@/lib/refresh-cookie"
 
 /**
  * POST /api/auth/refresh
@@ -39,13 +37,7 @@ export async function POST(req: NextRequest) {
       { error: "refresh_failed", status: upstream.status },
       { status: upstream.status },
     )
-    errRes.cookies.set(REFRESH_COOKIE, "", {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "lax",
-      path: "/",
-      maxAge: 0,
-    })
+    errRes.cookies.set(REFRESH_COOKIE, "", refreshCookieOptions(req, { clear: true }))
     return errRes
   }
 
@@ -54,13 +46,7 @@ export async function POST(req: NextRequest) {
 
   // Если gateway обновил refresh_token — обновляем cookie
   if (data.refresh_token) {
-    res.cookies.set(REFRESH_COOKIE, data.refresh_token, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "lax",
-      path: "/",
-      maxAge: COOKIE_MAX_AGE,
-    })
+    res.cookies.set(REFRESH_COOKIE, data.refresh_token, refreshCookieOptions(req))
   }
 
   return res

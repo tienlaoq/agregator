@@ -212,11 +212,14 @@ func (h *ReviewHandler) CreateForVenue(w http.ResponseWriter, r *http.Request) {
 func (h *ReviewHandler) ListByVenue(w http.ResponseWriter, r *http.Request) {
 	venueID := chi.URLParam(r, "venueId")
 
-	page, ok := httpx.QueryInt(w, r, "page", 0, 0, 10000)
+	// Defaults/bounds must match review-service validatePagination (page ≥ 1,
+	// page_size 1..50). The frontend calls this without query params, so a def
+	// of 0 got rejected downstream as INVALID_ARGUMENT.
+	page, ok := httpx.QueryInt(w, r, "page", 1, 1, 1000)
 	if !ok {
 		return
 	}
-	pageSize, ok := httpx.QueryInt(w, r, "page_size", 0, 0, 200)
+	pageSize, ok := httpx.QueryInt(w, r, "page_size", 20, 1, 50)
 	if !ok {
 		return
 	}
@@ -313,11 +316,12 @@ func (h *ReviewHandler) MasterRating(w http.ResponseWriter, r *http.Request) {
 
 func (h *ReviewHandler) ListByMaster(w http.ResponseWriter, r *http.Request) {
 	masterID := chi.URLParam(r, "masterId")
-	page, ok := httpx.QueryInt(w, r, "page", 0, 0, 10000)
+	// Same as ListByVenue: page ≥ 1, page_size 1..50 per review-service.
+	page, ok := httpx.QueryInt(w, r, "page", 1, 1, 1000)
 	if !ok {
 		return
 	}
-	pageSize, ok := httpx.QueryInt(w, r, "page_size", 0, 0, 200)
+	pageSize, ok := httpx.QueryInt(w, r, "page_size", 20, 1, 50)
 	if !ok {
 		return
 	}

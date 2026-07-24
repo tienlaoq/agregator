@@ -4,7 +4,12 @@ FROM node:22-alpine AS deps
 RUN apk add --no-cache libc6-compat
 WORKDIR /app
 COPY package.json package-lock.json ./
-RUN npm ci
+# Флейковая сеть в CI/VM рвёт параллельные соединения npm (ECONNRESET) — меньше
+# сокетов + ретраи. Цикл повторяет при обрыве, не заваливая билд с первого раза.
+RUN for i in 1 2 3 4 5; do \
+      npm ci --fetch-timeout=600000 --fetch-retries=5 --maxsockets=3 && break; \
+      echo "npm ci attempt $i failed, retrying…"; sleep 5; \
+    done
 
 FROM node:22-alpine AS builder
 WORKDIR /app
