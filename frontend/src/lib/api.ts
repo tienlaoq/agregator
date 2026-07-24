@@ -1543,6 +1543,25 @@ export async function issueNotificationWsTicket(): Promise<{
   }
 }
 
+/** Регистрирует мобильный push-токен устройства (Capacitor / FCM). */
+export async function registerPushDevice(
+  token: string,
+  platform: string,
+): Promise<void> {
+  await fetchAPI<{ ok: boolean }>(notificationV2Paths.devices, {
+    method: "POST",
+    body: JSON.stringify({ token, platform }),
+  });
+}
+
+/** Снимает мобильный push-токен (выход из аккаунта / отключение уведомлений). */
+export async function unregisterPushDevice(token: string): Promise<void> {
+  await fetchAPI<{ ok: boolean }>(notificationV2Paths.devices, {
+    method: "DELETE",
+    body: JSON.stringify({ token }),
+  });
+}
+
 export async function submitSupportContact(
   data: SupportContactRequest,
 ): Promise<SupportContactResponse> {

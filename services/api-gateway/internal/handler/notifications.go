@@ -36,6 +36,8 @@ type notificationGatewayClient interface {
 	GetUnreadCount(ctx context.Context, in *notificationv1.GetUnreadCountRequest, opts ...grpc.CallOption) (*notificationv1.GetUnreadCountResponse, error)
 	MarkRead(ctx context.Context, in *notificationv1.MarkReadRequest, opts ...grpc.CallOption) (*notificationv1.MarkReadResponse, error)
 	MarkAllRead(ctx context.Context, in *notificationv1.MarkAllReadRequest, opts ...grpc.CallOption) (*notificationv1.MarkAllReadResponse, error)
+	RegisterDevice(ctx context.Context, in *notificationv1.RegisterDeviceRequest, opts ...grpc.CallOption) (*notificationv1.RegisterDeviceResponse, error)
+	UnregisterDevice(ctx context.Context, in *notificationv1.UnregisterDeviceRequest, opts ...grpc.CallOption) (*notificationv1.UnregisterDeviceResponse, error)
 }
 
 // NotificationHandler serves the per-user "bell" inbox: REST reads/writes that
@@ -170,6 +172,56 @@ func (h *NotificationHandler) MarkAllRead(w http.ResponseWriter, r *http.Request
 		return
 	}
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{"unread_count": resp.GetUnreadCount()})
+}
+
+// RegisterDevice stores the caller's mobile push token so notifications reach
+// the app via FCM when it is backgrounded. Body: {"token":"...","platform":"ios"}.
+func (h *NotificationHandler) RegisterDevice(w http.ResponseWriter, r *http.Request) {
+	userID := middleware.UserIDFromCtx(r.Context())
+	if userID == "" {
+		httpx.WriteCatalog(w, apicatalog.GatewayAuthUnauthorized)
+		return
+	}
+	var body struct {
+		Token    string `json:"token"`
+		Platform string `json:"platform"`
+	}
+	if !httpx.ReadJSONOrRespond(w, r, &body) {
+		return
+	}
+	if _, err := h.client.RegisterDevice(r.Context(), &notificationv1.RegisterDeviceRequest{
+		UserId:   userID,
+		Token:    strings.TrimSpace(body.Token),
+		Platform: strings.TrimSpace(body.Platform),
+	}); err != nil {
+		httpx.GRPCErrorToHTTP(w, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// UnregisterDevice removes the caller's push token (logout / opt-out).
+// Body: {"token":"..."}.
+func (h *NotificationHandler) UnregisterDevice(w http.ResponseWriter, r *http.Request) {
+	userID := middleware.UserIDFromCtx(r.Context())
+	if userID == "" {
+		httpx.WriteCatalog(w, apicatalog.GatewayAuthUnauthorized)
+		return
+	}
+	var body struct {
+		Token string `json:"token"`
+	}
+	if !httpx.ReadJSONOrRespond(w, r, &body) {
+		return
+	}
+	if _, err := h.client.UnregisterDevice(r.Context(), &notificationv1.UnregisterDeviceRequest{
+		UserId: userID,
+		Token:  strings.TrimSpace(body.Token),
+	}); err != nil {
+		httpx.GRPCErrorToHTTP(w, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
 // IssueWSTicket mints a one-time Redis ticket for the notifications WebSocket.
@@ -311,18 +363,9 @@ func (h *NotificationHandler) NotifyTaskAssigned(ctx context.Context, assigneeID
 // NotifyVenueBookingCreated delivers the "new booking at your venue" bell to
 // the venue owner. Implements bookingOwnerNotifier (booking.go).
 func (h *NotificationHandler) NotifyVenueBookingCreated(ctx context.Context, ownerID, venueID, venueName, bookingID, date, timeFrom, timeTo string, guests int32) {
-	when := strings.TrimSpace(date)
-	if timeFrom != "" {
-		when += " " + timeFrom
-		if timeTo != "" {
-			when += "–" + timeTo
-		}
-	}
-	body := when
-	if guests > 0 {
-		body += fmt.Sprintf(", гостей: %d", guests)
-	}
-	body += ". Откройте CRM заведения, чтобы посмотреть детали."
+	// PII minimization: the notification text transits Google (FCM), so booking
+	// specifics (date/time/guest count) are NOT embedded here. The client opens
+	// via booking_id in data and loads the details from our own API.
 	data, _ := json.Marshal(map[string]string{
 		"kind":       "venue_booking_created",
 		"venue_id":   venueID,
@@ -330,7 +373,7 @@ func (h *NotificationHandler) NotifyVenueBookingCreated(ctx context.Context, own
 	})
 	h.Notify(ctx, ownerID, "venue_booking_created",
 		"Новая бронь — "+venueName,
-		body,
+		"Откройте CRM заведения, чтобы посмотреть детали брони.",
 		string(data),
 	)
 }
@@ -346,14 +389,16 @@ func (h *NotificationHandler) NotifyVenueModerated(ctx context.Context, ownerID,
 	case "reject":
 		title = "Заведение «" + venueName + "» не прошло модерацию"
 		body = "Исправьте карточку и отправьте на проверку снова."
-		if c := strings.TrimSpace(comment); c != "" {
-			body = "Причина: " + c + " — исправьте карточку и отправьте на проверку снова."
+		// PII minimization: never put the moderator's free-text into the push
+		// (it transits FCM) — only signal that a reason exists in the cabinet.
+		if strings.TrimSpace(comment) != "" {
+			body = "Причина указана в кабинете владельца. Исправьте карточку и отправьте на проверку снова."
 		}
 	case "suspend":
 		title = "Заведение «" + venueName + "» приостановлено"
 		body = "Карточка скрыта из каталога."
-		if c := strings.TrimSpace(comment); c != "" {
-			body = "Карточка скрыта из каталога. Причина: " + c
+		if strings.TrimSpace(comment) != "" {
+			body = "Карточка скрыта из каталога. Причина указана в кабинете владельца."
 		}
 	case "resume":
 		title = "Заведение «" + venueName + "» снова активно"
@@ -395,14 +440,8 @@ func (h *NotificationHandler) NotifyVenueReviewCreated(ctx context.Context, owne
 // NotifyMasterBookingCreated delivers the "new booking with you" bell to the
 // master. Implements masterBookingNotifier (master.go).
 func (h *NotificationHandler) NotifyMasterBookingCreated(ctx context.Context, masterUserID, masterID, masterName, bookingID, date, timeFrom, timeTo string) {
-	when := strings.TrimSpace(date)
-	if timeFrom != "" {
-		when += " " + timeFrom
-		if timeTo != "" {
-			when += "–" + timeTo
-		}
-	}
-	body := strings.TrimSpace(when) + ". Откройте кабинет мастера, чтобы посмотреть детали."
+	// PII minimization: date/time are not put in the push text (it transits
+	// FCM); the client fetches the details via booking_id in data.
 	data, _ := json.Marshal(map[string]string{
 		"kind":       "master_booking_created",
 		"master_id":  masterID,
@@ -412,7 +451,9 @@ func (h *NotificationHandler) NotifyMasterBookingCreated(ctx context.Context, ma
 	if strings.TrimSpace(masterName) != "" {
 		title = "Новая запись — " + masterName
 	}
-	h.Notify(ctx, masterUserID, "master_booking_created", title, body, string(data))
+	h.Notify(ctx, masterUserID, "master_booking_created", title,
+		"Откройте кабинет мастера, чтобы посмотреть детали записи.",
+		string(data))
 }
 
 // NotifyMasterModerated delivers the "your master profile status changed" bell
@@ -432,14 +473,16 @@ func (h *NotificationHandler) NotifyMasterModerated(ctx context.Context, masterU
 	case "reject":
 		title = "Профиль мастера не прошёл модерацию"
 		body = "Исправьте профиль и отправьте на проверку снова."
-		if c := strings.TrimSpace(comment); c != "" {
-			body = "Причина: " + c + " — исправьте профиль и отправьте на проверку снова."
+		// PII minimization: keep the moderator's free-text out of the push
+		// (it transits FCM) — only signal that a reason exists in the cabinet.
+		if strings.TrimSpace(comment) != "" {
+			body = "Причина указана в кабинете мастера. Исправьте профиль и отправьте на проверку снова."
 		}
 	case "suspend":
 		title = "Профиль мастера приостановлен"
 		body = "Ваш " + who + " скрыт из каталога."
-		if c := strings.TrimSpace(comment); c != "" {
-			body = "Ваш " + who + " скрыт из каталога. Причина: " + c
+		if strings.TrimSpace(comment) != "" {
+			body = "Ваш " + who + " скрыт из каталога. Причина указана в кабинете мастера."
 		}
 	case "resume":
 		title = "Профиль мастера снова активен"
@@ -472,6 +515,26 @@ func (h *NotificationHandler) NotifyMasterReviewCreated(ctx context.Context, mas
 		title = "Новый отзыв — " + masterName
 	}
 	h.Notify(ctx, masterUserID, "master_review_created", title, body, string(data))
+}
+
+// ── Chat notifications ───────────────────────────────────────────────────────
+
+// NotifyChatMessage delivers the "new chat message" bell to a thread recipient.
+// Implements chatNotifier (chat_notify.go), driven by the chat.message.created
+// JetStream consumer. Best-effort like every other Notify.
+func (h *NotificationHandler) NotifyChatMessage(ctx context.Context, recipientID, threadID, threadKind, refID, messageID string) {
+	data, _ := json.Marshal(map[string]string{
+		"kind":        "chat_message",
+		"thread_id":   threadID,
+		"thread_kind": threadKind,
+		"ref_id":      refID,
+		"message_id":  messageID,
+	})
+	h.Notify(ctx, recipientID, "chat_message",
+		"Новое сообщение",
+		"Вам пришло новое сообщение в чате. Откройте чат, чтобы прочитать.",
+		string(data),
+	)
 }
 
 // ── WebSocket ─────────────────────────────────────────────────────────────────

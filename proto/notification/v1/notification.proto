@@ -28,6 +28,14 @@ service NotificationService {
 
   // MarkAllRead marks every unread notification read; returns the new count (0).
   rpc MarkAllRead(MarkAllReadRequest) returns (MarkAllReadResponse);
+
+  // RegisterDevice stores (or refreshes) a mobile push token for a user's
+  // device, so a new notification is also delivered via FCM when the app is
+  // backgrounded and the WebSocket is disconnected. Idempotent per token.
+  rpc RegisterDevice(RegisterDeviceRequest) returns (RegisterDeviceResponse);
+
+  // UnregisterDevice removes a push token (logout / notifications disabled).
+  rpc UnregisterDevice(UnregisterDeviceRequest) returns (UnregisterDeviceResponse);
 }
 
 message Notification {
@@ -95,3 +103,20 @@ message MarkAllReadRequest {
 message MarkAllReadResponse {
   int32 unread_count = 1;
 }
+
+message RegisterDeviceRequest {
+  string user_id = 1;
+  // Opaque FCM registration token from the device (iOS/Android via Firebase).
+  string token = 2;
+  // Device platform: "ios" | "android" | "web". Stored for diagnostics only.
+  string platform = 3;
+}
+
+message RegisterDeviceResponse {}
+
+message UnregisterDeviceRequest {
+  string user_id = 1;
+  string token = 2;
+}
+
+message UnregisterDeviceResponse {}

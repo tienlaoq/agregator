@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Suspense, useEffect, useState } from "react";
 import { useAuthStore } from "@/store/auth";
 import { AnalyticsPageView } from "./analytics-pageview";
+import { PushRegistration } from "@/features/notifications/lib/push-registration";
 
 function AuthHydrator({ children }: { children: React.ReactNode }) {
   useEffect(() => {
@@ -35,6 +36,8 @@ export function Providers({ children }: { children: React.ReactNode }) {
         <AnalyticsPageView />
       </Suspense>
       <AuthHydrator>{children}</AuthHydrator>
+      {/* Native-only: registers the device FCM token and routes push taps. */}
+      <PushRegistration />
     </QueryClientProvider>
   );
 }

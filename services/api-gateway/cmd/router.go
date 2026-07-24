@@ -89,6 +89,14 @@ func buildRouter(ctx context.Context, log zerolog.Logger, cfg Config, d *deps) (
 		}); err != nil {
 			log.Warn().Err(err).Msg("notification NATS fanout subscribe failed")
 		}
+
+		// Bell+push for chat messages: consume chat.message.created from
+		// JetStream and notify each thread participant (except the author).
+		if js, err := d.NATS.JetStream(); err != nil {
+			log.Warn().Err(err).Msg("chat-notify: jetstream unavailable — chat push disabled")
+		} else if err := handler.NewChatNotifyConsumer(js, notificationHandler, log).Subscribe(); err != nil {
+			log.Warn().Err(err).Msg("chat-notify: subscribe failed — chat push disabled")
+		}
 	}
 
 	var ticketRepo handler.SupportTicketsPersistence
@@ -494,6 +502,9 @@ func buildRouter(ctx context.Context, log zerolog.Logger, cfg Config, d *deps) (
 			r.With(chatCabinet).Post("/notifications/read-all", notificationHandler.MarkAllRead)
 			r.With(chatCabinet).Post("/notifications/{notificationId}/read", notificationHandler.MarkRead)
 			r.With(chatCabinet).Post("/notifications/ws-ticket", notificationHandler.IssueWSTicket)
+			// Mobile push token registration (Capacitor app / FCM).
+			r.With(chatCabinet).Post("/notifications/devices", notificationHandler.RegisterDevice)
+			r.With(chatCabinet).Delete("/notifications/devices", notificationHandler.UnregisterDevice)
 		})
 
 		// WebSocket upgrade — no RequestTimeout (same rationale as v1).

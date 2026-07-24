@@ -121,9 +121,43 @@ cd deploy && docker compose --profile frontend build frontend \
 - [ ] Реальный **HTTPS-домен** прод-фронта (тогда `upgrade-insecure-requests` работает корректно и WebView грузит нормально).
 - [ ] Реальный **`appId`/bundle ID** (сейчас плейсхолдер `io.banya.app`).
 - [ ] Иконка + сплэш (сейчас дефолтные Capacitor) — плагин `@capacitor/assets`.
-- [ ] Нативная ценность для ревью Apple 4.2 (пуши/шаринг/камера), иначе риск отказа «это просто сайт». Пуши: мост APNs/FCM к NATS-событиям (бэкенд, тут пригодится golang-pro).
+- [x] **Push-уведомления (код готов, FCM для обеих платформ).** См. раздел ниже — осталась только нативная конфигурация на аккаунтах Firebase/Apple.
 - [ ] Аккаунты: Apple Developer ($99/год), Google Play ($25 разово).
 - [ ] Беспроводная отладка (Xcode → Devices → Connect via network), чтобы ставить без кабеля.
+
+---
+
+## Push-уведомления (FCM) — что сделано и что осталось
+
+**Провайдер:** Firebase Cloud Messaging для iOS **и** Android (единый токен и код-путь).
+
+### Готово в коде (этот PR)
+- **Бэкенд `notification-service`:** таблица `device_tokens` (миграция `002`),
+  RPC `RegisterDevice`/`UnregisterDevice`, FCM HTTP v1 sender
+  (`internal/fcm`). Пуш шлётся автоматически в `usecase.Create` — через ту же
+  воронку, что и веб-колокольчик (брони, отзывы, модерация, инвайты). Мёртвые
+  токены (HTTP 404) чистятся сами.
+- **Gateway:** `POST /api/v2/notifications/devices` (регистрация токена),
+  `DELETE …/devices` (снятие).
+- **Фронт:** плагин `@capacitor-firebase/messaging`; компонент
+  `PushRegistration` (в `providers.tsx`) на нативе запрашивает разрешение,
+  берёт FCM-токен, шлёт на бэкенд, роутит тап по уведомлению; на выходе из
+  аккаунта токен снимается.
+- **Конфиг:** `FCM_CREDENTIALS_JSON` (или `FCM_CREDENTIALS_FILE`) в
+  `notification-service`. **Пусто ⇒ пуши выключены**, колокольчик работает.
+
+### Осталось (заблокировано на ваших аккаунтах Firebase/Apple)
+1. Завести **проект Firebase**, добавить в него iOS- и Android-приложения с
+   реальным bundle ID.
+2. **Android:** положить `google-services.json` в `frontend/android/app/`.
+3. **iOS:** положить `GoogleService-Info.plist` в `frontend/ios/App/App/`,
+   включить capability **Push Notifications** + **Background Modes → Remote
+   notifications**, загрузить **APNs-ключ (.p8)** в Firebase (Cloud Messaging).
+4. Скачать из Firebase **service-account JSON** → положить в `deploy/.env` как
+   `FCM_CREDENTIALS_JSON='{…}'`.
+5. `cd frontend && npx cap sync` (подтянет нативный плагин + Pods), пересобрать
+   приложение.
+6. Применить миграцию: `bash deploy/migrate.sh` (создаст `device_tokens`).
 
 ---
 

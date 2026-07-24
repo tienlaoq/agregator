@@ -9,6 +9,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/rs/zerolog"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/health"
 	"google.golang.org/grpc/health/grpc_health_v1"
@@ -20,6 +21,8 @@ import (
 	"github.com/tienlao/agregator/pkg/postgres"
 	"github.com/tienlao/agregator/services/notification-service/config"
 	delivery "github.com/tienlao/agregator/services/notification-service/internal/delivery/grpc"
+	"github.com/tienlao/agregator/services/notification-service/internal/fcm"
+	"github.com/tienlao/agregator/services/notification-service/internal/push"
 	"github.com/tienlao/agregator/services/notification-service/internal/repository"
 	"github.com/tienlao/agregator/services/notification-service/internal/usecase"
 )
@@ -32,6 +35,23 @@ func isProductionEnv(pgHost string) bool {
 	}
 	h := strings.TrimSpace(strings.ToLower(pgHost))
 	return h != "" && h != "localhost" && h != "127.0.0.1" && h != "::1"
+}
+
+// loadFCMCredentials resolves the Firebase service-account JSON from either a
+// file path or an inline env var (file wins). Returns nil when neither is set;
+// a file that is configured but unreadable is fatal so the misconfig surfaces.
+func loadFCMCredentials(cfg config.Config, log zerolog.Logger) []byte {
+	if p := strings.TrimSpace(cfg.FCMCredentialsFile); p != "" {
+		b, err := os.ReadFile(p)
+		if err != nil {
+			log.Fatal().Err(err).Str("path", p).Msg("cannot read FCM_CREDENTIALS_FILE")
+		}
+		return b
+	}
+	if j := strings.TrimSpace(cfg.FCMCredentialsJSON); j != "" {
+		return []byte(j)
+	}
+	return nil
 }
 
 func main() {
@@ -67,7 +87,26 @@ func main() {
 		log.Warn().Err(err).Msg("notification-service schema check: migrations may be pending — service will start anyway")
 	}
 
-	uc := usecase.New(repo)
+	// Mobile push: optional, routed per-platform by push.Dispatcher. A nil Pusher
+	// disables it — the in-app bell still works. Bad credentials are a hard
+	// failure so a misconfigured deploy is visible instead of silently dropping
+	// push. Today FCM is the only provider (fallback for every platform); an APNs
+	// provider can later be slotted in for "ios" without touching the usecase.
+	var pusher usecase.Pusher
+	sender, err := fcm.New(ctx, loadFCMCredentials(cfg, log))
+	if err != nil {
+		log.Fatal().Err(err).Msg("invalid FCM credentials")
+	}
+	if sender != nil {
+		// fallback = FCM: handles android/web/ios (and empty platform) until a
+		// dedicated per-platform provider is registered in byPlatform.
+		pusher = push.NewDispatcher(map[string]push.Provider{}, sender, log)
+		log.Info().Msg("mobile push enabled (FCM, all platforms)")
+	} else {
+		log.Warn().Msg("no push providers configured — mobile push disabled (in-app bell still works)")
+	}
+
+	uc := usecase.New(repo, pusher, log)
 
 	// Service-to-service token auth: mandatory in production, optional (no-op
 	// interceptor) for local dev / CI so the service can run standalone.
@@ -150,5 +189,12 @@ func main() {
 	<-quit
 	log.Info().Msg("shutting down")
 	grpcServer.GracefulStop()
+	// GracefulStop has returned, so no new pushes will be scheduled. Drain the
+	// in-flight ones before the deferred pgPool.Close() runs, so they don't hit a
+	// closed pool mid-query. Bounded above the per-push pushTimeout (15s).
+	const pushDrainTimeout = 20 * time.Second
+	if !uc.WaitPush(pushDrainTimeout) {
+		log.Warn().Msg("shutdown: push delivery drain timed out; some pushes may be dropped")
+	}
 	cancel()
 }

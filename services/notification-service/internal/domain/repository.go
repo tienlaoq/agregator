@@ -15,4 +15,15 @@ type Repository interface {
 	// callers treat that as a no-op, not an error (idempotent).
 	MarkRead(ctx context.Context, userID, notificationID uuid.UUID) (bool, error)
 	MarkAllRead(ctx context.Context, userID uuid.UUID) error
+
+	// SaveDeviceToken upserts a mobile push token for a user (idempotent).
+	// Re-registering a token already owned by another user reassigns it.
+	SaveDeviceToken(ctx context.Context, userID uuid.UUID, token, platform string) error
+	// DeleteDeviceToken removes one token for a user (logout / opt-out).
+	DeleteDeviceToken(ctx context.Context, userID uuid.UUID, token string) error
+	// ListDeviceTokens returns every push token registered for a user, each with
+	// its platform so fan-out can route it to the right provider.
+	ListDeviceTokens(ctx context.Context, userID uuid.UUID) ([]DeviceToken, error)
+	// DeleteDeviceTokens prunes tokens FCM reported as invalid/unregistered.
+	DeleteDeviceTokens(ctx context.Context, tokens []string) error
 }
