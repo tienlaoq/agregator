@@ -363,18 +363,9 @@ func (h *NotificationHandler) NotifyTaskAssigned(ctx context.Context, assigneeID
 // NotifyVenueBookingCreated delivers the "new booking at your venue" bell to
 // the venue owner. Implements bookingOwnerNotifier (booking.go).
 func (h *NotificationHandler) NotifyVenueBookingCreated(ctx context.Context, ownerID, venueID, venueName, bookingID, date, timeFrom, timeTo string, guests int32) {
-	when := strings.TrimSpace(date)
-	if timeFrom != "" {
-		when += " " + timeFrom
-		if timeTo != "" {
-			when += "–" + timeTo
-		}
-	}
-	body := when
-	if guests > 0 {
-		body += fmt.Sprintf(", гостей: %d", guests)
-	}
-	body += ". Откройте CRM заведения, чтобы посмотреть детали."
+	// PII minimization: the notification text transits Google (FCM), so booking
+	// specifics (date/time/guest count) are NOT embedded here. The client opens
+	// via booking_id in data and loads the details from our own API.
 	data, _ := json.Marshal(map[string]string{
 		"kind":       "venue_booking_created",
 		"venue_id":   venueID,
@@ -382,7 +373,7 @@ func (h *NotificationHandler) NotifyVenueBookingCreated(ctx context.Context, own
 	})
 	h.Notify(ctx, ownerID, "venue_booking_created",
 		"Новая бронь — "+venueName,
-		body,
+		"Откройте CRM заведения, чтобы посмотреть детали брони.",
 		string(data),
 	)
 }
@@ -398,14 +389,16 @@ func (h *NotificationHandler) NotifyVenueModerated(ctx context.Context, ownerID,
 	case "reject":
 		title = "Заведение «" + venueName + "» не прошло модерацию"
 		body = "Исправьте карточку и отправьте на проверку снова."
-		if c := strings.TrimSpace(comment); c != "" {
-			body = "Причина: " + c + " — исправьте карточку и отправьте на проверку снова."
+		// PII minimization: never put the moderator's free-text into the push
+		// (it transits FCM) — only signal that a reason exists in the cabinet.
+		if strings.TrimSpace(comment) != "" {
+			body = "Причина указана в кабинете владельца. Исправьте карточку и отправьте на проверку снова."
 		}
 	case "suspend":
 		title = "Заведение «" + venueName + "» приостановлено"
 		body = "Карточка скрыта из каталога."
-		if c := strings.TrimSpace(comment); c != "" {
-			body = "Карточка скрыта из каталога. Причина: " + c
+		if strings.TrimSpace(comment) != "" {
+			body = "Карточка скрыта из каталога. Причина указана в кабинете владельца."
 		}
 	case "resume":
 		title = "Заведение «" + venueName + "» снова активно"
@@ -447,14 +440,8 @@ func (h *NotificationHandler) NotifyVenueReviewCreated(ctx context.Context, owne
 // NotifyMasterBookingCreated delivers the "new booking with you" bell to the
 // master. Implements masterBookingNotifier (master.go).
 func (h *NotificationHandler) NotifyMasterBookingCreated(ctx context.Context, masterUserID, masterID, masterName, bookingID, date, timeFrom, timeTo string) {
-	when := strings.TrimSpace(date)
-	if timeFrom != "" {
-		when += " " + timeFrom
-		if timeTo != "" {
-			when += "–" + timeTo
-		}
-	}
-	body := strings.TrimSpace(when) + ". Откройте кабинет мастера, чтобы посмотреть детали."
+	// PII minimization: date/time are not put in the push text (it transits
+	// FCM); the client fetches the details via booking_id in data.
 	data, _ := json.Marshal(map[string]string{
 		"kind":       "master_booking_created",
 		"master_id":  masterID,
@@ -464,7 +451,9 @@ func (h *NotificationHandler) NotifyMasterBookingCreated(ctx context.Context, ma
 	if strings.TrimSpace(masterName) != "" {
 		title = "Новая запись — " + masterName
 	}
-	h.Notify(ctx, masterUserID, "master_booking_created", title, body, string(data))
+	h.Notify(ctx, masterUserID, "master_booking_created", title,
+		"Откройте кабинет мастера, чтобы посмотреть детали записи.",
+		string(data))
 }
 
 // NotifyMasterModerated delivers the "your master profile status changed" bell
@@ -484,14 +473,16 @@ func (h *NotificationHandler) NotifyMasterModerated(ctx context.Context, masterU
 	case "reject":
 		title = "Профиль мастера не прошёл модерацию"
 		body = "Исправьте профиль и отправьте на проверку снова."
-		if c := strings.TrimSpace(comment); c != "" {
-			body = "Причина: " + c + " — исправьте профиль и отправьте на проверку снова."
+		// PII minimization: keep the moderator's free-text out of the push
+		// (it transits FCM) — only signal that a reason exists in the cabinet.
+		if strings.TrimSpace(comment) != "" {
+			body = "Причина указана в кабинете мастера. Исправьте профиль и отправьте на проверку снова."
 		}
 	case "suspend":
 		title = "Профиль мастера приостановлен"
 		body = "Ваш " + who + " скрыт из каталога."
-		if c := strings.TrimSpace(comment); c != "" {
-			body = "Ваш " + who + " скрыт из каталога. Причина: " + c
+		if strings.TrimSpace(comment) != "" {
+			body = "Ваш " + who + " скрыт из каталога. Причина указана в кабинете мастера."
 		}
 	case "resume":
 		title = "Профиль мастера снова активен"

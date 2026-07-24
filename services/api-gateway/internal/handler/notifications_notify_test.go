@@ -115,8 +115,14 @@ func TestNotifyVenueBookingCreated(t *testing.T) {
 	if req.GetType() != "venue_booking_created" || !contains(req.GetTitle(), "Баня") {
 		t.Fatalf("req = %+v", req)
 	}
-	if !contains(req.GetBody(), "гостей: 3") {
-		t.Fatalf("body missing guests: %s", req.GetBody())
+	// PII minimization: booking specifics must not transit FCM via the body.
+	for _, leak := range []string{"гостей", "2026-01-02", "10:00", "12:00"} {
+		if contains(req.GetBody(), leak) {
+			t.Fatalf("body leaked %q: %s", leak, req.GetBody())
+		}
+	}
+	if dataKind(t, req) != "venue_booking_created" {
+		t.Fatalf("kind = %s", dataKind(t, req))
 	}
 }
 
@@ -135,12 +141,16 @@ func TestNotifyVenueModerated_Actions(t *testing.T) {
 		t.Run(tc.action, func(t *testing.T) {
 			cap := &notifCapture{}
 			h := newNotifHandler(cap)
-			h.NotifyVenueModerated(context.Background(), "owner", "v1", "Баня", tc.action, "reason")
+			h.NotifyVenueModerated(context.Background(), "owner", "v1", "Баня", tc.action, "секретная причина")
 			if tc.wantSent && len(cap.reqs) != 1 {
 				t.Fatalf("expected send for %s, got %d", tc.action, len(cap.reqs))
 			}
 			if !tc.wantSent && len(cap.reqs) != 0 {
 				t.Fatalf("expected no send for %s, got %d", tc.action, len(cap.reqs))
+			}
+			// PII minimization: the moderator's free-text must never enter the body.
+			if tc.wantSent && contains(cap.last().GetBody(), "секретная причина") {
+				t.Fatalf("%s: comment leaked into body: %s", tc.action, cap.last().GetBody())
 			}
 		})
 	}
@@ -169,6 +179,12 @@ func TestNotifyMasterBookingCreated_TitleWithName(t *testing.T) {
 	if !contains(cap.last().GetTitle(), "Иван") {
 		t.Fatalf("title = %s", cap.last().GetTitle())
 	}
+	// PII minimization: date/time must not transit FCM via the body.
+	for _, leak := range []string{"2026-01-02", "10:00", "11:00"} {
+		if contains(cap.last().GetBody(), leak) {
+			t.Fatalf("body leaked %q: %s", leak, cap.last().GetBody())
+		}
+	}
 	// empty name → generic title
 	cap2 := &notifCapture{}
 	h2 := newNotifHandler(cap2)
@@ -182,9 +198,13 @@ func TestNotifyMasterModerated_Actions(t *testing.T) {
 	for _, action := range []string{"approve", "reject", "suspend", "resume"} {
 		cap := &notifCapture{}
 		h := newNotifHandler(cap)
-		h.NotifyMasterModerated(context.Background(), "mu", "m1", "Иван", action, "reason")
+		h.NotifyMasterModerated(context.Background(), "mu", "m1", "Иван", action, "секретная причина")
 		if len(cap.reqs) != 1 {
 			t.Fatalf("action %s: expected 1 send, got %d", action, len(cap.reqs))
+		}
+		// PII minimization: the moderator's free-text must never enter the body.
+		if contains(cap.last().GetBody(), "секретная причина") {
+			t.Fatalf("action %s: comment leaked into body: %s", action, cap.last().GetBody())
 		}
 	}
 	cap := &notifCapture{}
