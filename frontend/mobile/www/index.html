@@ -17,13 +17,34 @@
         padding: 24px;
       }
       p { opacity: 0.7; }
+      button {
+        margin-top: 16px;
+        padding: 12px 32px;
+        font: inherit;
+        color: inherit;
+        background: #2c2c2e;
+        border: none;
+        border-radius: 10px;
+      }
     </style>
   </head>
   <body>
-    <!-- Fallback-экран: показывается только если server.url недоступен (нет сети). -->
+    <!-- Экран ошибки: Capacitor открывает его через server.errorPath, когда
+         server.url не загрузился (нет сети). -->
     <div>
       <h1>Banya</h1>
       <p>Нет подключения к интернету.<br />Проверьте сеть и попробуйте снова.</p>
+      <button onclick="retry()">Повторить</button>
     </div>
+    <script>
+      // ponytail: держать в синхроне с serverUrl в capacitor.config.ts —
+      // set real prod domain before store submit.
+      var SERVER_URL = "https://example.com";
+      function retry() {
+        location.href = SERVER_URL;
+      }
+      // Сеть вернулась — уходим на сайт сами, без тапа.
+      window.addEventListener("online", retry);
+    </script>
   </body>
 </html>

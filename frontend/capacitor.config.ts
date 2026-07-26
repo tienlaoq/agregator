@@ -26,12 +26,15 @@ const config: CapacitorConfig = {
   appId: "io.banya.app", // ponytail: placeholder, set real bundle ID before store submit
   appName: "Banya",
 
-  // Локальный fallback (index.html из mobile/www) — грузится, только если
-  // server.url недоступен. Основной контент идёт с server.url ниже.
+  // Локальный fallback (index.html из mobile/www) — показывается через
+  // server.errorPath, когда server.url не загрузился (нет сети).
   webDir: "mobile/www",
 
   server: {
     url: serverUrl,
+    // Без errorPath Capacitor при недоступном server.url показывает белый
+    // экран WKWebView — App Review за это заворачивает.
+    errorPath: "index.html",
     cleartext: isLocalHttp, // http разрешаем ТОЛЬКО для локальной отладки
     // Клики по ссылкам своего хоста остаются в WebView, а не улетают в Safari.
     allowNavigation: serverHost ? [serverHost] : undefined,
