@@ -37,14 +37,14 @@ func Test_geoSearchParams(t *testing.T) {
 			}
 			w := httptest.NewRecorder()
 
-			lat, lng, radius, ok := geoSearchParams(w, q)
+			geo, ok := geoSearchParams(w, q)
 
 			if ok != tt.wantOK {
 				t.Fatalf("ok = %v, want %v", ok, tt.wantOK)
 			}
-			if lat != tt.wantLat || lng != tt.wantLng || radius != tt.wantRadius {
-				t.Errorf("got (%v, %v, %v), want (%v, %v, %v)",
-					lat, lng, radius, tt.wantLat, tt.wantLng, tt.wantRadius)
+			want := geoFilter{Lat: tt.wantLat, Lng: tt.wantLng, RadiusKM: tt.wantRadius}
+			if geo != want {
+				t.Errorf("geoSearchParams() = %+v, want %+v", geo, want)
 			}
 			// Ошибку пишет сама функция — контракт тот же, что у httpx.QueryInt.
 			if !tt.wantOK && w.Code != 400 {
