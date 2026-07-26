@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input"
 import { Search, MapPin } from "lucide-react"
 import { RUSSIAN_CITIES } from "@/components/banya/city-combobox"
 import { getPopularCities } from "@/lib/api"
+import { isSingleCity } from "@/lib/city-scope"
 import { track } from "@/lib/analytics"
 
 const VENUES_CATALOG = "/venues#catalog"
@@ -31,6 +32,7 @@ export function HeroSection() {
   // Реальные «Популярные» города подтягиваем после маунта; SSR отдаёт фолбэк,
   // поэтому гидрация без рассинхрона, а нужные ссылки видны сразу.
   useEffect(() => {
+    if (isSingleCity) return
     let alive = true
     getPopularCities(4)
       .then((cities) => {
@@ -114,35 +116,37 @@ export function HeroSection() {
               className="h-12 bg-white pl-10 text-base text-foreground placeholder:text-muted-foreground"
             />
           </div>
-          <div ref={wrapperRef} className="relative sm:w-[200px]">
-            <MapPin className="absolute left-3 top-1/2 z-10 h-5 w-5 -translate-y-1/2 text-muted-foreground" />
-            <Input
-              type="text"
-              placeholder="Город..."
-              value={city}
-              onChange={(e) => setCity(e.target.value)}
-              onFocus={() => setShowSuggestions(true)}
-              className="h-12 bg-white pl-10 text-base text-foreground placeholder:text-muted-foreground"
-            />
-            {showSuggestions && suggestions.length > 0 && (
-              <div className="absolute top-full z-50 mt-1 w-full rounded-md border bg-popover p-1 shadow-md">
-                {suggestions.map((c) => (
-                  <button
-                    key={c}
-                    type="button"
-                    className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm hover:bg-accent hover:text-accent-foreground"
-                    onMouseDown={(e) => {
-                      e.preventDefault()
-                      selectCity(c)
-                    }}
-                  >
-                    <MapPin className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                    {c}
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
+          {!isSingleCity && (
+            <div ref={wrapperRef} className="relative sm:w-[200px]">
+              <MapPin className="absolute left-3 top-1/2 z-10 h-5 w-5 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                type="text"
+                placeholder="Город..."
+                value={city}
+                onChange={(e) => setCity(e.target.value)}
+                onFocus={() => setShowSuggestions(true)}
+                className="h-12 bg-white pl-10 text-base text-foreground placeholder:text-muted-foreground"
+              />
+              {showSuggestions && suggestions.length > 0 && (
+                <div className="absolute top-full z-50 mt-1 w-full rounded-md border bg-popover p-1 shadow-md">
+                  {suggestions.map((c) => (
+                    <button
+                      key={c}
+                      type="button"
+                      className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left text-sm hover:bg-accent hover:text-accent-foreground"
+                      onMouseDown={(e) => {
+                        e.preventDefault()
+                        selectCity(c)
+                      }}
+                    >
+                      <MapPin className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                      {c}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
           <Button type="submit" size="lg" className="h-12 gap-2 px-8">
             <Search className="h-5 w-5" />
             Найти
@@ -150,6 +154,7 @@ export function HeroSection() {
         </form>
 
         {/* Popular cities */}
+        {!isSingleCity && (
         <div className="mt-6 flex flex-wrap items-center justify-center gap-2">
           <span className="text-sm text-white/70">Популярные:</span>
           {popularCities.map((c) => {
@@ -170,6 +175,7 @@ export function HeroSection() {
             )
           })}
         </div>
+        )}
       </div>
     </section>
   )
