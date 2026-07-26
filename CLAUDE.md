@@ -2,11 +2,6 @@
 
 Microservices platform: online booking, master profiles, goods shop, certifications.
 
-## Code Style
-
-@SKILL.md
-@REACT.md — React 19 + TypeScript patterns for frontend (Server Components, useActionState, use(), event typing)
-
 ## Commands
 
 ```bash
