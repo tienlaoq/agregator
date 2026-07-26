@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi, type Mock } from "vitest";
-import { login, register, getVenues, ApiError, formatApiErrorMessage } from "@/lib/api";
+import { login, register, getVenues, searchVenues, ApiError, formatApiErrorMessage } from "@/lib/api";
 import { useAuthStore } from "@/store/auth";
 
 const API_URL = "http://localhost:8080";
@@ -231,5 +231,32 @@ describe("formatApiErrorMessage", () => {
     expect(
       formatApiErrorMessage(new TypeError("Failed to fetch"), "другое"),
     ).toMatch(/соединени/i);
+  });
+});
+
+describe("searchVenues geo params", () => {
+  it("sends lat/lng/radius only when all three are present", async () => {
+    fetchMock.mockResolvedValueOnce(mockResponse(200, { venues: [], total: 0 }));
+    await searchVenues({ lat: 55.796, lng: 49.106, radius_km: 10 });
+    const url = fetchMock.mock.calls[0][0] as string;
+    expect(url).toContain("lat=55.796");
+    expect(url).toContain("lng=49.106");
+    expect(url).toContain("radius=10");
+  });
+
+  it("omits geo params when radius is missing", async () => {
+    fetchMock.mockResolvedValueOnce(mockResponse(200, { venues: [], total: 0 }));
+    await searchVenues({ lat: 55.796, lng: 49.106 });
+    const url = fetchMock.mock.calls[0][0] as string;
+    expect(url).not.toContain("lat=");
+    expect(url).not.toContain("radius=");
+  });
+
+  it("keeps lat=0/lng=0 as valid coordinates", async () => {
+    fetchMock.mockResolvedValueOnce(mockResponse(200, { venues: [], total: 0 }));
+    await searchVenues({ lat: 0, lng: 0, radius_km: 5 });
+    const url = fetchMock.mock.calls[0][0] as string;
+    expect(url).toContain("lat=0");
+    expect(url).toContain("lng=0");
   });
 });

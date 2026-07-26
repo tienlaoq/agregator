@@ -300,13 +300,21 @@ func (uc *VenueUseCase) PopularCities(ctx context.Context, limit int32) ([]domai
 	return uc.repo.PopularCities(ctx, limit)
 }
 
+// geoCacheBucketDigits rounds coordinates in the cache key to ~110 m. At full
+// precision every GPS reading is a unique key, so "бани рядом" would miss the
+// cache on every request. The query itself still runs on exact coordinates —
+// only the key is bucketed, so viewers within ~110 m share a cached page.
+const geoCacheBucketDigits = 3
+
 func searchParamsCacheString(ver int64, p domain.SearchParams) string {
 	am := append([]string(nil), p.Amenities...)
 	sort.Strings(am)
 	cc := append([]string(nil), p.EffectiveCities()...)
 	sort.Strings(cc)
-	return fmt.Sprintf("%d|q=%s|c=%s|lat=%.5f|lng=%.5f|r=%.6f|vt=%s|pmin=%d|pmax=%d|rmin=%.6f|a=%s|page=%d|ps=%d",
-		ver, p.Query, strings.Join(cc, ","), p.Lat, p.Lng, p.RadiusKM, p.VenueType, p.PriceMin, p.PriceMax, p.RatingMin, strings.Join(am, ","), p.Page, p.PageSize)
+	return fmt.Sprintf("%d|q=%s|c=%s|lat=%.*f|lng=%.*f|r=%.6f|vt=%s|pmin=%d|pmax=%d|rmin=%.6f|a=%s|page=%d|ps=%d",
+		ver, p.Query, strings.Join(cc, ","),
+		geoCacheBucketDigits, p.Lat, geoCacheBucketDigits, p.Lng,
+		p.RadiusKM, p.VenueType, p.PriceMin, p.PriceMax, p.RatingMin, strings.Join(am, ","), p.Page, p.PageSize)
 }
 
 func (uc *VenueUseCase) Search(ctx context.Context, params domain.SearchParams) (*domain.ListResult, error) {

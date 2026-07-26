@@ -401,6 +401,10 @@ export async function searchVenues(
     price_min?: number;
     price_max?: number;
     rating_min?: number;
+    /** «Бани рядом»: lat+lng+radius_km вместе, бэкенд сортирует по удалённости */
+    lat?: number;
+    lng?: number;
+    radius_km?: number;
     page?: number;
     page_size?: number;
   },
@@ -428,6 +432,11 @@ export async function searchVenues(
   }
   if (params.rating_min != null && params.rating_min !== 0) {
     search.set("rating_min", String(params.rating_min));
+  }
+  if (params.lat != null && params.lng != null && params.radius_km) {
+    search.set("lat", String(params.lat));
+    search.set("lng", String(params.lng));
+    search.set("radius", String(params.radius_km));
   }
   if (params.page != null && params.page !== 0) {
     search.set("page", String(params.page));

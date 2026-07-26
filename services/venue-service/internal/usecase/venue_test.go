@@ -898,3 +898,43 @@ func TestCreateManualSlotBlock_HallResolution(t *testing.T) {
 		assert.Nil(t, got, "no halls → whole-venue block")
 	})
 }
+
+// Гео-ключ кеша бакетится: без этого каждое GPS-чтение — уникальный ключ,
+// и «бани рядом» промахивается мимо кеша на каждом запросе.
+func TestSearchParamsCacheString_GeoBucketing(t *testing.T) {
+	base := domain.SearchParams{Lat: 55.796000, Lng: 49.106000, RadiusKM: 10, Page: 1, PageSize: 12}
+
+	tests := []struct {
+		name      string
+		other     domain.SearchParams
+		wantEqual bool
+	}{
+		{
+			name:      "shift within ~110m shares a key",
+			other:     domain.SearchParams{Lat: 55.796210, Lng: 49.106180, RadiusKM: 10, Page: 1, PageSize: 12},
+			wantEqual: true,
+		},
+		{
+			name:      "shift of ~1km gets its own key",
+			other:     domain.SearchParams{Lat: 55.805000, Lng: 49.106000, RadiusKM: 10, Page: 1, PageSize: 12},
+			wantEqual: false,
+		},
+		{
+			name:      "different radius at same point gets its own key",
+			other:     domain.SearchParams{Lat: 55.796000, Lng: 49.106000, RadiusKM: 25, Page: 1, PageSize: 12},
+			wantEqual: false,
+		},
+		{
+			name:      "different page gets its own key",
+			other:     domain.SearchParams{Lat: 55.796000, Lng: 49.106000, RadiusKM: 10, Page: 2, PageSize: 12},
+			wantEqual: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := searchParamsCacheString(1, base) == searchParamsCacheString(1, tt.other)
+			assert.Equal(t, tt.wantEqual, got)
+		})
+	}
+}

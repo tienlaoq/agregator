@@ -5,7 +5,9 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -160,11 +162,27 @@ func (h *VenueHandler) PopularCities(w http.ResponseWriter, r *http.Request) {
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{"cities": cities})
 }
 
+// maxSearchRadiusKM caps the "рядом со мной" radius: without it a caller can ask
+// for a radius that covers the whole table and turns the GiST scan into a seq scan.
+const maxSearchRadiusKM = 200
+
+// geoSearchParams reads lat/lng/radius from the query. All three must parse and
+// be in range, otherwise the geo filter is dropped entirely — a half-parsed point
+// (e.g. lat only) would silently search around (0,0) in the Gulf of Guinea.
+func geoSearchParams(q url.Values) (lat, lng, radiusKM float64) {
+	lat, latErr := strconv.ParseFloat(q.Get("lat"), 64)
+	lng, lngErr := strconv.ParseFloat(q.Get("lng"), 64)
+	radiusKM, radErr := strconv.ParseFloat(q.Get("radius"), 64)
+	if latErr != nil || lngErr != nil || radErr != nil ||
+		math.Abs(lat) > 90 || math.Abs(lng) > 180 || radiusKM <= 0 {
+		return 0, 0, 0
+	}
+	return lat, lng, min(radiusKM, maxSearchRadiusKM)
+}
+
 func (h *VenueHandler) Search(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	lat, _ := strconv.ParseFloat(q.Get("lat"), 64)
-	lng, _ := strconv.ParseFloat(q.Get("lng"), 64)
-	radius, _ := strconv.ParseFloat(q.Get("radius"), 64)
+	lat, lng, radius := geoSearchParams(q)
 	priceMin, _ := strconv.ParseInt(q.Get("price_min"), 10, 64)
 	priceMax, _ := strconv.ParseInt(q.Get("price_max"), 10, 64)
 	ratingMin, _ := strconv.ParseFloat(q.Get("rating_min"), 64)

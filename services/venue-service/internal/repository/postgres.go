@@ -701,10 +701,18 @@ func (r *venueRepo) Search(ctx context.Context, params domain.SearchParams) (*do
 
 	// A positive radius is the sole gate: the caller sets RadiusKM only when it
 	// wants a geo filter, so Lat/Lng of exactly 0 stay valid coordinates.
+	// Тайбрейкер по id обязателен: avg_rating по умолчанию 0, то есть у всех
+	// заведений без отзывов ключ сортировки одинаковый, и Postgres при
+	// LIMIT/OFFSET волен отдать их в разном порядке на соседних страницах —
+	// карточки дублируются на одной странице и пропадают с другой.
+	orderBy := "avg_rating DESC, id"
 	if params.RadiusKM > 0 {
 		conditions = append(conditions, fmt.Sprintf(
 			"ST_DWithin(location, ST_SetSRID(ST_MakePoint($%d, $%d), 4326)::geography, $%d)", argIdx, argIdx+1, argIdx+2))
 		args = append(args, params.Lng, params.Lat, params.RadiusKM*1000)
+		// «Бани рядом»: с гео-фильтром сортируем по удалённости (KNN по GiST-индексу
+		// idx_venues_location), плейсхолдеры точки переиспользуем из условия выше.
+		orderBy = fmt.Sprintf("location <-> ST_SetSRID(ST_MakePoint($%d, $%d), 4326)::geography, id", argIdx, argIdx+1)
 		argIdx += 3
 	}
 
@@ -752,7 +760,7 @@ func (r *venueRepo) Search(ctx context.Context, params domain.SearchParams) (*do
 			COALESCE(payout_legal_form, ''),
 			created_at, updated_at,
 			(COUNT(*) OVER())::bigint AS __total
-		FROM venues %s ORDER BY avg_rating DESC LIMIT $%d OFFSET $%d`, where, argIdx, argIdx+1)
+		FROM venues %s ORDER BY %s LIMIT $%d OFFSET $%d`, where, orderBy, argIdx, argIdx+1)
 
 	rows, err := r.pool.Query(ctx, query, args...)
 	if err != nil {

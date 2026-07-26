@@ -16,8 +16,9 @@ import {
 import { Card, CardContent } from "@/components/ui/card"
 import { searchVenues, getVenues } from "@/lib/api"
 import { packCitiesForQuery, parseCitiesFromSearchParams, parseCitiesFromStableKey } from "@/lib/cities-http"
+import { isSingleCity } from "@/lib/city-scope"
 import type { Venue } from "@/lib/types"
-import { Search, MapPin, X, Building2, AlertCircle } from "lucide-react"
+import { Search, MapPin, X, Building2, AlertCircle, LocateFixed } from "lucide-react"
 import { VenueCard } from "@/components/banya/venue-card"
 
 const types = ["all", "banya", "sauna", "hammam"]
@@ -36,6 +37,9 @@ const ratingOptions = [
 ]
 
 const PAGE_SIZE = 12
+
+// ponytail: фиксированный радиус «рядом»; выбор радиуса — когда попросят
+const NEARBY_RADIUS_KM = 10
 
 // Ключи, которые Next.js подмешивает в query (_rsc и т.д.): если включить их в deps синхронизации,
 // строка URL «меняется» без смены q/city — эффект затирает город из поля справа пустым searchParams.get("city").
@@ -109,6 +113,38 @@ export function CatalogSection({
   const [selectedPriceIdx, setSelectedPriceIdx] = useState("0")
   const [selectedRatingIdx, setSelectedRatingIdx] = useState("0")
   const [page, setPage] = useState(1)
+  // «Рядом со мной»: координаты держим только в state, в URL не пишем
+  const [geo, setGeo] = useState<{ lat: number; lng: number } | null>(null)
+  const [geoLoading, setGeoLoading] = useState(false)
+  const [geoError, setGeoError] = useState<string | null>(null)
+
+  const toggleNearby = () => {
+    if (geo) {
+      setGeo(null)
+      return
+    }
+    if (!("geolocation" in navigator)) {
+      setGeoError("Геолокация недоступна на этом устройстве")
+      return
+    }
+    setGeoLoading(true)
+    setGeoError(null)
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        setGeoLoading(false)
+        setGeo({ lat: pos.coords.latitude, lng: pos.coords.longitude })
+      },
+      (err) => {
+        setGeoLoading(false)
+        setGeoError(
+          err.code === err.PERMISSION_DENIED
+            ? "Доступ к геолокации запрещён. Разрешите его в настройках и попробуйте снова."
+            : "Не удалось определить местоположение. Попробуйте ещё раз.",
+        )
+      },
+      { timeout: 10_000, maximumAge: 300_000 },
+    )
+  }
 
   useEffect(() => {
     const t = setTimeout(() => setDebouncedQuery(query), 400)
@@ -155,14 +191,14 @@ export function CatalogSection({
   // Сбрасываем пагинацию при смене фильтров
   useEffect(() => {
     setPage(1)
-  }, [debouncedQuery, selectedCities, selectedType, selectedPriceIdx, selectedRatingIdx])
+  }, [debouncedQuery, selectedCities, selectedType, selectedPriceIdx, selectedRatingIdx, geo])
 
   // Параметры запроса — мемоизированы в query key для TanStack Query
   const priceRange = priceRanges[Number(selectedPriceIdx)]
   const ratingMin = ratingOptions[Number(selectedRatingIdx)].value
   const venueType = selectedType === "all" ? "" : selectedType
   const qEff = debouncedQuery.trim()
-  const hasSearch = Boolean(qEff || selectedCities.length > 0 || venueType || priceRange.min || priceRange.max || ratingMin)
+  const hasSearch = Boolean(qEff || selectedCities.length > 0 || venueType || priceRange.min || priceRange.max || ratingMin || geo)
 
   const queryKey = [
     "catalog",
@@ -173,6 +209,7 @@ export function CatalogSection({
     priceRange.min,
     priceRange.max,
     ratingMin,
+    geo,
     page,
   ] as const
 
@@ -188,6 +225,9 @@ export function CatalogSection({
               price_min: priceRange.min || undefined,
               price_max: priceRange.max || undefined,
               rating_min: ratingMin || undefined,
+              lat: geo?.lat,
+              lng: geo?.lng,
+              radius_km: geo ? NEARBY_RADIUS_KM : undefined,
               page,
               page_size: PAGE_SIZE,
             },
@@ -208,12 +248,17 @@ export function CatalogSection({
   const loading = isFetching && venues.length === 0
 
   const activeFilters: { key: string; label: string; onRemove?: () => void }[] = [
-    ...selectedCities.map((c) => ({
-      key: `city:${c}`,
-      label: `Город: ${c}`,
-      onRemove: () =>
-        setSelectedCities((prev) => prev.filter((x) => x.toLowerCase() !== c.toLowerCase())),
-    })),
+    ...(geo
+      ? [{ key: "geo", label: `Рядом со мной (${NEARBY_RADIUS_KM} км)`, onRemove: () => setGeo(null) }]
+      : []),
+    ...(isSingleCity
+      ? []
+      : selectedCities.map((c) => ({
+          key: `city:${c}`,
+          label: `Город: ${c}`,
+          onRemove: () =>
+            setSelectedCities((prev) => prev.filter((x) => x.toLowerCase() !== c.toLowerCase())),
+        }))),
     ...(selectedType !== "all"
       ? [{ key: "type", label: typeLabels[selectedType] as string }]
       : []),
@@ -233,6 +278,8 @@ export function CatalogSection({
     setSelectedType(hubDefaultVenueType)
     setSelectedPriceIdx("0")
     setSelectedRatingIdx("0")
+    setGeo(null)
+    setGeoError(null)
   }
 
   const commitCityDraft = () => {
@@ -267,22 +314,34 @@ export function CatalogSection({
                 className="h-11 pl-10"
               />
             </div>
-            <div className="relative w-full lg:max-w-[240px]">
-              <MapPin className="absolute left-3 top-1/2 z-10 h-5 w-5 -translate-y-1/2 text-muted-foreground" />
-              <Input
-                type="text"
-                placeholder="Город — Enter, добавить"
-                value={cityDraft}
-                onChange={(e) => setCityDraft(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    e.preventDefault()
-                    commitCityDraft()
-                  }
-                }}
-                className="h-11 pl-10"
-              />
-            </div>
+            {!isSingleCity && (
+              <div className="relative w-full lg:max-w-[240px]">
+                <MapPin className="absolute left-3 top-1/2 z-10 h-5 w-5 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  type="text"
+                  placeholder="Город — Enter, добавить"
+                  value={cityDraft}
+                  onChange={(e) => setCityDraft(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault()
+                      commitCityDraft()
+                    }
+                  }}
+                  className="h-11 pl-10"
+                />
+              </div>
+            )}
+            <Button
+              type="button"
+              variant={geo ? "default" : "outline"}
+              className="h-11"
+              onClick={toggleNearby}
+              disabled={geoLoading}
+            >
+              <LocateFixed className="mr-2 h-4 w-4" />
+              {geoLoading ? "Определяем…" : "Рядом"}
+            </Button>
             <div className="flex flex-wrap gap-3">
               <Select
                 value={selectedType}
@@ -321,6 +380,13 @@ export function CatalogSection({
               </Select>
             </div>
           </div>
+
+          {geoError && (
+            <p className="flex items-center gap-2 text-sm text-destructive">
+              <AlertCircle className="h-4 w-4 shrink-0" />
+              {geoError}
+            </p>
+          )}
 
           {/* Active Filters */}
           {activeFilters.length > 0 && (
