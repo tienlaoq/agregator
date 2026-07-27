@@ -26,6 +26,8 @@
 	<true/>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>Геолокация нужна, чтобы показать бани и сауны рядом с вами.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Камера нужна, чтобы снять и загрузить фото заведения прямо с телефона.</string>
 	<key>UILaunchStoryboardName</key>
 	<string>LaunchScreen</string>
 	<key>UIMainStoryboardFile</key>
