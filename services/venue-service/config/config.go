@@ -21,6 +21,11 @@ type Config struct {
 	// рейтинга (GetVenueRating) при обработке события review.created.
 	// Env: REVIEW_SERVICE_ADDR. Default: localhost:50055.
 	ReviewServiceAddr string
+	// YandexGeocoderAPIKey enables server-side address → coordinates resolution
+	// on venue create/update. Same key the frontend map uses ("HTTP Геокодер"
+	// must be enabled for it in the Yandex cabinet). Empty disables geocoding.
+	// Env: YANDEX_MAPS_SERVER_API_KEY.
+	YandexGeocoderAPIKey string
 }
 
 func Load() Config {
@@ -28,12 +33,13 @@ func Load() Config {
 	pg.DBName = config.GetEnv("PG_DB", "venue_db")
 
 	return Config{
-		GRPCPort:          config.GetEnv("GRPC_PORT", "50053"),
-		Postgres:          pg,
-		Redis:             config.NewRedisConfig(),
-		NATS:              config.NewNATSConfig(),
-		VenueCacheTTL:     config.GetEnvDuration("VENUE_CACHE_TTL", 10*time.Minute),
-		SearchCacheTTL:    config.GetEnvDuration("SEARCH_CACHE_TTL", 2*time.Minute),
-		ReviewServiceAddr: config.GetEnv("REVIEW_SERVICE_ADDR", "localhost:50055"),
+		GRPCPort:             config.GetEnv("GRPC_PORT", "50053"),
+		Postgres:             pg,
+		Redis:                config.NewRedisConfig(),
+		NATS:                 config.NewNATSConfig(),
+		VenueCacheTTL:        config.GetEnvDuration("VENUE_CACHE_TTL", 10*time.Minute),
+		SearchCacheTTL:       config.GetEnvDuration("SEARCH_CACHE_TTL", 2*time.Minute),
+		ReviewServiceAddr:    config.GetEnv("REVIEW_SERVICE_ADDR", "localhost:50055"),
+		YandexGeocoderAPIKey: config.GetEnv("YANDEX_MAPS_SERVER_API_KEY", ""),
 	}
 }

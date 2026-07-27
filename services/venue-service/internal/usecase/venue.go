@@ -19,6 +19,7 @@ import (
 	pkgerrors "github.com/tienlao/agregator/pkg/errors"
 
 	"github.com/tienlao/agregator/services/venue-service/internal/domain"
+	"github.com/tienlao/agregator/services/venue-service/internal/geocode"
 	"github.com/tienlao/agregator/services/venue-service/internal/repository"
 )
 
@@ -38,6 +39,16 @@ type Config struct {
 	// SearchCacheTTL controls how long list/search results are cached in Redis.
 	// Default: 2 minutes.
 	SearchCacheTTL time.Duration
+	// Geocoder resolves an address to coordinates when the caller supplies none.
+	// Optional: nil disables geocoding and venues keep the coordinates they came
+	// with (possibly none).
+	Geocoder geocoder
+}
+
+// geocoder resolves a postal address to coordinates. Declared here, at the point
+// of use, and satisfied by *geocode.Client; nil means the feature is off.
+type geocoder interface {
+	Geocode(ctx context.Context, address string) (geocode.Point, error)
 }
 
 type VenueUseCase struct {
@@ -47,6 +58,7 @@ type VenueUseCase struct {
 	sf             singleflight.Group
 	venueCacheTTL  time.Duration
 	searchCacheTTL time.Duration
+	geocoder       geocoder
 }
 
 func NewVenueUseCase(repo domain.VenueRepository, redis *goredis.Client) *VenueUseCase {
@@ -68,7 +80,43 @@ func NewVenueUseCaseWithConfig(repo domain.VenueRepository, redis *goredis.Clien
 		log:            log,
 		venueCacheTTL:  cfg.VenueCacheTTL,
 		searchCacheTTL: cfg.SearchCacheTTL,
+		geocoder:       cfg.Geocoder,
 	}
+}
+
+// resolveCoordinates fills in venue.Latitude/Longitude from its address when the
+// caller sent none. It never fails the write: an owner filing a card must not be
+// blocked because an external geocoder is slow or down, and a venue without
+// coordinates is still a usable listing — it just stays out of "бани рядом"
+// until someone sets the point on the map in the edit form.
+//
+// A caller-supplied point always wins: the edit form has a real map, and a
+// guessed address match must not silently move a pin the owner placed.
+func (uc *VenueUseCase) resolveCoordinates(ctx context.Context, venue *domain.Venue) {
+	if uc.geocoder == nil || venue.Latitude != 0 || venue.Longitude != 0 {
+		return
+	}
+	address := strings.TrimSpace(venue.Address)
+	if address == "" {
+		return
+	}
+	// City first: "ул. Баумана, 5" exists in dozens of Russian cities, and the
+	// geocoder will confidently return the wrong one. Matters from the first day
+	// outside Kazan.
+	query := address
+	if city := strings.TrimSpace(venue.City); city != "" {
+		query = city + ", " + address
+	}
+
+	point, err := uc.geocoder.Geocode(ctx, query)
+	if err != nil {
+		// Debug, not Warn: a miss is an ordinary outcome for a sloppy address and
+		// would otherwise fill the log with noise on every such creation.
+		uc.log.Debug().Err(err).Str("city", venue.City).Msg("geocode failed, venue stays without coordinates")
+		return
+	}
+	venue.Latitude = point.Lat
+	venue.Longitude = point.Lng
 }
 
 func (uc *VenueUseCase) Create(ctx context.Context, venue *domain.Venue) error {
@@ -99,6 +147,7 @@ func (uc *VenueUseCase) Create(ctx context.Context, venue *domain.Venue) error {
 		}
 		venue.Halls[i].Name = name
 	}
+	uc.resolveCoordinates(ctx, venue)
 	if err := uc.repo.Create(ctx, venue); err != nil {
 		return err
 	}
@@ -124,6 +173,9 @@ func (uc *VenueUseCase) Update(ctx context.Context, venue *domain.Venue) error {
 		return err
 	}
 	venue.SocialLinks = sl
+	// Same gap on update: an API client may change the address without touching
+	// the point, and the edit form's map only covers the browser path.
+	uc.resolveCoordinates(ctx, venue)
 	// repo.Update atomically sends an active/rejected card back to pending_review.
 	if err := uc.repo.Update(ctx, venue); err != nil {
 		return err

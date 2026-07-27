@@ -129,6 +129,9 @@ services:
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
       TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
       FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3000}
+      # Геокодирование адреса при создании/обновлении заведения. Без ключа
+      # координаты остаются пустыми и карточка не попадает в поиск «рядом».
+      YANDEX_MAPS_SERVER_API_KEY: ${YANDEX_MAPS_SERVER_API_KEY:-}
     depends_on:
       postgres:
         condition: service_healthy
