@@ -15,6 +15,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/tienlao/agregator/services/venue-service/internal/domain"
+	"github.com/tienlao/agregator/services/venue-service/internal/geocode"
 	"github.com/tienlao/agregator/services/venue-service/internal/repository"
 )
 
@@ -897,4 +898,167 @@ func TestCreateManualSlotBlock_HallResolution(t *testing.T) {
 		require.NoError(t, err)
 		assert.Nil(t, got, "no halls → whole-venue block")
 	})
+}
+
+// Гео-ключ кеша бакетится: без этого каждое GPS-чтение — уникальный ключ,
+// и «бани рядом» промахивается мимо кеша на каждом запросе.
+func TestSearchParamsCacheString_GeoBucketing(t *testing.T) {
+	base := domain.SearchParams{Lat: 55.796000, Lng: 49.106000, RadiusKM: 10, Page: 1, PageSize: 12}
+
+	tests := []struct {
+		name      string
+		other     domain.SearchParams
+		wantEqual bool
+	}{
+		{
+			name:      "shift within ~110m shares a key",
+			other:     domain.SearchParams{Lat: 55.796210, Lng: 49.106180, RadiusKM: 10, Page: 1, PageSize: 12},
+			wantEqual: true,
+		},
+		{
+			name:      "shift of ~1km gets its own key",
+			other:     domain.SearchParams{Lat: 55.805000, Lng: 49.106000, RadiusKM: 10, Page: 1, PageSize: 12},
+			wantEqual: false,
+		},
+		{
+			name:      "different radius at same point gets its own key",
+			other:     domain.SearchParams{Lat: 55.796000, Lng: 49.106000, RadiusKM: 25, Page: 1, PageSize: 12},
+			wantEqual: false,
+		},
+		{
+			name:      "different page gets its own key",
+			other:     domain.SearchParams{Lat: 55.796000, Lng: 49.106000, RadiusKM: 10, Page: 2, PageSize: 12},
+			wantEqual: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := searchParamsCacheString(1, base) == searchParamsCacheString(1, tt.other)
+			assert.Equal(t, tt.wantEqual, got)
+		})
+	}
+}
+
+// stubGeocoder implements the usecase's geocoder interface with a function hook.
+type stubGeocoder struct {
+	calls int
+	fn    func(ctx context.Context, address string) (geocode.Point, error)
+}
+
+func (s *stubGeocoder) Geocode(ctx context.Context, address string) (geocode.Point, error) {
+	s.calls++
+	return s.fn(ctx, address)
+}
+
+func geocodableVenue() *domain.Venue {
+	return &domain.Venue{
+		ID:               uuid.New(),
+		OwnerID:          uuid.New(),
+		Slug:             "banya-geo",
+		Name:             "Гео",
+		Type:             domain.VenueTypeBanya,
+		City:             "Казань",
+		Address:          "ул. Баумана, 5",
+		LegalEntityName:  "ИП Тестов Тест Тестович",
+		INN:              "7707083893",
+		OGRN:             "1027700132195",
+		PublicListingURL: "https://yandex.ru/maps/org/test/123",
+	}
+}
+
+func TestCreate_GeocodesAddress(t *testing.T) {
+	kazan := geocode.Point{Lat: 55.796127, Lng: 49.106414}
+
+	tests := []struct {
+		name          string
+		venue         func() *domain.Venue
+		geo           func(ctx context.Context, address string) (geocode.Point, error)
+		wantCalls     int
+		wantLat       float64
+		wantLng       float64
+		wantQuery     string
+		wantCreateErr bool
+	}{
+		{
+			name:      "empty coordinates are filled from city + address",
+			venue:     geocodableVenue,
+			geo:       func(context.Context, string) (geocode.Point, error) { return kazan, nil },
+			wantCalls: 1,
+			wantLat:   kazan.Lat,
+			wantLng:   kazan.Lng,
+			wantQuery: "Казань, ул. Баумана, 5",
+		},
+		{
+			name: "caller-supplied point is never overwritten",
+			venue: func() *domain.Venue {
+				v := geocodableVenue()
+				v.Latitude, v.Longitude = 55.75, 37.61
+				return v
+			},
+			geo:       func(context.Context, string) (geocode.Point, error) { return kazan, nil },
+			wantCalls: 0,
+			wantLat:   55.75,
+			wantLng:   37.61,
+		},
+		{
+			name:      "geocoder failure still creates the venue",
+			venue:     geocodableVenue,
+			geo:       func(context.Context, string) (geocode.Point, error) { return geocode.Point{}, geocode.ErrNotFound },
+			wantCalls: 1,
+		},
+		{
+			name: "no address, no call",
+			venue: func() *domain.Venue {
+				v := geocodableVenue()
+				v.Address = "   "
+				return v
+			},
+			geo:       func(context.Context, string) (geocode.Point, error) { return kazan, nil },
+			wantCalls: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var got *domain.Venue
+			repo := &mockVenueRepo{
+				CreateFn: func(ctx context.Context, venue *domain.Venue) error {
+					got = venue
+					return nil
+				},
+			}
+			var gotQuery string
+			geo := &stubGeocoder{fn: func(ctx context.Context, address string) (geocode.Point, error) {
+				gotQuery = address
+				return tt.geo(ctx, address)
+			}}
+			uc := NewVenueUseCaseWithConfig(repo, nil, zerolog.Nop(), Config{Geocoder: geo})
+
+			err := uc.Create(context.Background(), tt.venue())
+
+			require.NoError(t, err, "geocoding must never fail the write")
+			require.NotNil(t, got, "venue must be persisted regardless of geocoding")
+			assert.Equal(t, tt.wantCalls, geo.calls)
+			assert.Equal(t, tt.wantLat, got.Latitude)
+			assert.Equal(t, tt.wantLng, got.Longitude)
+			if tt.wantQuery != "" {
+				assert.Equal(t, tt.wantQuery, gotQuery, "city must scope the query")
+			}
+		})
+	}
+}
+
+func TestCreate_WithoutGeocoderKeepsWorking(t *testing.T) {
+	var got *domain.Venue
+	repo := &mockVenueRepo{CreateFn: func(ctx context.Context, venue *domain.Venue) error {
+		got = venue
+		return nil
+	}}
+	uc := NewVenueUseCase(repo, nil) // no geocoder configured
+
+	require.NoError(t, uc.Create(context.Background(), geocodableVenue()))
+	require.NotNil(t, got)
+	assert.Zero(t, got.Latitude)
+	assert.Zero(t, got.Longitude)
 }

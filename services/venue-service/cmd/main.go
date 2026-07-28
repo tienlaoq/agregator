@@ -27,6 +27,7 @@ import (
 	"github.com/tienlao/agregator/services/venue-service/internal/dbmigrate"
 	delivery "github.com/tienlao/agregator/services/venue-service/internal/delivery/grpc"
 	"github.com/tienlao/agregator/services/venue-service/internal/events"
+	"github.com/tienlao/agregator/services/venue-service/internal/geocode"
 	"github.com/tienlao/agregator/services/venue-service/internal/repository"
 	"github.com/tienlao/agregator/services/venue-service/internal/telegram"
 	"github.com/tienlao/agregator/services/venue-service/internal/usecase"
@@ -94,9 +95,14 @@ func main() {
 	}
 
 	repo := repository.NewVenueRepo(pgPool)
+	geocoder := geocode.NewClient(cfg.YandexGeocoderAPIKey)
+	if !geocoder.Enabled() {
+		log.Warn().Msg("YANDEX_MAPS_SERVER_API_KEY не задан: адреса не геокодируются, новые заведения не попадут в поиск «рядом»")
+	}
 	uc := usecase.NewVenueUseCaseWithConfig(repo, rdb, log, usecase.Config{
 		VenueCacheTTL:  cfg.VenueCacheTTL,
 		SearchCacheTTL: cfg.SearchCacheTTL,
+		Geocoder:       geocoder,
 	})
 	publisher := events.NewPublisher(js)
 

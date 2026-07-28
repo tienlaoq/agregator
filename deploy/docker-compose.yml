@@ -3,6 +3,7 @@ services:
   postgres:
     image: postgis/postgis:16-3.4
     container_name: banya-postgres
+    restart: unless-stopped
     environment:
       POSTGRES_USER: banya
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in deploy/.env — copy from .env.example}
@@ -22,6 +23,7 @@ services:
   redis:
     image: redis:7-alpine
     container_name: banya-redis
+    restart: unless-stopped
     ports:
       - "6379:6379"
     command: redis-server --appendonly yes
@@ -34,6 +36,7 @@ services:
   nats:
     image: nats:2.10-alpine
     container_name: banya-nats
+    restart: unless-stopped
     ports:
       - "4222:4222"
       - "8222:8222"
@@ -45,6 +48,7 @@ services:
       context: ..
       dockerfile: services/auth-service/Dockerfile
     container_name: banya-auth
+    restart: unless-stopped
     ports:
       - "50051:50051"
     environment:
@@ -90,6 +94,7 @@ services:
       context: ..
       dockerfile: services/user-service/Dockerfile
     container_name: banya-user
+    restart: unless-stopped
     ports:
       - "50052:50052"
     environment:
@@ -112,6 +117,7 @@ services:
       context: ..
       dockerfile: services/venue-service/Dockerfile
     container_name: banya-venue
+    restart: unless-stopped
     ports:
       - "50053:50053"
     environment:
@@ -129,6 +135,9 @@ services:
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
       TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
       FRONTEND_URL: ${FRONTEND_URL:-http://localhost:3000}
+      # Геокодирование адреса при создании/обновлении заведения. Без ключа
+      # координаты остаются пустыми и карточка не попадает в поиск «рядом».
+      YANDEX_MAPS_SERVER_API_KEY: ${YANDEX_MAPS_SERVER_API_KEY:-}
     depends_on:
       postgres:
         condition: service_healthy
@@ -138,6 +147,7 @@ services:
       context: ..
       dockerfile: services/booking-service/Dockerfile
     container_name: banya-booking
+    restart: unless-stopped
     ports:
       - "50054:50054"
     environment:
@@ -169,6 +179,7 @@ services:
       context: ..
       dockerfile: services/review-service/Dockerfile
     container_name: banya-review
+    restart: unless-stopped
     ports:
       - "50055:50055"
     environment:
@@ -195,6 +206,7 @@ services:
       context: ..
       dockerfile: services/master-service/Dockerfile
     container_name: banya-master
+    restart: unless-stopped
     ports:
       - "50057:50057"
     environment:
@@ -218,6 +230,7 @@ services:
       context: ..
       dockerfile: services/chat-service/Dockerfile
     container_name: banya-chat
+    restart: unless-stopped
     ports:
       - "50058:50058"
     environment:
@@ -244,6 +257,7 @@ services:
       context: ..
       dockerfile: services/crm-service/Dockerfile
     container_name: banya-crm
+    restart: unless-stopped
     ports:
       - "50059:50059"
     environment:
@@ -270,6 +284,7 @@ services:
       context: ..
       dockerfile: services/notification-service/Dockerfile
     container_name: banya-notification
+    restart: unless-stopped
     ports:
       - "50060:50060"
     environment:
@@ -294,6 +309,7 @@ services:
       context: ..
       dockerfile: services/payment-service/Dockerfile
     container_name: banya-payment
+    restart: unless-stopped
     ports:
       - "50056:50056"
     environment:
@@ -323,6 +339,7 @@ services:
       context: ..
       dockerfile: services/analytics-service/Dockerfile
     container_name: banya-analytics
+    restart: unless-stopped
     environment:
       PG_HOST: postgres
       PG_DB: analytics_db
@@ -340,6 +357,7 @@ services:
       context: ..
       dockerfile: services/api-gateway/Dockerfile
     container_name: banya-gateway
+    restart: unless-stopped
     ports:
       - "8080:8080"
     # OAuth и прочие секреты из deploy/.env (рядом с этим compose-файлом), без пустой подстановки ${VAR:-}
@@ -439,6 +457,7 @@ services:
         # not just at runtime (see frontend/Dockerfile).
         INTERNAL_API_URL: ${INTERNAL_API_URL:-http://api-gateway:8080}
     container_name: banya-frontend
+    restart: unless-stopped
     ports:
       - "${FRONTEND_PORT:-3000}:3000"
     environment:

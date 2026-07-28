@@ -5,7 +5,9 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -160,11 +162,64 @@ func (h *VenueHandler) PopularCities(w http.ResponseWriter, r *http.Request) {
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{"cities": cities})
 }
 
+// maxSearchRadiusKM caps the "рядом со мной" radius: without it a caller can ask
+// for a radius that covers the whole table and turns the GiST scan into a seq scan.
+const maxSearchRadiusKM = 200
+
+// geoFilter is the "бани рядом" filter. Named fields instead of a positional
+// (lat, lng, radius) triple: latitude and longitude are the same type and the
+// stack below flips their order for PostGIS (ST_MakePoint takes x=lng first),
+// so a positional swap is the classic silent bug here.
+type geoFilter struct {
+	Lat      float64
+	Lng      float64
+	RadiusKM float64
+}
+
+// geoSearchParams reads the lat/lng/radius triple from the query, following the
+// same contract as httpx.QueryInt: on bad input it writes the error response and
+// returns ok=false, so the caller just returns.
+//
+// Either all three are absent — no geo filter, ok — or all three must be present
+// and valid. Anything in between is a 400: dropping the filter silently would
+// answer "бани рядом" with the whole catalogue under HTTP 200, and a half-parsed
+// point would search around (0,0) in the Gulf of Guinea.
+func geoSearchParams(w http.ResponseWriter, q url.Values) (geoFilter, bool) {
+	rawLat := strings.TrimSpace(q.Get("lat"))
+	rawLng := strings.TrimSpace(q.Get("lng"))
+	rawRadius := strings.TrimSpace(q.Get("radius"))
+	if rawLat == "" && rawLng == "" && rawRadius == "" {
+		return geoFilter{}, true
+	}
+
+	invalid := func(key string) (geoFilter, bool) {
+		httpx.WriteCatalog(w, apicatalog.GatewayRequestInvalidQuery.WithMessage(
+			"параметр «"+key+"» должен быть числом; для поиска рядом передайте lat, lng и radius вместе",
+		))
+		return geoFilter{}, false
+	}
+
+	lat, latErr := strconv.ParseFloat(rawLat, 64)
+	if latErr != nil || math.Abs(lat) > 90 {
+		return invalid("lat")
+	}
+	lng, lngErr := strconv.ParseFloat(rawLng, 64)
+	if lngErr != nil || math.Abs(lng) > 180 {
+		return invalid("lng")
+	}
+	radiusKM, radErr := strconv.ParseFloat(rawRadius, 64)
+	if radErr != nil || radiusKM <= 0 {
+		return invalid("radius")
+	}
+	return geoFilter{Lat: lat, Lng: lng, RadiusKM: min(radiusKM, maxSearchRadiusKM)}, true
+}
+
 func (h *VenueHandler) Search(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	lat, _ := strconv.ParseFloat(q.Get("lat"), 64)
-	lng, _ := strconv.ParseFloat(q.Get("lng"), 64)
-	radius, _ := strconv.ParseFloat(q.Get("radius"), 64)
+	geo, ok := geoSearchParams(w, q)
+	if !ok {
+		return
+	}
 	priceMin, _ := strconv.ParseInt(q.Get("price_min"), 10, 64)
 	priceMax, _ := strconv.ParseInt(q.Get("price_max"), 10, 64)
 	ratingMin, _ := strconv.ParseFloat(q.Get("rating_min"), 64)
@@ -221,9 +276,9 @@ func (h *VenueHandler) Search(w http.ResponseWriter, r *http.Request) {
 	resp, err := h.client.SearchVenues(ctx, &venuev1.SearchVenuesRequest{
 		Query:     query,
 		City:      grpcCity,
-		Latitude:  lat,
-		Longitude: lng,
-		RadiusKm:  radius,
+		Latitude:  geo.Lat,
+		Longitude: geo.Lng,
+		RadiusKm:  geo.RadiusKM,
 		Type:      q.Get("type"),
 		PriceMin:  priceMin,
 		PriceMax:  priceMax,

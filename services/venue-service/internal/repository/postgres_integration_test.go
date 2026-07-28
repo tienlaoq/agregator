@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"testing"
 	"time"
 
@@ -31,26 +32,19 @@ func TestMain(m *testing.M) {
 	_, b, _, _ := runtime.Caller(0)
 	migrationsDir := filepath.Join(filepath.Dir(b), "..", "..", "migrations")
 
+	// Все up-миграции по глобу: хардкод-список разъезжался с каталогом
+	// при каждом переименовании (падал на удалённой 012_venue_staff).
+	upMigrations, err := filepath.Glob(filepath.Join(migrationsDir, "*.up.sql"))
+	if err != nil || len(upMigrations) == 0 {
+		log.Fatalf("list migrations in %s: %v", migrationsDir, err)
+	}
+	sort.Strings(upMigrations)
+
 	pgContainer, err := postgres.Run(ctx, "postgis/postgis:16-3.4",
 		postgres.WithDatabase("venue_test"),
 		postgres.WithUsername("test"),
 		postgres.WithPassword("test"),
-		postgres.WithInitScripts(
-			filepath.Join(migrationsDir, "001_init.up.sql"),
-			filepath.Join(migrationsDir, "002_moderation.up.sql"),
-			filepath.Join(migrationsDir, "003_city.up.sql"),
-			filepath.Join(migrationsDir, "004_moderation_extended.up.sql"),
-			filepath.Join(migrationsDir, "005_owner_verification.up.sql"),
-			filepath.Join(migrationsDir, "006_reserved_slots_exclusion.up.sql"),
-			filepath.Join(migrationsDir, "007_manual_slot_blocks.up.sql"),
-			filepath.Join(migrationsDir, "008_venue_social_links.up.sql"),
-			filepath.Join(migrationsDir, "009_venue_service_sort_order.up.sql"),
-			filepath.Join(migrationsDir, "010_venue_halls.up.sql"),
-			filepath.Join(migrationsDir, "011_venue_payout_profile.up.sql"),
-			filepath.Join(migrationsDir, "012_venue_staff.up.sql"),
-			filepath.Join(migrationsDir, "013_venue_crm_tasks.up.sql"),
-			filepath.Join(migrationsDir, "017_reserved_slots_hall.up.sql"),
-		),
+		postgres.WithInitScripts(upMigrations...),
 		testcontainers.WithWaitStrategy(
 			wait.ForAll(
 				wait.ForLog("database system is ready to accept connections").
@@ -441,6 +435,88 @@ func TestIntegration_Search(t *testing.T) {
 		}
 	}
 	assert.True(t, found, "search should find the venue")
+}
+
+func TestIntegration_SearchNearby(t *testing.T) {
+	repo := NewVenueRepo(testPool)
+	ctx := context.Background()
+	adminID := uuid.New()
+
+	// Центр Казани и точка ~4 км от него; третья — Москва, вне радиуса.
+	mk := func(name string, lat, lng float64) *domain.Venue {
+		v := &domain.Venue{
+			OwnerID:   uuid.New(),
+			Name:      name + " " + uuid.New().String()[:8],
+			Type:      "banya",
+			Address:   "ул. Гео, 1",
+			City:      "Казань",
+			Latitude:  lat,
+			Longitude: lng,
+		}
+		require.NoError(t, repo.Create(ctx, v))
+		require.NoError(t, repo.UpdateStatus(ctx, v.ID, domain.StatusActive, "", adminID))
+		return v
+	}
+	near := mk("ГеоЦентр", 55.796, 49.106)
+	mid := mk("ГеоДальше", 55.830, 49.130)
+	far := mk("ГеоМосква", 55.751, 37.618)
+
+	result, err := repo.Search(ctx, domain.SearchParams{
+		Lat:      55.796,
+		Lng:      49.106,
+		RadiusKM: 20,
+		Page:     1,
+		PageSize: 50,
+	})
+	require.NoError(t, err)
+
+	idx := func(id uuid.UUID) int {
+		for i, v := range result.Venues {
+			if v.ID == id {
+				return i
+			}
+		}
+		return -1
+	}
+	require.NotEqual(t, -1, idx(near.ID), "venue in radius should be found")
+	require.NotEqual(t, -1, idx(mid.ID), "venue in radius should be found")
+	assert.Equal(t, -1, idx(far.ID), "venue outside radius should be excluded")
+	assert.Less(t, idx(near.ID), idx(mid.ID), "results should be ordered by distance")
+}
+
+// Заведения без отзывов делят avg_rating = 0, поэтому без тайбрейкера по id
+// порядок внутри группы не определён и страницы LIMIT/OFFSET разъезжаются.
+// Проверяем детерминированно: у равных рейтингов id должны идти по возрастанию.
+func TestIntegration_SearchOrderTieBreakerByID(t *testing.T) {
+	repo := NewVenueRepo(testPool)
+	ctx := context.Background()
+	adminID := uuid.New()
+
+	city := "ТайбрейкГрад" + uuid.New().String()[:8]
+	for i := 0; i < 5; i++ {
+		v := &domain.Venue{
+			OwnerID: uuid.New(),
+			Name:    fmt.Sprintf("Тайбрейк %d %s", i, uuid.New().String()[:8]),
+			Type:    "banya",
+			Address: "ул. Равных, 1",
+			City:    city,
+		}
+		require.NoError(t, repo.Create(ctx, v))
+		require.NoError(t, repo.UpdateStatus(ctx, v.ID, domain.StatusActive, "", adminID))
+	}
+
+	result, err := repo.Search(ctx, domain.SearchParams{Cities: []string{city}, Page: 1, PageSize: 50})
+	require.NoError(t, err)
+	require.Len(t, result.Venues, 5)
+
+	for i := 1; i < len(result.Venues); i++ {
+		prev, cur := result.Venues[i-1], result.Venues[i]
+		require.Equal(t, prev.AvgRating, cur.AvgRating, "fixture venues must share avg_rating")
+		// Postgres сравнивает uuid как 16 байт — порядок совпадает с лексикографическим
+		// сравнением канонической hex-записи.
+		assert.Less(t, prev.ID.String(), cur.ID.String(),
+			"equal ratings must be ordered by id")
+	}
 }
 
 func TestIntegration_ListOnlyActive(t *testing.T) {

@@ -16,7 +16,10 @@ export const metadata: Metadata = {
 export default function AuthLayout({ children }: { children: React.ReactNode }) {
   return (
     <div className="flex min-h-screen flex-col bg-background">
-      <header className="px-4 py-5 sm:px-6">
+      {/* pt со safe-area: в нативной оболочке viewport-fit=cover пускает контент
+          под статус-бар, и логотип наезжает на часы. Публичный Header делает то
+          же самое (header.tsx), здесь свой — отступ пришлось повторить. */}
+      <header className="px-4 pb-5 pt-[calc(env(safe-area-inset-top)+1.25rem)] sm:px-6">
         <Link
           href="/"
           aria-label="На главную БаняГид"

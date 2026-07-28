@@ -16,6 +16,7 @@ import { Card, CardContent } from "@/components/ui/card"
 import { MasterCard } from "@/components/banya/master-card"
 import { getPublicMastersCatalog, listPublicMasters } from "@/lib/api"
 import { packCitiesForQuery, parseCitiesFromSearchParams, parseCitiesFromStableKey } from "@/lib/cities-http"
+import { isSingleCity } from "@/lib/city-scope"
 import type { MasterProfile } from "@/lib/types"
 import { Search, MapPin, X, Users } from "lucide-react"
 
@@ -197,12 +198,14 @@ export function MastersCatalogSection({
   }, [fetchData])
 
   const activeFilters: { key: string; label: string; onRemove?: () => void }[] = [
-    ...selectedCities.map((c) => ({
-      key: `city:${c}`,
-      label: `Город: ${c}`,
-      onRemove: () =>
-        setSelectedCities((prev) => prev.filter((x) => x.toLowerCase() !== c.toLowerCase())),
-    })),
+    ...(isSingleCity
+      ? []
+      : selectedCities.map((c) => ({
+          key: `city:${c}`,
+          label: `Город: ${c}`,
+          onRemove: () =>
+            setSelectedCities((prev) => prev.filter((x) => x.toLowerCase() !== c.toLowerCase())),
+        }))),
     ...(selectedWorkFormat !== "none"
       ? [{ key: "work_format", label: workFormatFilterLabels[selectedWorkFormat] }]
       : []),
@@ -249,22 +252,24 @@ export function MastersCatalogSection({
                 className="h-11 pl-10"
               />
             </div>
-            <div className="relative w-full lg:max-w-[240px]">
-              <MapPin className="absolute left-3 top-1/2 z-10 h-5 w-5 -translate-y-1/2 text-muted-foreground" />
-              <Input
-                type="text"
-                placeholder="Город — Enter, добавить"
-                value={cityDraft}
-                onChange={(e) => setCityDraft(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    e.preventDefault()
-                    commitCityDraft()
-                  }
-                }}
-                className="h-11 pl-10"
-              />
-            </div>
+            {!isSingleCity && (
+              <div className="relative w-full lg:max-w-[240px]">
+                <MapPin className="absolute left-3 top-1/2 z-10 h-5 w-5 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  type="text"
+                  placeholder="Город — Enter, добавить"
+                  value={cityDraft}
+                  onChange={(e) => setCityDraft(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault()
+                      commitCityDraft()
+                    }
+                  }}
+                  className="h-11 pl-10"
+                />
+              </div>
+            )}
             <div className="flex flex-wrap gap-3">
               <Select
                 value={selectedWorkFormat}

@@ -143,8 +143,11 @@ export default function OwnerVenueSharePage() {
         </p>
       </div>
 
+      {/* min-w-0 на колонках обязателен: у грид-элементов min-width по умолчанию
+          auto, поэтому колонка не сжимается ниже min-content содержимого — код
+          вставки одной строкой (~1050px) распирал её и всю страницу на телефоне. */}
       <div className="grid gap-4 lg:grid-cols-[1.4fr_1fr]">
-        <div className="space-y-4">
+        <div className="min-w-0 space-y-4">
           <Card className="border-border">
             <CardHeader>
               <CardTitle>Ссылка на бронь</CardTitle>
@@ -240,7 +243,7 @@ export default function OwnerVenueSharePage() {
           </Card>
         </div>
 
-        <Card className="border-border bg-muted/30">
+        <Card className="min-w-0 border-border bg-muted/30">
           <CardHeader>
             <CardTitle className="text-base">Так это увидят гости</CardTitle>
             <CardDescription>Превью в вашей группе или канале</CardDescription>

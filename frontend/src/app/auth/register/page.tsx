@@ -12,6 +12,7 @@ import { Label } from "@/components/ui/label"
 import { Separator } from "@/components/ui/separator"
 import { register, userFromRegisterResponse, ApiError, formatApiErrorMessage } from "@/lib/api"
 import { safeNextPath } from "@/lib/safe-redirect"
+import { useIsWeb } from "@/hooks/use-is-native"
 import { useAuthStore } from "@/store/auth"
 import { PasswordStrength } from "@/components/banya/password-strength"
 import { ConsentCheckbox } from "@/components/banya/consent-checkbox"
@@ -57,6 +58,7 @@ function RegisterForm() {
   // Where to land after a successful registration (validated against open redirects).
   const nextPath = safeNextPath(searchParams.get("next"))
   const oauthNextQuery = nextPath ? `?next=${encodeURIComponent(nextPath)}` : ""
+  const isWeb = useIsWeb()
   const authLogin = useAuthStore((s) => s.login)
   const [name, setName] = useState("")
   const [email, setEmail] = useState("")
@@ -98,30 +100,36 @@ function RegisterForm() {
           <CardDescription>Бронируйте лучшие бани в два клика</CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
-          {/* OAuth Buttons */}
-          <div className="grid grid-cols-2 gap-3">
-            <Button variant="outline" className="min-w-0 gap-2" type="button" asChild>
-              <a href={`${API_URL}/api/v1/auth/vk${oauthNextQuery}`}>
-                <VKIcon className="h-5 w-5 shrink-0" />
-                ВК
-              </a>
-            </Button>
-            <Button variant="outline" className="min-w-0 gap-2" type="button" asChild>
-              <a href={`${API_URL}/api/v1/auth/yandex${oauthNextQuery}`}>
-                <YandexIcon className="h-5 w-5 shrink-0" />
-                Яндекс
-              </a>
-            </Button>
-          </div>
+          {/* OAuth — только на вебе: в нативной оболочке ссылки на чужой хост
+              уходят в Safari и сессия не возвращается, плюс Apple 4.8 требует
+              рядом с соцвходом Sign in with Apple, который запрещён 406-ФЗ. */}
+          {isWeb && (
+            <>
+              <div className="grid grid-cols-2 gap-3">
+                <Button variant="outline" className="min-w-0 gap-2" type="button" asChild>
+                  <a href={`${API_URL}/api/v1/auth/vk${oauthNextQuery}`}>
+                    <VKIcon className="h-5 w-5 shrink-0" />
+                    ВК
+                  </a>
+                </Button>
+                <Button variant="outline" className="min-w-0 gap-2" type="button" asChild>
+                  <a href={`${API_URL}/api/v1/auth/yandex${oauthNextQuery}`}>
+                    <YandexIcon className="h-5 w-5 shrink-0" />
+                    Яндекс
+                  </a>
+                </Button>
+              </div>
 
-          <div className="relative">
-            <div className="absolute inset-0 flex items-center">
-              <Separator className="w-full" />
-            </div>
-            <div className="relative flex justify-center text-xs uppercase">
-              <span className="bg-card px-2 text-muted-foreground">или по email</span>
-            </div>
-          </div>
+              <div className="relative">
+                <div className="absolute inset-0 flex items-center">
+                  <Separator className="w-full" />
+                </div>
+                <div className="relative flex justify-center text-xs uppercase">
+                  <span className="bg-card px-2 text-muted-foreground">или по email</span>
+                </div>
+              </div>
+            </>
+          )}
 
           {/* Minimal Form */}
           <form onSubmit={handleSubmit} className="space-y-4">
